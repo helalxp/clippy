@@ -3078,6 +3078,7 @@ def layout_env(requested):
 async def process_endpoint(
     request: Request,
     file: Optional[UploadFile] = File(None),
+    custom_watermark: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
     acknowledged: Optional[str] = Form(None),
     output_format: Optional[str] = Form(None),
@@ -3094,6 +3095,8 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
+    caption_spec: Optional[str] = Form(None),
+    hook_spec: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -3129,6 +3132,8 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
+        caption_spec = body.get("caption_spec")
+        hook_spec = body.get("hook_spec")
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -3229,6 +3234,59 @@ async def process_endpoint(
     env.update(chosen)
     if chosen:
         print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
+
+    # User-provided copy guidance is optional and passed to the AI selection
+    # stage via environment variables. Keep limits to avoid oversized prompts.
+    if caption_spec and str(caption_spec).strip():
+        env["CUSTOM_CAPTION_SPEC"] = str(caption_spec).strip()[:12000]
+    if hook_spec and str(hook_spec).strip():
+        env["CUSTOM_HOOK_SPEC"] = str(hook_spec).strip()[:12000]
+
+    # Normalize user image formats to a transparent PNG using Pillow. This
+    # supports common raster formats (including GIF first-frame and TIFF) and
+    # accepts SVG when the optional cairosvg module is available.
+    if custom_watermark and custom_watermark.filename:
+        wm_ext = os.path.splitext(os.path.basename(custom_watermark.filename))[1].lower()
+        allowed_wm_exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".ico", ".svg")
+        if wm_ext not in allowed_wm_exts:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="Unsupported watermark format. Use PNG, JPG, WebP, GIF, BMP, TIFF, ICO, or SVG.")
+        raw_path = os.path.join(job_output_dir, "custom_watermark_upload" + wm_ext)
+        wm_size = 0
+        with open(raw_path, "wb") as wm_out:
+            while chunk := await custom_watermark.read(1024 * 256):
+                wm_size += len(chunk)
+                if wm_size > 10 * 1024 * 1024:
+                    wm_out.close()
+                    os.remove(raw_path)
+                    shutil.rmtree(job_output_dir, ignore_errors=True)
+                    raise HTTPException(status_code=413, detail="Watermark image must be 10 MB or smaller.")
+                wm_out.write(chunk)
+        if wm_size == 0:
+            os.remove(raw_path)
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="The watermark image is empty.")
+        wm_path = os.path.join(job_output_dir, "custom_watermark.png")
+        try:
+            if wm_ext == ".svg":
+                try:
+                    import cairosvg
+                    cairosvg.svg2png(url=raw_path, write_to=wm_path, output_width=1200)
+                except ImportError:
+                    raise ValueError("SVG conversion is unavailable in this installation; export the logo as PNG.")
+            else:
+                from PIL import Image, ImageOps
+                with Image.open(raw_path) as im:
+                    im.seek(0)
+                    ImageOps.exif_transpose(im).convert("RGBA").save(wm_path, "PNG")
+            os.remove(raw_path)
+        except Exception as exc:
+            try: os.remove(raw_path)
+            except OSError: pass
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=f"Could not read watermark image: {str(exc)[:180]}")
+        env["CUSTOM_WATERMARK_PATH"] = wm_path
+        print(f"[custom-watermark] job={job_id} normalized=custom_watermark.png")
 
     # Auto-hook: burn each clip's Gemini hook text during the render. Off when
     # the field is absent, so API/MCP/webhook callers keep their old output
@@ -4272,6 +4330,13 @@ class RerenderSegment(BaseModel):
     end: float
 
 
+class ClipBackgroundRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    mode: str = "blur"  # blur | solid
+    color: str = "#111111"
+
+
 class RerenderRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -4674,6 +4739,109 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
         "saved_overrides": saved_overrides,
         "scenes": scenes_out,
     }
+
+
+@app.post("/api/clip/background")
+async def set_clip_background(req: ClipBackgroundRequest, request: Request):
+    """Add a selectable background treatment to a generated clip delivery.
+
+    The current clip is fitted inside the canvas. Blur mode uses a blurred,
+    enlarged duplicate behind it; solid mode uses the selected solid color.
+    This is a delivery edit and does not alter the clean canonical source.
+    """
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    if req.mode not in ("blur", "solid"):
+        raise HTTPException(status_code=400, detail="mode must be blur or solid")
+    color = (req.color or "#111111").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise HTTPException(status_code=400, detail="color must be a six-digit hex color")
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    clips = data.get("shorts", [])
+    if req.clip_index < 0 or req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[req.clip_index]
+    current_url = clip.get("video_url") or ""
+    current_name = os.path.basename(current_url.split("?", 1)[0])
+    source_path = os.path.join(output_dir, current_name)
+    if not os.path.isfile(source_path):
+        # Some deliveries are archived remotely. Fall back to the clean clip in
+        # the job directory, but never fetch an arbitrary URL supplied by client.
+        base = os.path.basename(json_files[0]).replace("_metadata.json", "")
+        source_path = os.path.join(output_dir, f"{base}_clip_{req.clip_index + 1}.mp4")
+    if not os.path.isfile(source_path):
+        raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
+    out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
+    out_path = os.path.join(output_dir, out_name)
+    ffmpeg = os.environ.get("FFMPEG_PATH", "ffmpeg")
+    ffprobe = os.environ.get("FFPROBE_PATH", "ffprobe")
+    try:
+        probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", source_path], capture_output=True, text=True, timeout=15, check=True)
+        frame_w, frame_h = [int(v) for v in probe.stdout.strip().split("x", 1)]
+    except Exception:
+        raise HTTPException(status_code=422, detail="Could not determine the clip frame size")
+    # Keep the same output aspect ratio/resolution as the actual clip, regardless
+    # of whether it is vertical, square, or horizontal.
+    fg_w, fg_h = max(2, int(frame_w * 0.90) // 2 * 2), max(2, int(frame_h * 0.90) // 2 * 2)
+    if req.mode == "blur":
+        filtergraph = f"[0:v]split=2[bg0][fg0];[bg0]scale={frame_w}:{frame_h}:force_original_aspect_ratio=increase,crop={frame_w}:{frame_h},boxblur=24:2[bg];[fg0]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+        inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
+    else:
+        # Color is strictly validated as #RRGGBB before it reaches the filter.
+        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+        inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
+    cmd = inputs + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=True,
+            ),
+        )
+    except subprocess.CalledProcessError as exc:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
+        error = (exc.stderr or exc.stdout or str(exc)).strip()
+        print(f"[clip-background] FFmpeg exit code: {exc.returncode}")
+        print(f"[clip-background] FFmpeg error:\n{error[-6000:]}")
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not render background: {error[-1500:]}",
+        )
+    except Exception as exc:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
+        print(f"[clip-background] Unexpected error: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not render background: {type(exc).__name__}",
+        )
+    served_name = await _deliver(request, req.job_id, out_name)
+    updates = {"video_url": f"/videos/{req.job_id}/{served_name}", "background": {"mode": req.mode, "color": color if req.mode == "solid" else None}}
+    clip.update(updates)
+    data["shorts"] = clips
+    with open(json_files[0], "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    mem_clips = (job.get("result") or {}).get("clips") or []
+    if req.clip_index < len(mem_clips): mem_clips[req.clip_index].update(updates)
+    _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+    return {"video_url": updates["video_url"], "background": updates["background"]}
 
 
 @app.post("/api/clip/reframe")

@@ -30,7 +30,7 @@ services:
       dockerfile: render-service/Dockerfile
     container_name: openshorts-renderer
     ports:
-      - "3100:3100"
+      - "13100:3100"
     volumes:
       - ./output:/output
     environment:

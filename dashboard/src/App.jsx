@@ -1076,9 +1076,11 @@ function App() {
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
+        caption_spec: data.captionSpec || null,
+        hook_spec: data.hookSpec || null,
       };
 
-      if (data.type === 'url') {
+      if (data.type === 'url' && !data.customWatermark) {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
           url: data.payload,
@@ -1087,6 +1089,16 @@ function App() {
           force_low_quality: forceLowQuality,
           ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
         });
+      } else if (data.type === 'url') {
+        // A URL source plus an uploaded watermark needs multipart/form-data.
+        const formData = new FormData();
+        formData.append('url', data.payload);
+        formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('output_format', data.outputFormat || 'auto');
+        formData.append('force_low_quality', forceLowQuality ? 'true' : 'false');
+        if (data.customWatermark) formData.append('custom_watermark', data.customWatermark);
+        for (const [k, v] of Object.entries(advanced)) if (v != null) formData.append(k, v);
+        body = formData;
       } else if (data.type === 'thumbnail_session') {
         // Handover from Thumbnail Studio (issue #68): the video and transcript
         // already live server-side, keyed by the Studio session.
@@ -1100,6 +1112,7 @@ function App() {
       } else {
         const formData = new FormData();
         formData.append('file', data.payload);
+        if (data.customWatermark) formData.append('custom_watermark', data.customWatermark);
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');
         for (const [k, v] of Object.entries(advanced)) {

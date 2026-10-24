@@ -1851,6 +1851,38 @@ def clip_render_order(shorts):
     return sorted(range(len(shorts)), key=lambda i: (-score(i), i))
 
 
+def apply_custom_watermark(video_path, watermark_path):
+    """Burn a user-provided image watermark into a derived delivery file."""
+    if not watermark_path or not os.path.isfile(watermark_path) or not os.path.isfile(video_path):
+        return None
+    try:
+        import subprocess
+        probe = subprocess.run(
+            [os.environ.get("FFPROBE_PATH", "ffprobe"), "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", video_path],
+            capture_output=True, text=True, timeout=15, check=True)
+        width, height = [int(v) for v in probe.stdout.strip().split("x", 1)]
+        out_path = os.path.join(os.path.dirname(video_path),
+            f"customwm_{int(time.time())}_{os.path.basename(video_path)}")
+        ffmpeg = os.environ.get("FFMPEG_PATH", "ffmpeg")
+        # Limit the logo to 18% of the frame width and keep aspect ratio. The
+        # transparent overlay is inset from the bottom-right corner.
+        cmd = [ffmpeg, "-y", "-i", video_path, "-i", watermark_path,
+               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto",
+               "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+               "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+        print(f"   🖼️ Custom watermark applied: {os.path.basename(out_path)}")
+        return out_path
+    except Exception as exc:
+        print(f"   ⚠️ Custom watermark failed ({type(exc).__name__}: {exc}); keeping clip without custom watermark.")
+        try:
+            if 'out_path' in locals() and os.path.exists(out_path): os.remove(out_path)
+        except OSError:
+            pass
+        return None
+
+
 def _free_gpu_cache():
     try:
         import torch
@@ -1887,6 +1919,20 @@ def transcribe_video(video_path):
         print(f"   [{segment['start']:.2f}s -> {segment['end']:.2f}s] {segment['text']}")
 
     return transcript
+
+def _append_user_copy_specs(prompt):
+    """Append user-supplied caption/hook guidance to the clip selection prompt."""
+    caption = (os.environ.get("CUSTOM_CAPTION_SPEC") or "").strip()
+    hook = (os.environ.get("CUSTOM_HOOK_SPEC") or "").strip()
+    if not caption and not hook:
+        return prompt
+    sections = [prompt, "\n\nUSER-SUPPLIED PUBLISHING SPECIFICATIONS (follow when compatible with the schema):"]
+    if caption:
+        sections.append("CAPTION SPECIFICATION:\n" + caption + "\nPreserve explicitly required fixed wording, tags, hashtags, and line order. If the template marks a line as variable, vary only that line.")
+    if hook:
+        sections.append("HOOK SPECIFICATION:\n" + hook + "\nUse the examples as style/reference guidance. The viral_hook_text field is the on-screen hook. Put the corresponding caption hook line at the beginning of the TikTok/Instagram caption when the specification supplies one. Keep those two lines distinct, and do not invent timestamp-to-clip matches unless the selected moment corresponds to that timestamp.")
+    return "\n\n".join(sections)
+
 
 def _run_gemini_stage(client, model_name, prompt, schema):
     """One schema-enforced model call with transient-error backoff.
@@ -2044,9 +2090,9 @@ def get_viral_clips(transcript_result, video_duration):
             return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
 
         def _score_prompt(ws):
-            return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
+            return _append_user_copy_specs(gemini_worker.SCORE_PROMPT_TEMPLATE.format(
                 video_duration=video_duration, language=language,
-                windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+                windows_json=json.dumps(_payload(ws), ensure_ascii=False)))
 
         for batch in score_batches(windows, SCORE_BATCH):
             scored.extend(_run_stage_split(
@@ -2069,11 +2115,11 @@ def get_viral_clips(transcript_result, video_duration):
             # A split batch keeps the full clip-count band: a short list can
             # still hold the best clips, and the model returns fewer anyway.
             def build(ws):
-                return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
+                return _append_user_copy_specs(gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
                     video_duration=video_duration, language=language,
                     min_clips=lo, max_clips=hi,
                     min_secs=min_secs, max_secs=max_secs,
-                    windows_json=json.dumps(_payload(ws), ensure_ascii=False))
+                    windows_json=json.dumps(_payload(ws), ensure_ascii=False)))
             return build
 
         shorts = _run_stage_split(client, model_name, shortlist,
@@ -2217,10 +2263,10 @@ def get_visual_clips(video_path, video_duration, language="en"):
         v_min_clips = _env_int("CLIP_TARGET_MIN", 3)
         v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
         v_min_secs, v_max_secs = clip_duration_bounds()
-        prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
+        prompt = _append_user_copy_specs(gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
             video_duration=video_duration, language=language,
             min_clips=v_min_clips, max_clips=v_max_clips,
-            min_secs=v_min_secs, max_secs=v_max_secs)
+            min_secs=v_min_secs, max_secs=v_max_secs))
         config = genai_types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=gemini_worker.VisualResponse,
@@ -2605,6 +2651,11 @@ if __name__ == '__main__':
                                 split_ranges=split_ranges,
                                 mark=os.environ.get("WATERMARK") == "1")
                         served = captioned or deliver_path
+                        custom_wm = os.environ.get("CUSTOM_WATERMARK_PATH")
+                        if custom_wm:
+                            custom_marked = apply_custom_watermark(served, custom_wm)
+                            if custom_marked:
+                                served = custom_marked
                         if os.environ.get("WATERMARK") == "1":
                             served = mark_delivery(served)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")

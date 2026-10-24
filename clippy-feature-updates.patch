@@ -1,0 +1,490 @@
+--- a/dashboard/src/components/MediaInput.jsx
++++ b/dashboard/src/components/MediaInput.jsx
+@@ -46,6 +46,9 @@
+     const [targetClips, setTargetClips] = useState('');
+     const [clipMinSeconds, setClipMinSeconds] = useState('');
+     const [clipMaxSeconds, setClipMaxSeconds] = useState('');
++    const [captionSpec, setCaptionSpec] = useState('');
++    const [hookSpec, setHookSpec] = useState('');
++    const [customWatermark, setCustomWatermark] = useState(null);
+     // Auto-hook: burn the AI hook text into every clip. On by default; the
+     // choice persists so turning it off sticks across sessions.
+     const [autoHook, setAutoHook] = useState(() => {
+@@ -124,6 +127,9 @@
+             autoHook,
+             autoHookStyle,
+             layout,
++            captionSpec,
++            hookSpec,
++            customWatermark,
+         };
+         try {
+             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
+@@ -299,7 +305,7 @@
+                     >
+                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
+                         advanced options
+-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
++                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || captionSpec || hookSpec || customWatermark) && (
+                             <span className="text-brass">·</span>
+                         )}
+                     </button>
+@@ -336,6 +342,28 @@
+                                     placeholder="60"
+                                     className="input-field"
+                                 />
++                            </div>
++                            <div className="col-span-1 sm:col-span-3 border-t border-rule pt-3 space-y-3">
++                                <div>
++                                    <label className="eyebrow mb-1.5 block" htmlFor="caption-spec">caption specification (optional)</label>
++                                    <textarea id="caption-spec" value={captionSpec} onChange={(e) => setCaptionSpec(e.target.value)}
++                                        placeholder={'Paste your exact caption template, required hashtags, tags, and approved wording…'}
++                                        rows={4} maxLength={12000} className="input-field w-full resize-y" />
++                                    <p className="text-[11px] text-muted mt-1">The AI will use this as generation guidance. Include fixed wording that must remain unchanged.</p>
++                                </div>
++                                <div>
++                                    <label className="eyebrow mb-1.5 block" htmlFor="hook-spec">hook specification (optional)</label>
++                                    <textarea id="hook-spec" value={hookSpec} onChange={(e) => setHookSpec(e.target.value)}
++                                        placeholder={'Paste examples or a table with timestamps, on-screen hooks, and caption hook lines…'}
++                                        rows={5} maxLength={12000} className="input-field w-full resize-y" />
++                                    <p className="text-[11px] text-muted mt-1">Keep on-screen hook text separate from the caption opening line.</p>
++                                </div>
++                                <div>
++                                    <label className="eyebrow mb-1.5 block" htmlFor="custom-watermark">custom watermark (optional)</label>
++                                    <input id="custom-watermark" type="file" accept="image/*,.svg,.webp,.png,.jpg,.jpeg" onChange={(e) => setCustomWatermark(e.target.files?.[0] || null)} className="input-field w-full" />
++                                    {customWatermark && <div className="mt-1 flex items-center gap-2 text-xs text-ink2"><span className="truncate">{customWatermark.name}</span><button type="button" className="text-muted underline" onClick={() => setCustomWatermark(null)}>remove</button></div>}
++                                    <p className="text-[11px] text-muted mt-1">Image watermark applied to generated clips. Transparent PNG/WebP is recommended; SVG is accepted as an upload but must be supported by the server renderer.</p>
++                                </div>
+                             </div>
+                             <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
+                                 Targets, not guarantees: the AI returns fewer clips when the
+--- a/dashboard/src/App.jsx
++++ b/dashboard/src/App.jsx
+@@ -1076,9 +1076,11 @@
+         // Set when the user took the quota wall's "clip the first N minutes"
+         // offer: the server reserves N minutes and cuts the source to them.
+         max_minutes: data.maxMinutes || null,
++        caption_spec: data.captionSpec || null,
++        hook_spec: data.hookSpec || null,
+       };
+ 
+-      if (data.type === 'url') {
++      if (data.type === 'url' && !data.customWatermark) {
+         headers['Content-Type'] = 'application/json';
+         body = JSON.stringify({
+           url: data.payload,
+@@ -1087,6 +1089,16 @@
+           force_low_quality: forceLowQuality,
+           ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
+         });
++      } else if (data.type === 'url') {
++        // A URL source plus an uploaded watermark needs multipart/form-data.
++        const formData = new FormData();
++        formData.append('url', data.payload);
++        formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
++        formData.append('output_format', data.outputFormat || 'auto');
++        formData.append('force_low_quality', forceLowQuality ? 'true' : 'false');
++        if (data.customWatermark) formData.append('custom_watermark', data.customWatermark);
++        for (const [k, v] of Object.entries(advanced)) if (v != null) formData.append(k, v);
++        body = formData;
+       } else if (data.type === 'thumbnail_session') {
+         // Handover from Thumbnail Studio (issue #68): the video and transcript
+         // already live server-side, keyed by the Studio session.
+@@ -1100,6 +1112,7 @@
+       } else {
+         const formData = new FormData();
+         formData.append('file', data.payload);
++        if (data.customWatermark) formData.append('custom_watermark', data.customWatermark);
+         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+         formData.append('output_format', data.outputFormat || 'auto');
+         for (const [k, v] of Object.entries(advanced)) {
+--- a/dashboard/src/components/ResultCard.jsx
++++ b/dashboard/src/components/ResultCard.jsx
+@@ -1,5 +1,5 @@
+ import React, { useState, useEffect, useRef } from 'react';
+-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
++import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette } from 'lucide-react';
+ import { getApiUrl } from '../config';
+ import { apiFetch } from '../lib/api';
+ import SubtitleModal from './SubtitleModal';
+@@ -54,6 +54,10 @@
+     }, [clip.why]);
+     const [showDescModal, setShowDescModal] = useState(false);
+     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
++    const [showBackgroundModal, setShowBackgroundModal] = useState(false);
++    const [backgroundMode, setBackgroundMode] = useState('blur');
++    const [backgroundColor, setBackgroundColor] = useState('#111111');
++    const [isApplyingBackground, setIsApplyingBackground] = useState(false);
+     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
+     const { plan } = useAuth();
+     const videoRef = React.useRef(null);
+@@ -417,6 +421,33 @@
+             setTimeout(() => setEditError(null), 5000);
+         } finally {
+             setIsSubtitling(false);
++        }
++    };
++
++    const handleBackground = async () => {
++        setIsApplyingBackground(true);
++        setEditError(null);
++        try {
++            const res = await apiFetch('/api/clip/background', {
++                method: 'POST',
++                headers: { 'Content-Type': 'application/json' },
++                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: backgroundMode, color: backgroundColor }),
++            });
++            if (!res.ok) throw new Error(await res.text());
++            const data = await res.json();
++            if (data.video_url) {
++                const serverUrl = getApiUrl(data.video_url);
++                setCurrentVideoUrl(serverUrl);
++                setServerVideoFile(data.video_url.split('/').pop());
++                setActiveLayers({ subtitles: null, hook: null, effects: null });
++                if (videoRef.current) videoRef.current.load();
++                setShowBackgroundModal(false);
++            }
++        } catch (e) {
++            setEditError(e.message || 'Could not apply background');
++            setTimeout(() => setEditError(null), 5000);
++        } finally {
++            setIsApplyingBackground(false);
+         }
+     };
+ 
+@@ -947,6 +978,15 @@
+                     </button>
+ 
+                     <button
++                        onClick={() => setShowBackgroundModal(true)}
++                        disabled={isApplyingBackground}
++                        className={QUIET_BTN}
++                    >
++                        {isApplyingBackground ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Palette size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
++                        background
++                    </button>
++
++                    <button
+                         onClick={() => setShowSubtitleModal(true)}
+                         disabled={isSubtitling}
+                         className={QUIET_BTN}
+@@ -1159,6 +1199,21 @@
+                 </div>
+             </Modal>
+ 
++            {showBackgroundModal && (
++                <Modal isOpen={showBackgroundModal} onClose={() => setShowBackgroundModal(false)} title="clip background">
++                    <div className="space-y-4">
++                        <p className="text-sm text-muted">Choose a blurred duplicate of the clip or a solid-color canvas behind a fitted version of the clip.</p>
++                        <div className="grid grid-cols-2 gap-2">
++                            <button type="button" onClick={() => setBackgroundMode('blur')} className={`btn-secondary ${backgroundMode === 'blur' ? 'ring-1 ring-brass' : ''}`}>blurred video</button>
++                            <button type="button" onClick={() => setBackgroundMode('solid')} className={`btn-secondary ${backgroundMode === 'solid' ? 'ring-1 ring-brass' : ''}`}>solid color</button>
++                        </div>
++                        {backgroundMode === 'solid' && <label className="flex items-center justify-between gap-3 text-sm text-ink2">Background color<input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="h-10 w-16 rounded-input border border-rule bg-transparent" /></label>}
++                        <p className="text-xs text-muted">This creates a new rendered file. It does not rebuild Docker images.</p>
++                        <div className="flex justify-end gap-2"><button type="button" className="btn-secondary" onClick={() => setShowBackgroundModal(false)}>cancel</button><button type="button" className="btn-primary" disabled={isApplyingBackground} onClick={handleBackground}>{isApplyingBackground ? 'rendering…' : 'apply background'}</button></div>
++                    </div>
++                </Modal>
++            )}
++
+             <SubtitleModal
+                 isOpen={showSubtitleModal}
+                 onClose={() => setShowSubtitleModal(false)}
+--- a/app.py
++++ b/app.py
+@@ -3078,6 +3078,7 @@
+ async def process_endpoint(
+     request: Request,
+     file: Optional[UploadFile] = File(None),
++    custom_watermark: Optional[UploadFile] = File(None),
+     url: Optional[str] = Form(None),
+     acknowledged: Optional[str] = Form(None),
+     output_format: Optional[str] = Form(None),
+@@ -3094,6 +3095,8 @@
+     captions: Optional[str] = Form(None),
+     upload_id: Optional[str] = Form(None),
+     max_minutes: Optional[str] = Form(None),
++    caption_spec: Optional[str] = Form(None),
++    hook_spec: Optional[str] = Form(None),
+ ):
+     api_key = await resolve_gemini(request)
+     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
+@@ -3129,6 +3132,8 @@
+         captions = body.get("captions")
+         upload_id = body.get("upload_id")
+         max_minutes = body.get("max_minutes")
++        caption_spec = body.get("caption_spec")
++        hook_spec = body.get("hook_spec")
+ 
+     # Normalize output format (auto = keep pipeline default).
+     if output_format not in ("vertical", "horizontal", "square"):
+@@ -3229,6 +3234,59 @@
+     env.update(chosen)
+     if chosen:
+         print(f"[layouts] job={job_id} enabled={sorted(chosen)}")
++
++    # User-provided copy guidance is optional and passed to the AI selection
++    # stage via environment variables. Keep limits to avoid oversized prompts.
++    if caption_spec and str(caption_spec).strip():
++        env["CUSTOM_CAPTION_SPEC"] = str(caption_spec).strip()[:12000]
++    if hook_spec and str(hook_spec).strip():
++        env["CUSTOM_HOOK_SPEC"] = str(hook_spec).strip()[:12000]
++
++    # Normalize user image formats to a transparent PNG using Pillow. This
++    # supports common raster formats (including GIF first-frame and TIFF) and
++    # accepts SVG when the optional cairosvg module is available.
++    if custom_watermark and custom_watermark.filename:
++        wm_ext = os.path.splitext(os.path.basename(custom_watermark.filename))[1].lower()
++        allowed_wm_exts = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".ico", ".svg")
++        if wm_ext not in allowed_wm_exts:
++            shutil.rmtree(job_output_dir, ignore_errors=True)
++            raise HTTPException(status_code=400, detail="Unsupported watermark format. Use PNG, JPG, WebP, GIF, BMP, TIFF, ICO, or SVG.")
++        raw_path = os.path.join(job_output_dir, "custom_watermark_upload" + wm_ext)
++        wm_size = 0
++        with open(raw_path, "wb") as wm_out:
++            while chunk := await custom_watermark.read(1024 * 256):
++                wm_size += len(chunk)
++                if wm_size > 10 * 1024 * 1024:
++                    wm_out.close()
++                    os.remove(raw_path)
++                    shutil.rmtree(job_output_dir, ignore_errors=True)
++                    raise HTTPException(status_code=413, detail="Watermark image must be 10 MB or smaller.")
++                wm_out.write(chunk)
++        if wm_size == 0:
++            os.remove(raw_path)
++            shutil.rmtree(job_output_dir, ignore_errors=True)
++            raise HTTPException(status_code=400, detail="The watermark image is empty.")
++        wm_path = os.path.join(job_output_dir, "custom_watermark.png")
++        try:
++            if wm_ext == ".svg":
++                try:
++                    import cairosvg
++                    cairosvg.svg2png(url=raw_path, write_to=wm_path, output_width=1200)
++                except ImportError:
++                    raise ValueError("SVG conversion is unavailable in this installation; export the logo as PNG.")
++            else:
++                from PIL import Image, ImageOps
++                with Image.open(raw_path) as im:
++                    im.seek(0)
++                    ImageOps.exif_transpose(im).convert("RGBA").save(wm_path, "PNG")
++            os.remove(raw_path)
++        except Exception as exc:
++            try: os.remove(raw_path)
++            except OSError: pass
++            shutil.rmtree(job_output_dir, ignore_errors=True)
++            raise HTTPException(status_code=400, detail=f"Could not read watermark image: {str(exc)[:180]}")
++        env["CUSTOM_WATERMARK_PATH"] = wm_path
++        print(f"[custom-watermark] job={job_id} normalized=custom_watermark.png")
+ 
+     # Auto-hook: burn each clip's Gemini hook text during the render. Off when
+     # the field is absent, so API/MCP/webhook callers keep their old output
+@@ -4272,6 +4330,13 @@
+     end: float
+ 
+ 
++class ClipBackgroundRequest(BaseModel):
++    job_id: str
++    clip_index: int
++    mode: str = "blur"  # blur | solid
++    color: str = "#111111"
++
++
+ class RerenderRequest(BaseModel):
+     job_id: str
+     clip_index: int
+@@ -4674,6 +4739,82 @@
+         "saved_overrides": saved_overrides,
+         "scenes": scenes_out,
+     }
++
++
++@app.post("/api/clip/background")
++async def set_clip_background(req: ClipBackgroundRequest, request: Request):
++    """Add a selectable background treatment to a generated clip delivery.
++
++    The current clip is fitted inside the canvas. Blur mode uses a blurred,
++    enlarged duplicate behind it; solid mode uses the selected solid color.
++    This is a delivery edit and does not alter the clean canonical source.
++    """
++    await require_managed_entitlement(request)
++    await _ensure_job_files(req.job_id, request)
++    if req.job_id not in jobs:
++        raise HTTPException(status_code=404, detail="Job not found")
++    job = jobs[req.job_id]
++    await _assert_job_owner(request, job)
++    if req.mode not in ("blur", "solid"):
++        raise HTTPException(status_code=400, detail="mode must be blur or solid")
++    color = (req.color or "#111111").strip()
++    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
++        raise HTTPException(status_code=400, detail="color must be a six-digit hex color")
++    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
++    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
++    if not json_files:
++        raise HTTPException(status_code=404, detail="Metadata not found")
++    with open(json_files[0], "r", encoding="utf-8") as f:
++        data = json.load(f)
++    clips = data.get("shorts", [])
++    if req.clip_index < 0 or req.clip_index >= len(clips):
++        raise HTTPException(status_code=404, detail="Clip not found")
++    clip = clips[req.clip_index]
++    current_url = clip.get("video_url") or ""
++    current_name = os.path.basename(current_url.split("?", 1)[0])
++    source_path = os.path.join(output_dir, current_name)
++    if not os.path.isfile(source_path):
++        # Some deliveries are archived remotely. Fall back to the clean clip in
++        # the job directory, but never fetch an arbitrary URL supplied by client.
++        base = os.path.basename(json_files[0]).replace("_metadata.json", "")
++        source_path = os.path.join(output_dir, f"{base}_clip_{req.clip_index + 1}.mp4")
++    if not os.path.isfile(source_path):
++        raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
++    out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
++    out_path = os.path.join(output_dir, out_name)
++    ffmpeg = os.environ.get("FFMPEG_PATH", "ffmpeg")
++    ffprobe = os.environ.get("FFPROBE_PATH", "ffprobe")
++    try:
++        probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", source_path], capture_output=True, text=True, timeout=15, check=True)
++        frame_w, frame_h = [int(v) for v in probe.stdout.strip().split("x", 1)]
++    except Exception:
++        raise HTTPException(status_code=422, detail="Could not determine the clip frame size")
++    # Keep the same output aspect ratio/resolution as the actual clip, regardless
++    # of whether it is vertical, square, or horizontal.
++    fg_w, fg_h = max(2, int(frame_w * 0.90) // 2 * 2), max(2, int(frame_h * 0.90) // 2 * 2)
++    if req.mode == "blur":
++        filtergraph = f"[0:v]split=2[bg0][fg0];[bg0]scale={frame_w}:{frame_h}:force_original_aspect_ratio=increase,crop={frame_w}:{frame_h},boxblur=24:2[bg];[fg0]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
++        inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
++    else:
++        # Color is strictly validated as #RRGGBB before it reaches the filter.
++        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
++        inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
++    cmd = inputs + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
++    try:
++        await asyncio.get_event_loop().run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True))
++    except Exception as exc:
++        if os.path.exists(out_path): os.remove(out_path)
++        raise HTTPException(status_code=500, detail=f"Could not render background: {type(exc).__name__}")
++    served_name = await _deliver(request, req.job_id, out_name)
++    updates = {"video_url": f"/videos/{req.job_id}/{served_name}", "background": {"mode": req.mode, "color": color if req.mode == "solid" else None}}
++    clip.update(updates)
++    data["shorts"] = clips
++    with open(json_files[0], "w", encoding="utf-8") as f:
++        json.dump(data, f, indent=2)
++    mem_clips = (job.get("result") or {}).get("clips") or []
++    if req.clip_index < len(mem_clips): mem_clips[req.clip_index].update(updates)
++    _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
++    return {"video_url": updates["video_url"], "background": updates["background"]}
+ 
+ 
+ @app.post("/api/clip/reframe")
+--- a/main.py
++++ b/main.py
+@@ -1851,6 +1851,38 @@
+     return sorted(range(len(shorts)), key=lambda i: (-score(i), i))
+ 
+ 
++def apply_custom_watermark(video_path, watermark_path):
++    """Burn a user-provided image watermark into a derived delivery file."""
++    if not watermark_path or not os.path.isfile(watermark_path) or not os.path.isfile(video_path):
++        return None
++    try:
++        import subprocess
++        probe = subprocess.run(
++            [os.environ.get("FFPROBE_PATH", "ffprobe"), "-v", "error", "-select_streams", "v:0",
++             "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", video_path],
++            capture_output=True, text=True, timeout=15, check=True)
++        width, height = [int(v) for v in probe.stdout.strip().split("x", 1)]
++        out_path = os.path.join(os.path.dirname(video_path),
++            f"customwm_{int(time.time())}_{os.path.basename(video_path)}")
++        ffmpeg = os.environ.get("FFMPEG_PATH", "ffmpeg")
++        # Limit the logo to 18% of the frame width and keep aspect ratio. The
++        # transparent overlay is inset from the bottom-right corner.
++        cmd = [ffmpeg, "-y", "-i", video_path, "-i", watermark_path,
++               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto",
++               "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
++               "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
++        subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
++        print(f"   🖼️ Custom watermark applied: {os.path.basename(out_path)}")
++        return out_path
++    except Exception as exc:
++        print(f"   ⚠️ Custom watermark failed ({type(exc).__name__}: {exc}); keeping clip without custom watermark.")
++        try:
++            if 'out_path' in locals() and os.path.exists(out_path): os.remove(out_path)
++        except OSError:
++            pass
++        return None
++
++
+ def _free_gpu_cache():
+     try:
+         import torch
+@@ -1887,6 +1919,20 @@
+         print(f"   [{segment['start']:.2f}s -> {segment['end']:.2f}s] {segment['text']}")
+ 
+     return transcript
++
++def _append_user_copy_specs(prompt):
++    """Append user-supplied caption/hook guidance to the clip selection prompt."""
++    caption = (os.environ.get("CUSTOM_CAPTION_SPEC") or "").strip()
++    hook = (os.environ.get("CUSTOM_HOOK_SPEC") or "").strip()
++    if not caption and not hook:
++        return prompt
++    sections = [prompt, "\n\nUSER-SUPPLIED PUBLISHING SPECIFICATIONS (follow when compatible with the schema):"]
++    if caption:
++        sections.append("CAPTION SPECIFICATION:\n" + caption + "\nPreserve explicitly required fixed wording, tags, hashtags, and line order. If the template marks a line as variable, vary only that line.")
++    if hook:
++        sections.append("HOOK SPECIFICATION:\n" + hook + "\nUse the examples as style/reference guidance. The viral_hook_text field is the on-screen hook. Put the corresponding caption hook line at the beginning of the TikTok/Instagram caption when the specification supplies one. Keep those two lines distinct, and do not invent timestamp-to-clip matches unless the selected moment corresponds to that timestamp.")
++    return "\n\n".join(sections)
++
+ 
+ def _run_gemini_stage(client, model_name, prompt, schema):
+     """One schema-enforced model call with transient-error backoff.
+@@ -2044,9 +2090,9 @@
+             return [{"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]} for w in ws]
+ 
+         def _score_prompt(ws):
+-            return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
++            return _append_user_copy_specs(gemini_worker.SCORE_PROMPT_TEMPLATE.format(
+                 video_duration=video_duration, language=language,
+-                windows_json=json.dumps(_payload(ws), ensure_ascii=False))
++                windows_json=json.dumps(_payload(ws), ensure_ascii=False)))
+ 
+         for batch in score_batches(windows, SCORE_BATCH):
+             scored.extend(_run_stage_split(
+@@ -2069,11 +2115,11 @@
+             # A split batch keeps the full clip-count band: a short list can
+             # still hold the best clips, and the model returns fewer anyway.
+             def build(ws):
+-                return gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
++                return _append_user_copy_specs(gemini_worker.DETAIL_PROMPT_TEMPLATE.format(
+                     video_duration=video_duration, language=language,
+                     min_clips=lo, max_clips=hi,
+                     min_secs=min_secs, max_secs=max_secs,
+-                    windows_json=json.dumps(_payload(ws), ensure_ascii=False))
++                    windows_json=json.dumps(_payload(ws), ensure_ascii=False)))
+             return build
+ 
+         shorts = _run_stage_split(client, model_name, shortlist,
+@@ -2217,10 +2263,10 @@
+         v_min_clips = _env_int("CLIP_TARGET_MIN", 3)
+         v_max_clips = max(v_min_clips, _env_int("CLIP_TARGET_MAX", 15))
+         v_min_secs, v_max_secs = clip_duration_bounds()
+-        prompt = gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
++        prompt = _append_user_copy_specs(gemini_worker.VISUAL_PROMPT_TEMPLATE.format(
+             video_duration=video_duration, language=language,
+             min_clips=v_min_clips, max_clips=v_max_clips,
+-            min_secs=v_min_secs, max_secs=v_max_secs)
++            min_secs=v_min_secs, max_secs=v_max_secs))
+         config = genai_types.GenerateContentConfig(
+             response_mime_type="application/json",
+             response_schema=gemini_worker.VisualResponse,
+@@ -2605,6 +2651,11 @@
+                                 split_ranges=split_ranges,
+                                 mark=os.environ.get("WATERMARK") == "1")
+                         served = captioned or deliver_path
++                        custom_wm = os.environ.get("CUSTOM_WATERMARK_PATH")
++                        if custom_wm:
++                            custom_marked = apply_custom_watermark(served, custom_wm)
++                            if custom_marked:
++                                served = custom_marked
+                         if os.environ.get("WATERMARK") == "1":
+                             served = mark_delivery(served)
+                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")

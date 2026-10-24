@@ -46,6 +46,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [targetClips, setTargetClips] = useState('');
     const [clipMinSeconds, setClipMinSeconds] = useState('');
     const [clipMaxSeconds, setClipMaxSeconds] = useState('');
+    const [captionSpec, setCaptionSpec] = useState('');
+    const [hookSpec, setHookSpec] = useState('');
+    const [customWatermark, setCustomWatermark] = useState(null);
     // Auto-hook: burn the AI hook text into every clip. On by default; the
     // choice persists so turning it off sticks across sessions.
     const [autoHook, setAutoHook] = useState(() => {
@@ -124,6 +127,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            captionSpec,
+            hookSpec,
+            customWatermark,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
@@ -299,7 +305,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || captionSpec || hookSpec || customWatermark) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -336,6 +342,28 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     placeholder="60"
                                     className="input-field"
                                 />
+                            </div>
+                            <div className="col-span-1 sm:col-span-3 border-t border-rule pt-3 space-y-3">
+                                <div>
+                                    <label className="eyebrow mb-1.5 block" htmlFor="caption-spec">caption specification (optional)</label>
+                                    <textarea id="caption-spec" value={captionSpec} onChange={(e) => setCaptionSpec(e.target.value)}
+                                        placeholder={'Paste your exact caption template, required hashtags, tags, and approved wording…'}
+                                        rows={4} maxLength={12000} className="input-field w-full resize-y" />
+                                    <p className="text-[11px] text-muted mt-1">The AI will use this as generation guidance. Include fixed wording that must remain unchanged.</p>
+                                </div>
+                                <div>
+                                    <label className="eyebrow mb-1.5 block" htmlFor="hook-spec">hook specification (optional)</label>
+                                    <textarea id="hook-spec" value={hookSpec} onChange={(e) => setHookSpec(e.target.value)}
+                                        placeholder={'Paste examples or a table with timestamps, on-screen hooks, and caption hook lines…'}
+                                        rows={5} maxLength={12000} className="input-field w-full resize-y" />
+                                    <p className="text-[11px] text-muted mt-1">Keep on-screen hook text separate from the caption opening line.</p>
+                                </div>
+                                <div>
+                                    <label className="eyebrow mb-1.5 block" htmlFor="custom-watermark">custom watermark (optional)</label>
+                                    <input id="custom-watermark" type="file" accept="image/*,.svg,.webp,.png,.jpg,.jpeg" onChange={(e) => setCustomWatermark(e.target.files?.[0] || null)} className="input-field w-full" />
+                                    {customWatermark && <div className="mt-1 flex items-center gap-2 text-xs text-ink2"><span className="truncate">{customWatermark.name}</span><button type="button" className="text-muted underline" onClick={() => setCustomWatermark(null)}>remove</button></div>}
+                                    <p className="text-[11px] text-muted mt-1">Image watermark applied to generated clips. Transparent PNG/WebP is recommended; SVG is accepted as an upload but must be supported by the server renderer.</p>
+                                </div>
                             </div>
                             <p className="col-span-1 sm:col-span-3 text-[11px] leading-relaxed text-muted">
                                 Targets, not guarantees: the AI returns fewer clips when the

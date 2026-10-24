@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -54,6 +54,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     }, [clip.why]);
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
+    const [showBackgroundModal, setShowBackgroundModal] = useState(false);
+    const [backgroundMode, setBackgroundMode] = useState('blur');
+    const [backgroundColor, setBackgroundColor] = useState('#111111');
+    const [isApplyingBackground, setIsApplyingBackground] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
@@ -417,6 +421,33 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             setTimeout(() => setEditError(null), 5000);
         } finally {
             setIsSubtitling(false);
+        }
+    };
+
+    const handleBackground = async () => {
+        setIsApplyingBackground(true);
+        setEditError(null);
+        try {
+            const res = await apiFetch('/api/clip/background', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: backgroundMode, color: backgroundColor }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            if (data.video_url) {
+                const serverUrl = getApiUrl(data.video_url);
+                setCurrentVideoUrl(serverUrl);
+                setServerVideoFile(data.video_url.split('/').pop());
+                setActiveLayers({ subtitles: null, hook: null, effects: null });
+                if (videoRef.current) videoRef.current.load();
+                setShowBackgroundModal(false);
+            }
+        } catch (e) {
+            setEditError(e.message || 'Could not apply background');
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsApplyingBackground(false);
         }
     };
 
@@ -947,6 +978,15 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </button>
 
                     <button
+                        onClick={() => setShowBackgroundModal(true)}
+                        disabled={isApplyingBackground}
+                        className={QUIET_BTN}
+                    >
+                        {isApplyingBackground ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Palette size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                        background
+                    </button>
+
+                    <button
                         onClick={() => setShowSubtitleModal(true)}
                         disabled={isSubtitling}
                         className={QUIET_BTN}
@@ -1158,6 +1198,21 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     )}
                 </div>
             </Modal>
+
+            {showBackgroundModal && (
+                <Modal isOpen={showBackgroundModal} onClose={() => setShowBackgroundModal(false)} title="clip background">
+                    <div className="space-y-4">
+                        <p className="text-sm text-muted">Choose a blurred duplicate of the clip or a solid-color canvas behind a fitted version of the clip.</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button type="button" onClick={() => setBackgroundMode('blur')} className={`btn-secondary ${backgroundMode === 'blur' ? 'ring-1 ring-brass' : ''}`}>blurred video</button>
+                            <button type="button" onClick={() => setBackgroundMode('solid')} className={`btn-secondary ${backgroundMode === 'solid' ? 'ring-1 ring-brass' : ''}`}>solid color</button>
+                        </div>
+                        {backgroundMode === 'solid' && <label className="flex items-center justify-between gap-3 text-sm text-ink2">Background color<input type="color" value={backgroundColor} onChange={(e) => setBackgroundColor(e.target.value)} className="h-10 w-16 rounded-input border border-rule bg-transparent" /></label>}
+                        <p className="text-xs text-muted">This creates a new rendered file. It does not rebuild Docker images.</p>
+                        <div className="flex justify-end gap-2"><button type="button" className="btn-secondary" onClick={() => setShowBackgroundModal(false)}>cancel</button><button type="button" className="btn-primary" disabled={isApplyingBackground} onClick={handleBackground}>{isApplyingBackground ? 'rendering…' : 'apply background'}</button></div>
+                    </div>
+                </Modal>
+            )}
 
             <SubtitleModal
                 isOpen={showSubtitleModal}

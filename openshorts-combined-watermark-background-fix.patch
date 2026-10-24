@@ -1,0 +1,135 @@
+--- a/app.py
++++ b/app.py
+@@ -4335,6 +4335,7 @@
+     clip_index: int
+     mode: str = "blur"  # blur | solid
+     color: str = "#111111"
++    input_filename: str = ""
+ 
+ 
+ class RerenderRequest(BaseModel):
+@@ -4770,16 +4771,18 @@
+     if req.clip_index < 0 or req.clip_index >= len(clips):
+         raise HTTPException(status_code=404, detail="Clip not found")
+     clip = clips[req.clip_index]
++    from urllib.parse import unquote
+     current_url = clip.get("video_url") or ""
+-    current_name = os.path.basename(current_url.split("?", 1)[0])
++    requested_name = os.path.basename(unquote((req.input_filename or "").split("?", 1)[0]))
++    url_name = os.path.basename(unquote(current_url.split("?", 1)[0]))
++    current_name = requested_name or url_name
++    if not current_name or current_name in (".", ".."):
++        raise HTTPException(status_code=409, detail="Current clip filename is unavailable")
+     source_path = os.path.join(output_dir, current_name)
+     if not os.path.isfile(source_path):
+-        # Some deliveries are archived remotely. Fall back to the clean clip in
+-        # the job directory, but never fetch an arbitrary URL supplied by client.
+-        base = os.path.basename(json_files[0]).replace("_metadata.json", "")
+-        source_path = os.path.join(output_dir, f"{base}_clip_{req.clip_index + 1}.mp4")
+-    if not os.path.isfile(source_path):
+-        raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
++        # Do not silently revert to the canonical clip when the user edited a
++        # derived file. That would discard captions, hooks, or prior edits.
++        raise HTTPException(status_code=409, detail="The current edited clip is not available locally. Refresh or regenerate the clip first.")
+     out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
+     out_path = os.path.join(output_dir, out_name)
+     ffmpeg = os.environ.get("FFMPEG_PATH", "ffmpeg")
+@@ -4787,8 +4790,10 @@
+     try:
+         probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", source_path], capture_output=True, text=True, timeout=15, check=True)
+         frame_w, frame_h = [int(v) for v in probe.stdout.strip().split("x", 1)]
++        duration_probe = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", source_path], capture_output=True, text=True, timeout=15, check=True)
++        clip_duration = max(0.1, float(duration_probe.stdout.strip()))
+     except Exception:
+-        raise HTTPException(status_code=422, detail="Could not determine the clip frame size")
++        raise HTTPException(status_code=422, detail="Could not determine the clip frame size or duration")
+     # Keep the same output aspect ratio/resolution as the actual clip, regardless
+     # of whether it is vertical, square, or horizontal.
+     fg_w, fg_h = max(2, int(frame_w * 0.90) // 2 * 2), max(2, int(frame_h * 0.90) // 2 * 2)
+@@ -4797,7 +4802,7 @@
+         inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
+     else:
+         # Color is strictly validated as #RRGGBB before it reaches the filter.
+-        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
++        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30:d={clip_duration:.6f}[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+         inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
+     cmd = inputs + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
+     try:
+--- a/main.py
++++ b/main.py
+@@ -1868,8 +1868,9 @@
+         # Limit the logo to 18% of the frame width and keep aspect ratio. The
+         # transparent overlay is inset from the bottom-right corner.
+         cmd = [ffmpeg, "-y", "-i", video_path, "-i", watermark_path,
+-               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto",
+-               "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
++               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto[v]",
++               # Map the filtered overlay output, not the original unwatermarked video.
++               "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
+         subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+         print(f"   🖼️ Custom watermark applied: {os.path.basename(out_path)}")
+@@ -2654,8 +2655,9 @@
+                         custom_wm = os.environ.get("CUSTOM_WATERMARK_PATH")
+                         if custom_wm:
+                             custom_marked = apply_custom_watermark(served, custom_wm)
+-                            if custom_marked:
+-                                served = custom_marked
++                            if not custom_marked:
++                                raise RuntimeError("Custom watermark was requested but FFmpeg could not apply it; see the [custom-watermark] log above.")
++                            served = custom_marked
+                         if os.environ.get("WATERMARK") == "1":
+                             served = mark_delivery(served)
+                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+--- a/dashboard/src/components/ResultCard.jsx
++++ b/dashboard/src/components/ResultCard.jsx
+@@ -63,6 +63,7 @@
+     const [watermarkPreview, setWatermarkPreview] = useState('');
+     const [watermarkPosition, setWatermarkPosition] = useState({ x: 0.72, y: 0.82 });
+     const [watermarkWidth, setWatermarkWidth] = useState(18);
++    const [watermarkAspect, setWatermarkAspect] = useState(1);
+     const [isApplyingWatermark, setIsApplyingWatermark] = useState(false);
+     const watermarkStageRef = useRef(null);
+     const watermarkDragRef = useRef(null);
+@@ -439,14 +440,18 @@
+             const res = await apiFetch('/api/clip/background', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+-                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: backgroundMode, color: backgroundColor }),
++                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: backgroundMode, color: backgroundColor, input_filename: serverVideoFile }),
+             });
+-            if (!res.ok) throw new Error(await res.text());
++            if (!res.ok) {
++                let message = await res.text();
++                try { message = JSON.parse(message).detail || message; } catch (_) {}
++                throw new Error(message);
++            }
+             const data = await res.json();
+             if (data.video_url) {
+                 const serverUrl = getApiUrl(data.video_url);
+                 setCurrentVideoUrl(serverUrl);
+-                setServerVideoFile(data.video_url.split('/').pop());
++                setServerVideoFile(decodeURIComponent(data.video_url.split('/').pop().split('?')[0]));
+                 setActiveLayers({ subtitles: null, hook: null, effects: null });
+                 if (videoRef.current) videoRef.current.load();
+                 setShowBackgroundModal(false);
+@@ -533,7 +538,7 @@
+             const data = await res.json();
+             if (!data.video_url) throw new Error('The server did not return the rendered clip.');
+             setCurrentVideoUrl(getApiUrl(data.video_url));
+-            setServerVideoFile(data.video_url.split('/').pop());
++            setServerVideoFile(decodeURIComponent(data.video_url.split('/').pop().split('?')[0]));
+             setActiveLayers({ subtitles: null, hook: null, effects: null });
+             if (videoRef.current) videoRef.current.load();
+             setShowPostWatermark(false);
+@@ -1311,8 +1316,8 @@
+                         </label>
+                         {watermarkPreview && (
+                             <div ref={watermarkStageRef} className="relative mx-auto w-full max-w-[280px] aspect-[9/16] bg-black overflow-hidden rounded-input touch-none select-none" onPointerMove={moveWatermark} onPointerUp={() => { watermarkDragRef.current = null; }} onPointerCancel={() => { watermarkDragRef.current = null; }}>
+-                                <video src={playbackUrl} className="absolute inset-0 w-full h-full object-contain pointer-events-none" muted playsInline />
+-                                <img src={watermarkPreview} alt="Watermark preview. Drag to reposition." draggable={false} onPointerDown={handleWatermarkPointerDown} onPointerMove={moveWatermark} onPointerUp={() => { watermarkDragRef.current = null; }} className="absolute max-w-none cursor-move touch-none border border-dashed border-white/70" style={{ left: `${watermarkPosition.x * (100 - watermarkWidth)}%`, top: `${watermarkPosition.y * 85}%`, width: `${watermarkWidth}%` }} />
++                                <video src={playbackUrl} className="absolute inset-0 w-full h-full object-contain pointer-events-none" muted playsInline autoPlay loop />
++                                <img src={watermarkPreview} alt="Watermark preview. Drag to reposition." draggable={false} onLoad={(e) => { const img = e.currentTarget; if (img.naturalWidth > 0) setWatermarkAspect(img.naturalHeight / img.naturalWidth); }} onPointerDown={handleWatermarkPointerDown} onPointerMove={moveWatermark} onPointerUp={() => { watermarkDragRef.current = null; }} className="absolute max-w-none cursor-move touch-none border border-dashed border-white/70" style={{ left: `${watermarkPosition.x * (100 - watermarkWidth)}%`, top: `${watermarkPosition.y * Math.max(0, 100 - watermarkWidth * (9 / 16) * watermarkAspect)}%`, width: `${watermarkWidth}%` }} />
+                             </div>
+                         )}
+                         <label className="block text-sm text-ink2">Watermark size: {watermarkWidth}% of video width
