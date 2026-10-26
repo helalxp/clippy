@@ -1,0 +1,93 @@
+diff --git a/app.py b/app.py
+index eec6d5f..8af4fbf 100644
+--- a/app.py
++++ b/app.py
+@@ -4333,6 +4333,7 @@ class RerenderSegment(BaseModel):
+ class ClipBackgroundRequest(BaseModel):
+     job_id: str
+     clip_index: int
++    input_filename: Optional[str] = None
+     mode: str = "blur"  # blur | solid
+     color: str = "#111111"
+ 
+@@ -4771,13 +4772,19 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
+         raise HTTPException(status_code=404, detail="Clip not found")
+     clip = clips[req.clip_index]
+     current_url = clip.get("video_url") or ""
+-    current_name = os.path.basename(current_url.split("?", 1)[0])
+-    source_path = os.path.join(output_dir, current_name)
++    current_name = os.path.basename((req.input_filename or current_url).split("?", 1)[0])
++    # The first background edit records its source. Reapplying/changing the
++    # background starts from that same source rather than shrinking a previous
++    # background render into another background (the nested-frame regression).
++    source_name = os.path.basename(clip.get("background_source_filename") or current_name)
++    source_path = os.path.join(output_dir, source_name)
+     if not os.path.isfile(source_path):
+-        # Some deliveries are archived remotely. Fall back to the clean clip in
+-        # the job directory, but never fetch an arbitrary URL supplied by client.
++        # Some deliveries are archived remotely. Fall back to the canonical
++        # generated clip in the job directory; never fetch a client URL.
+         base = os.path.basename(json_files[0]).replace("_metadata.json", "")
+-        source_path = os.path.join(output_dir, f"{base}_clip_{req.clip_index + 1}.mp4")
++        canonical_name = f"{base}_clip_{req.clip_index + 1}.mp4"
++        source_path = os.path.join(output_dir, canonical_name)
++        source_name = canonical_name
+     if not os.path.isfile(source_path):
+         raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
+     out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
+@@ -4838,7 +4845,11 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
+             detail=f"Could not render background: {type(exc).__name__}",
+         )
+     served_name = await _deliver(request, req.job_id, out_name)
+-    updates = {"video_url": f"/videos/{req.job_id}/{served_name}", "background": {"mode": req.mode, "color": color if req.mode == "solid" else None}}
++    updates = {
++        "video_url": f"/videos/{req.job_id}/{served_name}",
++        "background": {"mode": req.mode, "color": color if req.mode == "solid" else None},
++        "background_source_filename": source_name,
++    }
+     clip.update(updates)
+     data["shorts"] = clips
+     with open(json_files[0], "w", encoding="utf-8") as f:
+diff --git a/dashboard/src/components/ResultCard.jsx b/dashboard/src/components/ResultCard.jsx
+index 582a847..b3c9b0d 100644
+--- a/dashboard/src/components/ResultCard.jsx
++++ b/dashboard/src/components/ResultCard.jsx
+@@ -437,7 +437,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
+             const res = await apiFetch('/api/clip/background', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+-                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: backgroundMode, color: backgroundColor }),
++                body: JSON.stringify({ job_id: jobId, clip_index: index, input_filename: serverVideoFile, mode: backgroundMode, color: backgroundColor }),
+             });
+             if (!res.ok) throw new Error(await res.text());
+             const data = await res.json();
+@@ -445,8 +445,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
+                 const serverUrl = getApiUrl(data.video_url);
+                 setCurrentVideoUrl(serverUrl);
+                 setServerVideoFile(data.video_url.split('/').pop());
+-                setActiveLayers({ subtitles: null, hook: null, effects: null });
+-                if (videoRef.current) videoRef.current.load();
++                // Do not discard browser-rendered caption/hook/effect layers when
++                // changing the server-side background treatment.
+                 setShowBackgroundModal(false);
+             }
+         } catch (e) {
+@@ -479,8 +479,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
+             const serverUrl = getApiUrl(data.video_url);
+             setCurrentVideoUrl(serverUrl);
+             setServerVideoFile(data.video_url.split('/').pop());
+-            setActiveLayers({ subtitles: null, hook: null, effects: null });
+-            if (videoRef.current) videoRef.current.load();
++            // Watermarking must not clear browser-side caption/hook/effect layers.
++            // The video element reloads automatically when its source changes.
+             setShowLogoEditor(false);
+         } catch (e) {
+             setEditError(e.message || 'Could not apply watermark');
+@@ -825,6 +825,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
+                 without letterboxing the clip. */}
+             <div className="w-full max-w-[calc(64vh*0.5625)] md:max-w-none mx-auto md:mx-0 md:w-[236px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
+                 <video
++                    key={playbackUrl}
+                     ref={videoRef}
+                     src={playbackUrl}
+                     controls

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette, Image as ImageIcon } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -58,6 +58,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [backgroundMode, setBackgroundMode] = useState('blur');
     const [backgroundColor, setBackgroundColor] = useState('#111111');
     const [isApplyingBackground, setIsApplyingBackground] = useState(false);
+    const [showLogoEditor, setShowLogoEditor] = useState(false);
+    const [watermarkLogo, setWatermarkLogo] = useState(null);
+    const [watermarkX, setWatermarkX] = useState(0.72);
+    const [watermarkY, setWatermarkY] = useState(0.72);
+    const [watermarkWidth, setWatermarkWidth] = useState(0.18);
+    const [isApplyingWatermark, setIsApplyingWatermark] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
@@ -145,6 +151,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // (subtitles, hooks, effects) never get silently dropped.
     // A reopened project seeds it from the persisted project state.
     const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
+    // A successful local edit can update this card before the parent refreshes
+    // its clip prop. Remember the previous filename so that stale props cannot
+    // switch the player back to the pre-edit video during that refresh window.
+    const pendingLocalEditPreviousFile = useRef(null);
     const [videoErrored, setVideoErrored] = useState(false);
     const [resolution, setResolution] = useState(null);
 
@@ -177,10 +187,24 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     useEffect(() => {
         const serverUrl = getApiUrl(clip.video_url);
         const serverName = (clip.video_url || '').split('/').pop();
+
+        // The watermark endpoint updates the server and this card immediately,
+        // while the parent clip prop may still describe the previous file. Ignore
+        // that stale value, and clear the guard once the parent catches up.
+        if (pendingLocalEditPreviousFile.current) {
+            if (serverName === serverVideoFile) {
+                pendingLocalEditPreviousFile.current = null;
+            } else if (serverName === pendingLocalEditPreviousFile.current) {
+                return;
+            }
+        }
+
         if (serverName && serverName !== serverVideoFile) {
             setServerVideoFile(serverName);
             setCurrentVideoUrl(serverUrl);
+            setDurableSrc(null);
             setDurableFailed(false);
+            setVideoErrored(false);
             setHasPlayed(false);
             if (videoRef.current) videoRef.current.load();
         }
@@ -431,7 +455,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const res = await apiFetch('/api/clip/background', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: jobId, clip_index: index, mode: backgroundMode, color: backgroundColor }),
+                body: JSON.stringify({ job_id: jobId, clip_index: index, input_filename: serverVideoFile, mode: backgroundMode, color: backgroundColor }),
             });
             if (!res.ok) throw new Error(await res.text());
             const data = await res.json();
@@ -439,8 +463,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 const serverUrl = getApiUrl(data.video_url);
                 setCurrentVideoUrl(serverUrl);
                 setServerVideoFile(data.video_url.split('/').pop());
-                setActiveLayers({ subtitles: null, hook: null, effects: null });
-                if (videoRef.current) videoRef.current.load();
+                // Do not discard browser-rendered caption/hook/effect layers when
+                // changing the server-side background treatment.
                 setShowBackgroundModal(false);
             }
         } catch (e) {
@@ -448,6 +472,48 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             setTimeout(() => setEditError(null), 5000);
         } finally {
             setIsApplyingBackground(false);
+        }
+    };
+
+    const handleApplyWatermark = async () => {
+        if (!watermarkLogo) {
+            setEditError('Choose a PNG or WebP logo first.');
+            return;
+        }
+        setIsApplyingWatermark(true);
+        setEditError(null);
+        try {
+            const form = new FormData();
+            form.append('job_id', jobId);
+            form.append('clip_index', String(index));
+            form.append('logo', watermarkLogo);
+            form.append('x', String(watermarkX));
+            form.append('y', String(watermarkY));
+            form.append('width_fraction', String(watermarkWidth));
+            const res = await apiFetch('/api/clip/watermark', { method: 'POST', body: form });
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            if (!data.video_url) throw new Error('The server did not return the rendered clip.');
+            const serverUrl = getApiUrl(data.video_url);
+            const newServerFile = data.video_url.split('/').pop();
+            // Prevent the parent's not-yet-refreshed clip prop from reverting the
+            // player to the pre-watermark file. Also drop the old durable URL:
+            // it can point at the unwatermarked MP4 while the new archive is pending.
+            pendingLocalEditPreviousFile.current = serverVideoFile;
+            setDurableSrc(null);
+            setDurableFailed(false);
+            setVideoErrored(false);
+            setHasPlayed(false);
+            setCurrentVideoUrl(serverUrl);
+            setServerVideoFile(newServerFile);
+            // Keep browser-side caption/hook/effect layers intact. The watermark
+            // is already burned into the new server MP4, so do not recompose it here.
+            setShowLogoEditor(false);
+        } catch (e) {
+            setEditError(e.message || 'Could not apply watermark');
+            setTimeout(() => setEditError(null), 7000);
+        } finally {
+            setIsApplyingWatermark(false);
         }
     };
 
@@ -786,6 +852,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 without letterboxing the clip. */}
             <div className="w-full max-w-[calc(64vh*0.5625)] md:max-w-none mx-auto md:mx-0 md:w-[236px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
                 <video
+                    key={playbackUrl}
                     ref={videoRef}
                     src={playbackUrl}
                     controls
@@ -984,6 +1051,15 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     >
                         {isApplyingBackground ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Palette size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
                         background
+                    </button>
+
+                    <button
+                        onClick={() => setShowLogoEditor(true)}
+                        disabled={isApplyingWatermark}
+                        className={QUIET_BTN}
+                    >
+                        <ImageIcon size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                        watermark
                     </button>
 
                     <button
@@ -1198,6 +1274,38 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     )}
                 </div>
             </Modal>
+
+            {showLogoEditor && (
+                <Modal isOpen={showLogoEditor} onClose={() => setShowLogoEditor(false)} title="watermark editor">
+                    <div className="space-y-4">
+                        <p className="text-sm text-muted">Upload a transparent PNG or WebP, position it over the clip, then burn it into a new video file.</p>
+                        <label className="block text-sm text-ink2">Logo image
+                            <input type="file" accept="image/png,image/webp,.png,.webp" className="mt-2 block w-full text-sm" onChange={(e) => setWatermarkLogo(e.target.files?.[0] || null)} />
+                        </label>
+                        <div className="relative mx-auto w-full max-w-sm overflow-hidden rounded-lg bg-black aspect-[9/16]">
+                            <video key={currentVideoUrl} src={currentVideoUrl} muted autoPlay loop playsInline className="h-full w-full object-contain" />
+                            {watermarkLogo && (
+                                <img src={URL.createObjectURL(watermarkLogo)} alt="Watermark preview"
+                                    className="pointer-events-none absolute max-w-none object-contain"
+                                    style={{ left: `${watermarkX * 100}%`, top: `${watermarkY * 100}%`, width: `${watermarkWidth * 100}%`, maxHeight: '45%' }} />
+                            )}
+                        </div>
+                        <label className="block text-sm text-ink2">Horizontal position
+                            <input type="range" min="0" max="0.9" step="0.01" value={watermarkX} onChange={(e) => setWatermarkX(Number(e.target.value))} className="mt-2 w-full" />
+                        </label>
+                        <label className="block text-sm text-ink2">Vertical position
+                            <input type="range" min="0" max="0.9" step="0.01" value={watermarkY} onChange={(e) => setWatermarkY(Number(e.target.value))} className="mt-2 w-full" />
+                        </label>
+                        <label className="block text-sm text-ink2">Logo size
+                            <input type="range" min="0.05" max="0.5" step="0.01" value={watermarkWidth} onChange={(e) => setWatermarkWidth(Number(e.target.value))} className="mt-2 w-full" />
+                        </label>
+                        <div className="flex justify-end gap-2">
+                            <button type="button" className="btn-secondary" onClick={() => setShowLogoEditor(false)}>cancel</button>
+                            <button type="button" className="btn-primary" disabled={!watermarkLogo || isApplyingWatermark} onClick={handleApplyWatermark}>{isApplyingWatermark ? 'rendering…' : 'apply watermark'}</button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
 
             {showBackgroundModal && (
                 <Modal isOpen={showBackgroundModal} onClose={() => setShowBackgroundModal(false)} title="clip background">

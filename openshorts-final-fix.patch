@@ -1,0 +1,272 @@
+--- a/app.py
++++ b/app.py
+@@ -4787,8 +4787,13 @@
+     try:
+         probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", source_path], capture_output=True, text=True, timeout=15, check=True)
+         frame_w, frame_h = [int(v) for v in probe.stdout.strip().split("x", 1)]
++        duration_probe = subprocess.run(
++            [ffprobe, "-v", "error", "-show_entries", "format=duration",
++             "-of", "default=noprint_wrappers=1:nokey=1", source_path],
++            capture_output=True, text=True, timeout=15, check=True)
++        clip_duration = max(0.1, float(duration_probe.stdout.strip()))
+     except Exception:
+-        raise HTTPException(status_code=422, detail="Could not determine the clip frame size")
++        raise HTTPException(status_code=422, detail="Could not determine the clip frame size and duration")
+     # Keep the same output aspect ratio/resolution as the actual clip, regardless
+     # of whether it is vertical, square, or horizontal.
+     fg_w, fg_h = max(2, int(frame_w * 0.90) // 2 * 2), max(2, int(frame_h * 0.90) // 2 * 2)
+@@ -4797,7 +4802,7 @@
+         inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
+     else:
+         # Color is strictly validated as #RRGGBB before it reaches the filter.
+-        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
++        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30:d={clip_duration:.3f}[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+         inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
+     cmd = inputs + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
+     try:
+@@ -4842,6 +4847,100 @@
+     if req.clip_index < len(mem_clips): mem_clips[req.clip_index].update(updates)
+     _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+     return {"video_url": updates["video_url"], "background": updates["background"]}
++
++
++@app.post("/api/clip/watermark")
++async def edit_clip_watermark(
++    request: Request,
++    job_id: str = Form(...),
++    clip_index: int = Form(...),
++    logo: UploadFile = File(...),
++    x: float = Form(0.78),
++    y: float = Form(0.78),
++    width_fraction: float = Form(0.18),
++):
++    """Burn an uploaded PNG/WebP logo into the current delivered clip."""
++    await require_managed_entitlement(request)
++    await _ensure_job_files(job_id, request)
++    if job_id not in jobs:
++        raise HTTPException(status_code=404, detail="Job not found")
++    job = jobs[job_id]
++    await _assert_job_owner(request, job)
++    if not (0 <= x <= 1 and 0 <= y <= 1 and 0.03 <= width_fraction <= 0.8):
++        raise HTTPException(status_code=400, detail="Invalid watermark position or size")
++    suffix = os.path.splitext(logo.filename or "")[1].lower()
++    if suffix not in (".png", ".webp"):
++        raise HTTPException(status_code=400, detail="Logo must be a PNG or WebP image")
++    raw = await logo.read()
++    if not raw or len(raw) > 10 * 1024 * 1024:
++        raise HTTPException(status_code=400, detail="Logo must be between 1 byte and 10 MB")
++    output_dir = os.path.join(OUTPUT_DIR, job_id)
++    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
++    if not json_files:
++        raise HTTPException(status_code=404, detail="Metadata not found")
++    with open(json_files[0], "r", encoding="utf-8") as f:
++        metadata = json.load(f)
++    clips = metadata.get("shorts", [])
++    if clip_index < 0 or clip_index >= len(clips):
++        raise HTTPException(status_code=404, detail="Clip not found")
++    clip = clips[clip_index]
++    current_name = os.path.basename((clip.get("video_url") or "").split("?", 1)[0])
++    source_path = os.path.join(output_dir, current_name)
++    if not os.path.isfile(source_path):
++        raise HTTPException(status_code=409, detail="Current clip is not available locally")
++    logo_path = os.path.join(output_dir, f"watermark_upload_{uuid.uuid4().hex}{suffix}")
++    out_name = f"watermarked_{int(time.time())}_{uuid.uuid4().hex[:8]}_{clip_index + 1}.mp4"
++    out_path = os.path.join(output_dir, out_name)
++    try:
++        with open(logo_path, "wb") as f:
++            f.write(raw)
++        probe = subprocess.run(
++            [os.environ.get("FFPROBE_PATH", "ffprobe"), "-v", "error",
++             "-select_streams", "v:0", "-show_entries", "stream=width,height",
++             "-of", "csv=s=x:p=0", source_path],
++            capture_output=True, text=True, timeout=15, check=True)
++        width, height = [int(v) for v in probe.stdout.strip().split("x", 1)]
++        logo_width = max(24, int(width * width_fraction))
++        # Normalized top-left position is clamped so the logo stays inside the frame.
++        px = min(max(0, int(width * x)), max(0, width - logo_width))
++        py = min(max(0, int(height * y)), max(0, height - int(height * 0.03)))
++        filtergraph = (
++            f"[1:v]format=rgba,scale={logo_width}:-1[wm];"
++            f"[0:v][wm]overlay=x='min({px},W-w)':y='min({py},H-h)':format=auto[v]"
++        )
++        subprocess.run(
++            [os.environ.get("FFMPEG_PATH", "ffmpeg"), "-y", "-i", source_path,
++             "-i", logo_path, "-filter_complex", filtergraph, "-map", "[v]",
++             "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
++             "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path],
++            capture_output=True, text=True, timeout=600, check=True)
++        served_name = await _deliver(request, job_id, out_name)
++        updates = {"video_url": f"/videos/{job_id}/{served_name}",
++                   "watermark": {"x": x, "y": y, "width_fraction": width_fraction}}
++        clip.update(updates)
++        metadata["shorts"] = clips
++        with open(json_files[0], "w", encoding="utf-8") as f:
++            json.dump(metadata, f, indent=2)
++        mem_clips = (job.get("result") or {}).get("clips") or []
++        if clip_index < len(mem_clips):
++            mem_clips[clip_index].update(updates)
++        return {"video_url": updates["video_url"], "watermark": updates["watermark"]}
++    except subprocess.CalledProcessError as exc:
++        if os.path.exists(out_path):
++            os.remove(out_path)
++        detail = (exc.stderr or exc.stdout or str(exc)).strip()
++        raise HTTPException(status_code=500, detail=f"Could not render watermark: {detail[-1200:]}")
++    except HTTPException:
++        raise
++    except Exception as exc:
++        if os.path.exists(out_path):
++            os.remove(out_path)
++        raise HTTPException(status_code=500, detail=f"Could not render watermark: {type(exc).__name__}")
++    finally:
++        try:
++            os.remove(logo_path)
++        except OSError:
++            pass
+ 
+ 
+ @app.post("/api/clip/reframe")
+--- a/main.py
++++ b/main.py
+@@ -1868,19 +1868,20 @@
+         # Limit the logo to 18% of the frame width and keep aspect ratio. The
+         # transparent overlay is inset from the bottom-right corner.
+         cmd = [ffmpeg, "-y", "-i", video_path, "-i", watermark_path,
+-               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto",
+-               "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
++               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto[v]",
++               "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
+         subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+         print(f"   🖼️ Custom watermark applied: {os.path.basename(out_path)}")
+         return out_path
+     except Exception as exc:
+-        print(f"   ⚠️ Custom watermark failed ({type(exc).__name__}: {exc}); keeping clip without custom watermark.")
++        print(f"   ❌ Custom watermark failed ({type(exc).__name__}: {exc})")
+         try:
+-            if 'out_path' in locals() and os.path.exists(out_path): os.remove(out_path)
++            if 'out_path' in locals() and os.path.exists(out_path):
++                os.remove(out_path)
+         except OSError:
+             pass
+-        return None
++        raise RuntimeError(f"Custom watermark failed: {type(exc).__name__}: {exc}") from exc
+ 
+ 
+ def _free_gpu_cache():
+--- a/dashboard/src/components/ResultCard.jsx
++++ b/dashboard/src/components/ResultCard.jsx
+@@ -1,5 +1,5 @@
+ import React, { useState, useEffect, useRef } from 'react';
+-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette } from 'lucide-react';
++import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette, Image as ImageIcon } from 'lucide-react';
+ import { getApiUrl } from '../config';
+ import { apiFetch } from '../lib/api';
+ import SubtitleModal from './SubtitleModal';
+@@ -58,6 +58,12 @@
+     const [backgroundMode, setBackgroundMode] = useState('blur');
+     const [backgroundColor, setBackgroundColor] = useState('#111111');
+     const [isApplyingBackground, setIsApplyingBackground] = useState(false);
++    const [showLogoEditor, setShowLogoEditor] = useState(false);
++    const [watermarkLogo, setWatermarkLogo] = useState(null);
++    const [watermarkX, setWatermarkX] = useState(0.72);
++    const [watermarkY, setWatermarkY] = useState(0.72);
++    const [watermarkWidth, setWatermarkWidth] = useState(0.18);
++    const [isApplyingWatermark, setIsApplyingWatermark] = useState(false);
+     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
+     const { plan } = useAuth();
+     const videoRef = React.useRef(null);
+@@ -448,6 +454,39 @@
+             setTimeout(() => setEditError(null), 5000);
+         } finally {
+             setIsApplyingBackground(false);
++        }
++    };
++
++    const handleApplyWatermark = async () => {
++        if (!watermarkLogo) {
++            setEditError('Choose a PNG or WebP logo first.');
++            return;
++        }
++        setIsApplyingWatermark(true);
++        setEditError(null);
++        try {
++            const form = new FormData();
++            form.append('job_id', jobId);
++            form.append('clip_index', String(index));
++            form.append('logo', watermarkLogo);
++            form.append('x', String(watermarkX));
++            form.append('y', String(watermarkY));
++            form.append('width_fraction', String(watermarkWidth));
++            const res = await apiFetch('/api/clip/watermark', { method: 'POST', body: form });
++            if (!res.ok) throw new Error(await res.text());
++            const data = await res.json();
++            if (!data.video_url) throw new Error('The server did not return the rendered clip.');
++            const serverUrl = getApiUrl(data.video_url);
++            setCurrentVideoUrl(serverUrl);
++            setServerVideoFile(data.video_url.split('/').pop());
++            setActiveLayers({ subtitles: null, hook: null, effects: null });
++            if (videoRef.current) videoRef.current.load();
++            setShowLogoEditor(false);
++        } catch (e) {
++            setEditError(e.message || 'Could not apply watermark');
++            setTimeout(() => setEditError(null), 7000);
++        } finally {
++            setIsApplyingWatermark(false);
+         }
+     };
+ 
+@@ -987,6 +1026,15 @@
+                     </button>
+ 
+                     <button
++                        onClick={() => setShowLogoEditor(true)}
++                        disabled={isApplyingWatermark}
++                        className={QUIET_BTN}
++                    >
++                        <ImageIcon size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
++                        watermark
++                    </button>
++
++                    <button
+                         onClick={() => setShowSubtitleModal(true)}
+                         disabled={isSubtitling}
+                         className={QUIET_BTN}
+@@ -1199,6 +1247,38 @@
+                 </div>
+             </Modal>
+ 
++            {showLogoEditor && (
++                <Modal isOpen={showLogoEditor} onClose={() => setShowLogoEditor(false)} title="watermark editor">
++                    <div className="space-y-4">
++                        <p className="text-sm text-muted">Upload a transparent PNG or WebP, position it over the clip, then burn it into a new video file.</p>
++                        <label className="block text-sm text-ink2">Logo image
++                            <input type="file" accept="image/png,image/webp,.png,.webp" className="mt-2 block w-full text-sm" onChange={(e) => setWatermarkLogo(e.target.files?.[0] || null)} />
++                        </label>
++                        <div className="relative mx-auto w-full max-w-sm overflow-hidden rounded-lg bg-black aspect-[9/16]">
++                            <video key={currentVideoUrl} src={currentVideoUrl} muted autoPlay loop playsInline className="h-full w-full object-contain" />
++                            {watermarkLogo && (
++                                <img src={URL.createObjectURL(watermarkLogo)} alt="Watermark preview"
++                                    className="pointer-events-none absolute max-w-none object-contain"
++                                    style={{ left: `${watermarkX * 100}%`, top: `${watermarkY * 100}%`, width: `${watermarkWidth * 100}%`, maxHeight: '45%' }} />
++                            )}
++                        </div>
++                        <label className="block text-sm text-ink2">Horizontal position
++                            <input type="range" min="0" max="0.9" step="0.01" value={watermarkX} onChange={(e) => setWatermarkX(Number(e.target.value))} className="mt-2 w-full" />
++                        </label>
++                        <label className="block text-sm text-ink2">Vertical position
++                            <input type="range" min="0" max="0.9" step="0.01" value={watermarkY} onChange={(e) => setWatermarkY(Number(e.target.value))} className="mt-2 w-full" />
++                        </label>
++                        <label className="block text-sm text-ink2">Logo size
++                            <input type="range" min="0.05" max="0.5" step="0.01" value={watermarkWidth} onChange={(e) => setWatermarkWidth(Number(e.target.value))} className="mt-2 w-full" />
++                        </label>
++                        <div className="flex justify-end gap-2">
++                            <button type="button" className="btn-secondary" onClick={() => setShowLogoEditor(false)}>cancel</button>
++                            <button type="button" className="btn-primary" disabled={!watermarkLogo || isApplyingWatermark} onClick={handleApplyWatermark}>{isApplyingWatermark ? 'rendering…' : 'apply watermark'}</button>
++                        </div>
++                    </div>
++                </Modal>
++            )}
++
+             {showBackgroundModal && (
+                 <Modal isOpen={showBackgroundModal} onClose={() => setShowBackgroundModal(false)} title="clip background">
+                     <div className="space-y-4">

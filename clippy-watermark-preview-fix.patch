@@ -1,0 +1,61 @@
+--- a/dashboard/src/components/ResultCard.jsx
++++ b/dashboard/src/components/ResultCard.jsx
+@@ -151,6 +151,10 @@
+     // (subtitles, hooks, effects) never get silently dropped.
+     // A reopened project seeds it from the persisted project state.
+     const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
++    // A successful local edit can update this card before the parent refreshes
++    // its clip prop. Remember the previous filename so that stale props cannot
++    // switch the player back to the pre-edit video during that refresh window.
++    const pendingLocalEditPreviousFile = useRef(null);
+     const [videoErrored, setVideoErrored] = useState(false);
+     const [resolution, setResolution] = useState(null);
+ 
+@@ -183,10 +187,24 @@
+     useEffect(() => {
+         const serverUrl = getApiUrl(clip.video_url);
+         const serverName = (clip.video_url || '').split('/').pop();
++
++        // The watermark endpoint updates the server and this card immediately,
++        // while the parent clip prop may still describe the previous file. Ignore
++        // that stale value, and clear the guard once the parent catches up.
++        if (pendingLocalEditPreviousFile.current) {
++            if (serverName === serverVideoFile) {
++                pendingLocalEditPreviousFile.current = null;
++            } else if (serverName === pendingLocalEditPreviousFile.current) {
++                return;
++            }
++        }
++
+         if (serverName && serverName !== serverVideoFile) {
+             setServerVideoFile(serverName);
+             setCurrentVideoUrl(serverUrl);
++            setDurableSrc(null);
+             setDurableFailed(false);
++            setVideoErrored(false);
+             setHasPlayed(false);
+             if (videoRef.current) videoRef.current.load();
+         }
+@@ -477,10 +495,19 @@
+             const data = await res.json();
+             if (!data.video_url) throw new Error('The server did not return the rendered clip.');
+             const serverUrl = getApiUrl(data.video_url);
++            const newServerFile = data.video_url.split('/').pop();
++            // Prevent the parent's not-yet-refreshed clip prop from reverting the
++            // player to the pre-watermark file. Also drop the old durable URL:
++            // it can point at the unwatermarked MP4 while the new archive is pending.
++            pendingLocalEditPreviousFile.current = serverVideoFile;
++            setDurableSrc(null);
++            setDurableFailed(false);
++            setVideoErrored(false);
++            setHasPlayed(false);
+             setCurrentVideoUrl(serverUrl);
+-            setServerVideoFile(data.video_url.split('/').pop());
+-            // Watermarking must not clear browser-side caption/hook/effect layers.
+-            // The video element reloads automatically when its source changes.
++            setServerVideoFile(newServerFile);
++            // Keep browser-side caption/hook/effect layers intact. The watermark
++            // is already burned into the new server MP4, so do not recompose it here.
+             setShowLogoEditor(false);
+         } catch (e) {
+             setEditError(e.message || 'Could not apply watermark');

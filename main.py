@@ -1868,19 +1868,20 @@ def apply_custom_watermark(video_path, watermark_path):
         # Limit the logo to 18% of the frame width and keep aspect ratio. The
         # transparent overlay is inset from the bottom-right corner.
         cmd = [ffmpeg, "-y", "-i", video_path, "-i", watermark_path,
-               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto",
-               "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+               "-filter_complex", f"[1:v]format=rgba,scale='min({int(width*0.18)},iw)':-1[wm];[0:v][wm]overlay=W-w-24:H-h-24:format=auto[v]",
+               "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
                "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
         subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
         print(f"   🖼️ Custom watermark applied: {os.path.basename(out_path)}")
         return out_path
     except Exception as exc:
-        print(f"   ⚠️ Custom watermark failed ({type(exc).__name__}: {exc}); keeping clip without custom watermark.")
+        print(f"   ❌ Custom watermark failed ({type(exc).__name__}: {exc})")
         try:
-            if 'out_path' in locals() and os.path.exists(out_path): os.remove(out_path)
+            if 'out_path' in locals() and os.path.exists(out_path):
+                os.remove(out_path)
         except OSError:
             pass
-        return None
+        raise RuntimeError(f"Custom watermark failed: {type(exc).__name__}: {exc}") from exc
 
 
 def _free_gpu_cache():

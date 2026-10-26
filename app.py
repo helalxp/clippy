@@ -4333,6 +4333,7 @@ class RerenderSegment(BaseModel):
 class ClipBackgroundRequest(BaseModel):
     job_id: str
     clip_index: int
+    input_filename: Optional[str] = None
     mode: str = "blur"  # blur | solid
     color: str = "#111111"
 
@@ -4771,13 +4772,19 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
         raise HTTPException(status_code=404, detail="Clip not found")
     clip = clips[req.clip_index]
     current_url = clip.get("video_url") or ""
-    current_name = os.path.basename(current_url.split("?", 1)[0])
-    source_path = os.path.join(output_dir, current_name)
+    current_name = os.path.basename((req.input_filename or current_url).split("?", 1)[0])
+    # The first background edit records its source. Reapplying/changing the
+    # background starts from that same source rather than shrinking a previous
+    # background render into another background (the nested-frame regression).
+    source_name = os.path.basename(clip.get("background_source_filename") or current_name)
+    source_path = os.path.join(output_dir, source_name)
     if not os.path.isfile(source_path):
-        # Some deliveries are archived remotely. Fall back to the clean clip in
-        # the job directory, but never fetch an arbitrary URL supplied by client.
+        # Some deliveries are archived remotely. Fall back to the canonical
+        # generated clip in the job directory; never fetch a client URL.
         base = os.path.basename(json_files[0]).replace("_metadata.json", "")
-        source_path = os.path.join(output_dir, f"{base}_clip_{req.clip_index + 1}.mp4")
+        canonical_name = f"{base}_clip_{req.clip_index + 1}.mp4"
+        source_path = os.path.join(output_dir, canonical_name)
+        source_name = canonical_name
     if not os.path.isfile(source_path):
         raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
     out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
@@ -4787,8 +4794,13 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
     try:
         probe = subprocess.run([ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", source_path], capture_output=True, text=True, timeout=15, check=True)
         frame_w, frame_h = [int(v) for v in probe.stdout.strip().split("x", 1)]
+        duration_probe = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", source_path],
+            capture_output=True, text=True, timeout=15, check=True)
+        clip_duration = max(0.1, float(duration_probe.stdout.strip()))
     except Exception:
-        raise HTTPException(status_code=422, detail="Could not determine the clip frame size")
+        raise HTTPException(status_code=422, detail="Could not determine the clip frame size and duration")
     # Keep the same output aspect ratio/resolution as the actual clip, regardless
     # of whether it is vertical, square, or horizontal.
     fg_w, fg_h = max(2, int(frame_w * 0.90) // 2 * 2), max(2, int(frame_h * 0.90) // 2 * 2)
@@ -4797,7 +4809,7 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
         inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
     else:
         # Color is strictly validated as #RRGGBB before it reaches the filter.
-        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+        filtergraph = f"color=c=0x{color[1:]}:s={frame_w}x{frame_h}:r=30:d={clip_duration:.3f}[bg0];[0:v]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fg];[bg0][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
         inputs = [ffmpeg, "-y", "-i", source_path, "-filter_complex", filtergraph, "-map", "[v]", "-map", "0:a?"]
     cmd = inputs + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path]
     try:
@@ -4833,7 +4845,11 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
             detail=f"Could not render background: {type(exc).__name__}",
         )
     served_name = await _deliver(request, req.job_id, out_name)
-    updates = {"video_url": f"/videos/{req.job_id}/{served_name}", "background": {"mode": req.mode, "color": color if req.mode == "solid" else None}}
+    updates = {
+        "video_url": f"/videos/{req.job_id}/{served_name}",
+        "background": {"mode": req.mode, "color": color if req.mode == "solid" else None},
+        "background_source_filename": source_name,
+    }
     clip.update(updates)
     data["shorts"] = clips
     with open(json_files[0], "w", encoding="utf-8") as f:
@@ -4842,6 +4858,100 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
     if req.clip_index < len(mem_clips): mem_clips[req.clip_index].update(updates)
     _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
     return {"video_url": updates["video_url"], "background": updates["background"]}
+
+
+@app.post("/api/clip/watermark")
+async def edit_clip_watermark(
+    request: Request,
+    job_id: str = Form(...),
+    clip_index: int = Form(...),
+    logo: UploadFile = File(...),
+    x: float = Form(0.78),
+    y: float = Form(0.78),
+    width_fraction: float = Form(0.18),
+):
+    """Burn an uploaded PNG/WebP logo into the current delivered clip."""
+    await require_managed_entitlement(request)
+    await _ensure_job_files(job_id, request)
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[job_id]
+    await _assert_job_owner(request, job)
+    if not (0 <= x <= 1 and 0 <= y <= 1 and 0.03 <= width_fraction <= 0.8):
+        raise HTTPException(status_code=400, detail="Invalid watermark position or size")
+    suffix = os.path.splitext(logo.filename or "")[1].lower()
+    if suffix not in (".png", ".webp"):
+        raise HTTPException(status_code=400, detail="Logo must be a PNG or WebP image")
+    raw = await logo.read()
+    if not raw or len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Logo must be between 1 byte and 10 MB")
+    output_dir = os.path.join(OUTPUT_DIR, job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    clips = metadata.get("shorts", [])
+    if clip_index < 0 or clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[clip_index]
+    current_name = os.path.basename((clip.get("video_url") or "").split("?", 1)[0])
+    source_path = os.path.join(output_dir, current_name)
+    if not os.path.isfile(source_path):
+        raise HTTPException(status_code=409, detail="Current clip is not available locally")
+    logo_path = os.path.join(output_dir, f"watermark_upload_{uuid.uuid4().hex}{suffix}")
+    out_name = f"watermarked_{int(time.time())}_{uuid.uuid4().hex[:8]}_{clip_index + 1}.mp4"
+    out_path = os.path.join(output_dir, out_name)
+    try:
+        with open(logo_path, "wb") as f:
+            f.write(raw)
+        probe = subprocess.run(
+            [os.environ.get("FFPROBE_PATH", "ffprobe"), "-v", "error",
+             "-select_streams", "v:0", "-show_entries", "stream=width,height",
+             "-of", "csv=s=x:p=0", source_path],
+            capture_output=True, text=True, timeout=15, check=True)
+        width, height = [int(v) for v in probe.stdout.strip().split("x", 1)]
+        logo_width = max(24, int(width * width_fraction))
+        # Normalized top-left position is clamped so the logo stays inside the frame.
+        px = min(max(0, int(width * x)), max(0, width - logo_width))
+        py = min(max(0, int(height * y)), max(0, height - int(height * 0.03)))
+        filtergraph = (
+            f"[1:v]format=rgba,scale={logo_width}:-1[wm];"
+            f"[0:v][wm]overlay=x='min({px},W-w)':y='min({py},H-h)':format=auto[v]"
+        )
+        subprocess.run(
+            [os.environ.get("FFMPEG_PATH", "ffmpeg"), "-y", "-i", source_path,
+             "-i", logo_path, "-filter_complex", filtergraph, "-map", "[v]",
+             "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
+             "-crf", "18", "-c:a", "copy", "-movflags", "+faststart", out_path],
+            capture_output=True, text=True, timeout=600, check=True)
+        served_name = await _deliver(request, job_id, out_name)
+        updates = {"video_url": f"/videos/{job_id}/{served_name}",
+                   "watermark": {"x": x, "y": y, "width_fraction": width_fraction}}
+        clip.update(updates)
+        metadata["shorts"] = clips
+        with open(json_files[0], "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        mem_clips = (job.get("result") or {}).get("clips") or []
+        if clip_index < len(mem_clips):
+            mem_clips[clip_index].update(updates)
+        return {"video_url": updates["video_url"], "watermark": updates["watermark"]}
+    except subprocess.CalledProcessError as exc:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+        detail = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise HTTPException(status_code=500, detail=f"Could not render watermark: {detail[-1200:]}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if os.path.exists(out_path):
+            os.remove(out_path)
+        raise HTTPException(status_code=500, detail=f"Could not render watermark: {type(exc).__name__}")
+    finally:
+        try:
+            os.remove(logo_path)
+        except OSError:
+            pass
 
 
 @app.post("/api/clip/reframe")
