@@ -1230,16 +1230,19 @@ function App() {
   // drawer, and the bottom tab bar. `short` is the tab-bar label — the full one
   // wraps to two lines in a 5-up bar on a 360px phone.
   const navItems = [
-    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator', short: 'clips', primary: true },
-    // Cloud only: it runs on the managed pipeline and the Upload-Post connection.
-    ...(billingEnabled ? [{ id: 'autopilot', ord: '02', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true }] : []),
-    { id: 'saasshorts', ord: '03', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true, primary: true },
-    { id: 'ai-agent', ord: '04', icon: Bot, label: 'AI Agent', short: 'agent', byok: true },
-    { id: 'ugc-gallery', ord: '05', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', primary: true },
-    { id: 'thumbnails', ord: '06', icon: Image, label: 'YouTube Studio', short: 'studio', primary: true },
-    ...(billingEnabled && isSignedIn ? [{ id: 'history', ord: '07', icon: History, label: 'History', short: 'history' }] : []),
-    { id: 'settings', ord: '08', icon: Settings, label: 'Settings', short: 'settings' },
+    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Create Clips', short: 'create', primary: true, section: 'Workspace' },
+    { id: 'templates', ord: '02', icon: LayoutGrid, label: 'Templates', short: 'templates', section: 'Workspace' },
+    { id: 'history', ord: '03', icon: History, label: 'Library & History', short: 'library', section: 'Workspace' },
+    { id: 'editor', ord: '04', icon: Terminal, label: 'Clip Editor', short: 'editor', section: 'Workspace' },
+    { id: 'publishing', ord: '05', icon: Share2, label: 'Publishing Studio', short: 'publish', section: 'Workspace' },
+    { id: 'thumbnails', ord: '06', icon: Image, label: 'Thumbnail Studio', short: 'thumbnails', primary: true, section: 'Creative Tools' },
+    { id: 'saasshorts', ord: '07', icon: Sparkles, label: 'AI Shorts / UGC', short: 'ai shorts', byok: true, primary: true, section: 'Creative Tools' },
+    { id: 'ugc-gallery', ord: '08', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', section: 'Creative Tools' },
+    ...(billingEnabled ? [{ id: 'autopilot', ord: '09', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true, section: 'Creative Tools' }] : []),
+    { id: 'ai-agent', ord: '10', icon: Bot, label: 'AI Agents', short: 'agents', byok: true, section: 'Automation' },
+    { id: 'settings', ord: '11', icon: Settings, label: 'Settings & Integrations', short: 'settings', section: 'Automation' },
   ];
+  const navGroups = ['Workspace', 'Creative Tools', 'Automation'];
   const activeNav = navItems.find((n) => n.id === activeTab);
 
   // Escape closes the mobile drawer. The shell itself is overflow-hidden, so
@@ -1258,35 +1261,26 @@ function App() {
   };
   const tabLocked = (id) => tutorialLock && id !== 'dashboard';
 
-  // Shared footer links (landing, repo, pricing, contact) — same list in the
-  // desktop rail and the mobile drawer, so they can never drift apart.
+  // Shared utility links. Product navigation lives above; local installs do
+  // not need marketing or billing links in their workspace navigation.
   const NavFooterLinks = ({ collapsed = false }) => (
     <>
       <a
-        href="#landing"
+        href="#app"
         className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
       >
         <Globe size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>landing page</span>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>local workspace</span>
       </a>
       <a
-        href="https://github.com/mutonby/openshorts"
+        href="https://github.com/helalxp/clippy"
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
       >
         <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>open source</span>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Clippy source</span>
       </a>
-      {billingEnabled && (
-        <a
-          href="#/pricing"
-          className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
-        >
-          <Sparkles size={14} className="shrink-0" />
-          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>plans &amp; pricing</span>
-        </a>
-      )}
       <a
         href="mailto:info@openshorts.app"
         className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
@@ -1301,15 +1295,16 @@ function App() {
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
     <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
-        <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
-          <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
-        </div>
-        <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
-      </a>
+      <button onClick={() => goToTab('dashboard')} className="p-6 flex items-center gap-3 text-left" title="Clippy workspace">
+        <div className="w-8 h-8 bg-brass text-brassink rounded-input flex items-center justify-center shrink-0 shadow-lg shadow-brass/20 font-bold">C</div>
+        <span className="font-display text-lg text-ink hidden lg:block">Clippy</span>
+      </button>
 
       <nav className="flex-1 px-4 py-4 space-y-1">
-        {navItems.map((item) => {
+        {navGroups.map((group) => (
+          <div key={group} className="mb-5 last:mb-0">
+            <p className="hidden lg:block px-3 pb-2 text-[10px] uppercase tracking-[0.14em] text-muted/70">{group}</p>
+            {navItems.filter((item) => item.section === group).map((item) => {
           const NavIcon = item.icon;
           const isActive = activeTab === item.id;
           return (
@@ -1333,7 +1328,9 @@ function App() {
               <span className="readout hidden lg:block">{item.ord}</span>
             </button>
           );
-        })}
+            })}
+          </div>
+        ))}
       </nav>
 
       <div className="p-4 border-t border-rule space-y-1">
@@ -1357,12 +1354,10 @@ function App() {
       />
       <div className="relative w-[17rem] max-w-[82vw] h-full bg-paper2 border-r border-rule flex flex-col animate-slide-in-left">
         <div className="flex items-center justify-between px-5 h-14 border-b border-rule shrink-0">
-          <a href="#landing" className="flex items-center gap-2.5" onClick={() => setNavOpen(false)}>
-            <div className="w-7 h-7 bg-paper3 rounded-input overflow-hidden border border-rule shrink-0">
-              <img src="/logo-openshorts.png" alt="" className="w-full h-full object-cover" />
-            </div>
-            <span className="font-display lowercase text-lg text-ink">openshorts</span>
-          </a>
+          <button className="flex items-center gap-2.5" onClick={() => goToTab('dashboard')}>
+            <div className="w-7 h-7 bg-brass text-brassink rounded-input flex items-center justify-center shrink-0 font-bold">C</div>
+            <span className="font-display text-lg text-ink">Clippy</span>
+          </button>
           <button
             onClick={() => setNavOpen(false)}
             aria-label="close navigation"
@@ -1979,6 +1974,85 @@ function App() {
             </div>
           )}
 
+          {/* View: Templates. The renderer does not yet accept a complete
+              template configuration, so this is deliberately a planning and
+              discovery surface rather than a row of pretend apply buttons. */}
+          {activeTab === 'templates' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-6 md:p-10 animate-fade">
+              <div className="max-w-6xl mx-auto">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
+                  <div>
+                    <p className="eyebrow text-brass mb-2">WORKSPACE · STYLE LIBRARY</p>
+                    <h1 className="font-display text-3xl text-ink">Templates</h1>
+                    <p className="text-muted mt-2 max-w-2xl">Choose a visual direction before generation. Template rendering will be enabled once its configuration is connected to the existing Remotion and FFmpeg pipelines.</p>
+                  </div>
+                  <button onClick={() => goToTab('dashboard')} className="btn-primary px-4 py-2 text-sm">Create clips first</button>
+                </div>
+                <div className="grid lg:grid-cols-[1.2fr_.8fr] gap-5">
+                  <div className="card p-5 sm:p-6">
+                    <div className="flex items-center justify-between gap-3 mb-5"><h2 className="text-base font-medium text-ink">Template workflow</h2><span className="badge-brass">Planned integration</span></div>
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      {[
+                        ['1', 'Browse styles', 'Caption, background, watermark, safe-zone and effect presets.'],
+                        ['2', 'Preview safely', 'Use sample footage first, then selected source footage when available.'],
+                        ['3', 'Apply on approval', 'Persist the selection with the generation request and editor state.'],
+                      ].map(([step, title, copy]) => <div key={step} className="rounded-input border border-rule bg-paper p-4"><span className="readout text-brass">{step}</span><p className="text-sm font-medium text-ink mt-3">{title}</p><p className="text-xs text-muted mt-1 leading-relaxed">{copy}</p></div>)}
+                    </div>
+                    <div className="mt-5 rounded-card border border-dashed border-rule2 bg-paper p-5 text-sm text-muted leading-relaxed">
+                      No visual template has been applied yet. This avoids implying that a style is already burned into output when the renderer has not received one.
+                    </div>
+                  </div>
+                  <div className="card p-5 sm:p-6">
+                    <Bot size={20} className="text-brass mb-3" />
+                    <h2 className="text-base font-medium text-ink">Agent-friendly by design</h2>
+                    <p className="text-sm text-muted mt-2 leading-relaxed">The future template model will expose named, structured configuration instead of opaque UI-only state, so an MCP agent can propose a style and stop at an approval checkpoint.</p>
+                    <button onClick={() => goToTab('ai-agent')} className="btn-ghost mt-5 px-4 py-2 text-sm">Open AI Agents</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* View: Clip Editor launcher. Existing editors remain the source of
+              truth; this page never fabricates an editable clip. */}
+          {activeTab === 'editor' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-6 md:p-10 animate-fade">
+              <div className="max-w-5xl mx-auto">
+                <p className="eyebrow text-brass mb-2">WORKSPACE · GENERATED CLIPS</p>
+                <h1 className="font-display text-3xl text-ink">Clip Editor</h1>
+                <p className="text-muted mt-2 max-w-2xl">Open a generated clip to recut from its transcript, adjust framing scene by scene, and keep the existing subtitle, hook, background and watermark tools available.</p>
+                {results?.clips?.length ? (
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-8">
+                    {rankedClips.map(({ clip, index }) => <div key={index} className="card p-4">
+                      <p className="readout">CLIP {String(index + 1).padStart(2, '0')}</p>
+                      <p className="text-sm text-ink font-medium mt-2 line-clamp-2">{clip.video_title_for_youtube_short || clip.viral_hook_text || 'Generated clip'}</p>
+                      <p className="text-xs text-muted mt-2">Open the full editor; its existing non-destructive recut workflow remains intact.</p>
+                      <button onClick={() => setEditingClip(index)} className="btn-primary w-full mt-4 px-3 py-2 text-sm">Open editor</button>
+                    </div>)}
+                  </div>
+                ) : (
+                  <div className="card p-8 mt-8 text-center"><Terminal size={28} className="mx-auto text-brass mb-4" /><p className="text-ink font-medium">No generated clips in this workspace yet.</p><p className="text-sm text-muted mt-2">Create clips first, then choose one here for timeline editing.</p><button onClick={() => goToTab('dashboard')} className="btn-primary mt-5 px-4 py-2 text-sm">Create clips</button></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* View: Publishing launcher. Posting and scheduling stay attached to
+              real ResultCard clips until a centralized queue is implemented. */}
+          {activeTab === 'publishing' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-6 md:p-10 animate-fade">
+              <div className="max-w-5xl mx-auto">
+                <p className="eyebrow text-brass mb-2">WORKSPACE · DISTRIBUTION</p>
+                <h1 className="font-display text-3xl text-ink">Publishing Studio</h1>
+                <p className="text-muted mt-2 max-w-2xl">Connected channels, publishing and scheduling are kept in the real clip workflow today. This studio is the organizing surface for the future centralized queue.</p>
+                <div className="grid md:grid-cols-2 gap-5 mt-8">
+                  <div className="card p-5"><Share2 size={20} className="text-brass mb-3" /><h2 className="text-base font-medium text-ink">Connected destinations</h2><p className="text-sm text-muted mt-2">{userProfiles.length ? `${userProfiles.length} social profile${userProfiles.length === 1 ? '' : 's'} available in this browser session.` : 'Connect Upload-Post in Settings to enable YouTube Shorts, Instagram Reels and TikTok publishing.'}</p><button onClick={() => goToTab('settings')} className="btn-ghost mt-5 px-4 py-2 text-sm">Manage integrations</button></div>
+                  <div className="card p-5"><Calendar size={20} className="text-brass mb-3" /><h2 className="text-base font-medium text-ink">Clip publishing</h2><p className="text-sm text-muted mt-2">Open a completed project to post or schedule individual clips with the already-wired social API.</p><button onClick={() => goToTab('dashboard')} className="btn-primary mt-5 px-4 py-2 text-sm">Open current clips</button></div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* View: History */}
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
@@ -2015,14 +2089,14 @@ function App() {
               {/* On a phone the hero used to fill the fold on its own and push
                   the uploader — the whole point of the screen — below it. The
                   eyebrow, the display size and the gaps all shrink first. */}
-              <div className="max-w-xl w-full text-center space-y-5 sm:space-y-8">
+              <div className="max-w-5xl w-full text-center space-y-5 sm:space-y-8">
                 <div className="space-y-2.5 sm:space-y-4">
-                  <p className="eyebrow hidden sm:block">01 · CLIP GENERATOR</p>
-                  <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink">
-                    Create Viral Shorts
+                  <p className="eyebrow hidden sm:block text-brass">WORKSPACE · CREATE CLIPS</p>
+                  <h1 className="font-display text-3xl sm:text-4xl md:text-5xl text-ink">
+                    Create something worth watching.
                   </h1>
                   <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
-                    Drop your long-form video below to instantly generate viral clips with AI.
+                    Bring in a source video, choose your workflow, and let Clippy find the moments worth sharing.
                   </p>
                   {/* The same pipeline is an MCP server: point people at the
                       one place that explains how to drive it from an agent. */}
@@ -2041,6 +2115,24 @@ function App() {
                 </div>
 
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+                  <button onClick={() => goToTab('templates')} className="card card-hover p-4 text-left">
+                    <LayoutGrid size={18} className="text-brass mb-3" />
+                    <p className="text-sm font-medium text-ink">Start with a template</p>
+                    <p className="text-xs text-muted mt-1">Browse the upcoming preview-first style library.</p>
+                  </button>
+                  <button onClick={() => goToTab('history')} className="card card-hover p-4 text-left">
+                    <History size={18} className="text-brass mb-3" />
+                    <p className="text-sm font-medium text-ink">Continue a project</p>
+                    <p className="text-xs text-muted mt-1">Reopen generated work from your library.</p>
+                  </button>
+                  <button onClick={() => goToTab('ai-agent')} className="card card-hover p-4 text-left">
+                    <Bot size={18} className="text-brass mb-3" />
+                    <p className="text-sm font-medium text-ink">Work with an agent</p>
+                    <p className="text-xs text-muted mt-1">Connect Codex, Claude, ChatGPT, or n8n through MCP.</p>
+                  </button>
+                </div>
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>

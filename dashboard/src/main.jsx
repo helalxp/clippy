@@ -90,7 +90,9 @@ function Root() {
     // #landing = explicit landing view (app logo); section anchors keep the landing mounted
     if (['#landing', '#features', '#how-it-works', '#pricing', '#comparison', '#faq'].includes(hash)) return 'landing';
     if (hash === '#app' || hash.startsWith('#app?') || localStorage.getItem('openshorts_skip_landing') === '1') return 'app';
-    return 'landing';
+    // A local creative tool should open where work starts. The marketing site
+    // remains available via #landing, but it is no longer the application root.
+    return 'app';
   };
 
   const [view, setView] = useState(resolveView);
