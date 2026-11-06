@@ -4,7 +4,6 @@ mod bootstrap;
 
 use std::sync::Mutex;
 use supervisor::{ServiceStatus, Supervisor};
-use downloader::Downloader;
 use bootstrap::Bootstrap;
 use tauri::State;
 

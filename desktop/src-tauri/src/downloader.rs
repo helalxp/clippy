@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io::{self, BufRead, BufReader, BufWriter, Read, Write},
+    io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     time::Duration,
 };

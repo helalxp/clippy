@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm --prefix ../dashboard run dev -- --host 127.0.0.1",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../dashboard/build-desktop.ps1",
+    "beforeBuildCommand": "cd ../dashboard && npm run build",
     "frontendDist": "../dashboard/dist"
   },
   "app": {
