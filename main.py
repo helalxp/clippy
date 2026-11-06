@@ -28,6 +28,7 @@ import gpu_decode
 import gemini_worker
 import hook_grounding
 import layout_picker
+from platform_compat import resolve_cookies_write_path
 import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
@@ -857,10 +858,13 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
     print("📥 Downloading video from YouTube...")
     step_start_time = time.time()
 
-    cookies_path = '/app/cookies.txt'
+    cookies_path = None
     cookies_env = os.environ.get("YOUTUBE_COOKIES")
     if cookies_env:
-        print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file inside container...")
+        # Resolve cross-platform cookies path: Windows uses script dir, Docker uses /app
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cookies_path = resolve_cookies_write_path(script_dir)
+        print(f"🍪 Found YOUTUBE_COOKIES env var, creating cookies file at {cookies_path}...")
         try:
             with open(cookies_path, 'w') as f:
                 f.write(cookies_env)
@@ -2332,11 +2336,11 @@ if __name__ == '__main__':
     def _report_job_cpu():
         """CPU time of the whole job (this process + every ffmpeg it waited
         for) for app.py's log, to compare pipeline versions per job."""
-        import resource
-        own = resource.getrusage(resource.RUSAGE_SELF)
-        kids = resource.getrusage(resource.RUSAGE_CHILDREN)
-        py_s = own.ru_utime + own.ru_stime
-        children_s = kids.ru_utime + kids.ru_stime
+        # os.times() is available on Windows and POSIX. The resource module
+        # used by the Linux container is not part of the Windows standard library.
+        cpu = os.times()
+        py_s = cpu.user + cpu.system
+        children_s = cpu.children_user + cpu.children_system
         print("JOB_CPU " + json.dumps({
             "wall_s": round(time.time() - script_start_time, 1),
             "cpu_s": round(py_s + children_s, 1), "py_s": round(py_s, 1),

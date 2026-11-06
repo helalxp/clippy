@@ -17,9 +17,26 @@ DEFAULT_WHISPER_MODEL = "small"
 
 
 def get_whisper_config():
-    """Return the faster-whisper model config, overridable via env vars."""
+    """Return faster-whisper config, honoring explicit env overrides first.
+
+    The desktop model picker stores a selected size or validated local model
+    directory in the per-user settings file. WHISPER_MODEL remains supported
+    for existing Docker/server deployments and takes precedence when set.
+    """
+    configured_model = os.environ.get("WHISPER_MODEL")
+    if configured_model:
+        model_size = configured_model
+    else:
+        try:
+            from clippy_local_models import whisper_model_argument
+        except ImportError:
+            model_size = DEFAULT_WHISPER_MODEL
+        else:
+            # A missing user-selected local model must be surfaced, never
+            # silently replaced with the default model.
+            model_size = whisper_model_argument()
     return {
-        "model_size": os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
+        "model_size": model_size,
         "device": os.environ.get("WHISPER_DEVICE", "cpu"),
         "compute_type": os.environ.get("WHISPER_COMPUTE", "int8"),
     }

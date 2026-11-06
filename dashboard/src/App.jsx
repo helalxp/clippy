@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
+import LocalModelSettings from './components/LocalModelSettings';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
@@ -1598,9 +1599,13 @@ function App() {
                   <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              {/* Local desktop installs manage their one-time runtime setup separately
+                  from optional model weights. Cloud accounts do not expose local paths. */}
+              {!billingEnabled && <LocalModelSettings />}
+
               {/* Self-hosted installs have no account page, so the agent
                   how-to lives here; cloud users get it (with OAuth) in Account. */}
-              {!billingEnabled && <div className="mb-6"><McpConnectCard cloud={false} /></div>}
+              {!billingEnabled && <div className="mb-6 mt-8"><McpConnectCard cloud={false} /></div>}
               {isManaged ? (
                 <div className="card p-6 mb-2">
                   <div className="flex items-center justify-between mb-3">

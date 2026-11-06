@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import { initBundle } from "./bundle.js";
 import { executeRender } from "./render-worker.js";
+import { ensureOutputDirectory, resolveListenHost, resolveOutputDirectory, resolveRendererPublicUrl, resolveRendererVideoUrl } from "./paths.js";
 
 // --- Render status types ---
 
@@ -24,7 +25,7 @@ export const renderJobs = new Map<string, RenderJob>();
 // --- Request validation schema ---
 
 const renderRequestSchema = z.object({
-  jobId: z.string().min(1),
+  jobId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
   clipIndex: z.number().int().min(0),
   props: z.object({
     videoUrl: z.string(),
@@ -43,11 +44,32 @@ const renderRequestSchema = z.object({
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
-const PORT = parseInt(process.env.PORT || "3100", 10);
-const OUTPUT_DIR = process.env.OUTPUT_DIR || "/output";
+const PORT = Number.parseInt(process.env.PORT || "13100", 10);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  throw new Error(`Invalid renderer PORT: ${process.env.PORT}`);
+}
+const HOST = resolveListenHost();
+const OUTPUT_DIR = resolveOutputDirectory();
+const RENDERER_PUBLIC_URL = resolveRendererPublicUrl(PORT, HOST);
+ensureOutputDirectory(OUTPUT_DIR);
+console.log(`[render-service] Shared output directory: ${OUTPUT_DIR}`);
+console.log(`[render-service] Public media URL: ${RENDERER_PUBLIC_URL}/output/`);
 
-// Serve video files from the shared output volume so Remotion can access them via HTTP
-app.use("/output", express.static(OUTPUT_DIR));
+// Remotion's browser process fetches media from this service. OUTPUT_DIR must
+// be the same physical directory configured for the FastAPI backend.
+app.use(
+  "/output",
+  express.static(OUTPUT_DIR, {
+    dotfiles: "deny",
+    fallthrough: false,
+    index: false,
+    redirect: false,
+    setHeaders(res) {
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+    },
+  }),
+);
 
 // Health check
 app.get("/health", (_req, res) => {
@@ -67,8 +89,23 @@ app.post("/render", (req, res) => {
   }
 
   const { jobId, clipIndex, props } = parsed.data;
-  const renderId = uuidv4();
 
+  // Convert backend /videos URLs to this service's shared-media endpoint.
+  // Validate before creating a job so a bad path cannot leave an orphan queued job.
+  let resolvedVideoUrl: string;
+  try {
+    resolvedVideoUrl = resolveRendererVideoUrl(props.videoUrl, RENDERER_PUBLIC_URL);
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : "Invalid video URL",
+    });
+    return;
+  }
+  if (resolvedVideoUrl !== props.videoUrl) {
+    console.log(`[render] Resolved video URL: ${props.videoUrl} -> ${resolvedVideoUrl}`);
+  }
+
+  const renderId = uuidv4();
   const job: RenderJob = {
     renderId,
     jobId,
@@ -76,21 +113,10 @@ app.post("/render", (req, res) => {
     status: "queued",
     progress: 0,
   };
-
   renderJobs.set(renderId, job);
-
   console.log(
     `[render] Queued render ${renderId} for job=${jobId} clip=${clipIndex}`
   );
-
-  // Resolve video URL: convert frontend/backend URLs to renderer's own static server
-  // The renderer serves /output/* from the shared Docker volume
-  let resolvedVideoUrl = props.videoUrl;
-  const videoPathMatch = props.videoUrl.match(/\/videos\/([^/]+)\/(.+)$/);
-  if (videoPathMatch) {
-    resolvedVideoUrl = `http://localhost:${PORT}/output/${videoPathMatch[1]}/${videoPathMatch[2]}`;
-    console.log(`[render] Resolved video URL: ${props.videoUrl} -> ${resolvedVideoUrl}`);
-  }
 
   // Fire and forget - render runs in background
   executeRender({
@@ -155,9 +181,21 @@ async function main() {
   await initBundle();
   console.log("[render-service] Bundle ready.");
 
-  app.listen(PORT, () => {
-    console.log(`[render-service] Listening on port ${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`[render-service] Listening on http://${HOST}:${PORT}`);
   });
+
+  const shutdown = (signal: string) => {
+    console.log(`[render-service] Received ${signal}; closing HTTP server`);
+    server.close((error) => {
+      if (error) {
+        console.error("[render-service] Error while closing HTTP server:", error);
+        process.exitCode = 1;
+      }
+    });
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 main().catch((err) => {

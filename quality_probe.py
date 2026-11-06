@@ -15,20 +15,24 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from platform_compat import resolve_cookies_write_path
 
 load_dotenv()
 
 
 def _find_cookies_path():
-    # Mirrors main.py's cookie discovery.
+    # Mirrors main.py's cookie discovery: check script dir first, then /app/cookies.txt
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for candidate in [
         os.path.join(script_dir, 'www.youtube.com_cookies.txt'),
         os.path.join(script_dir, 'cookies.txt'),
-        '/app/cookies.txt',
     ]:
         if os.path.exists(candidate):
             return candidate
+    # Fall back to platform-aware path if cookies exist there
+    platform_path = resolve_cookies_write_path(script_dir)
+    if os.path.exists(platform_path):
+        return platform_path
     return None
 
 

@@ -34,12 +34,13 @@ import layout_ranges
 import watermarked
 import media_auth
 import reference_templates
+from platform_compat import job_subprocess_options
 
 load_dotenv()
 
 # Constants
-UPLOAD_DIR = "uploads"
-OUTPUT_DIR = "output"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 REFERENCE_TEMPLATES_DIR = str(reference_templates.root())
@@ -2634,12 +2635,6 @@ def _job_nice():
         return 10
 
 
-def _lower_priority():
-    n = _job_nice()
-    if n:
-        os.nice(n)
-
-
 async def run_job(job_id, job_data):
     """Executes the subprocess for a specific job."""
 
@@ -2658,7 +2653,7 @@ async def run_job(job_id, job_data):
             stderr=subprocess.STDOUT, # Merge stderr to stdout
             env=env,
             cwd=os.getcwd(),
-            preexec_fn=_lower_priority,
+            **job_subprocess_options(_job_nice()),
         )
         
         # We need to capture logs in a thread because Popen isn't async
@@ -2778,6 +2773,76 @@ async def run_job(job_id, job_data):
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+
+@app.get("/api/local-models/whisper")
+async def get_local_whisper_model():
+    """Return Whisper choices and the user's separately managed model selection."""
+    from clippy_local_models import (
+        WHISPER_MODELS, get_whisper_selection, list_download_tasks,
+        models_root, validate_whisper_model_path,
+    )
+
+    selected = get_whisper_selection()
+    catalog = []
+    for key, details in WHISPER_MODELS.items():
+        folder = models_root() / "whisper" / key
+        try:
+            validate_whisper_model_path(str(folder))
+            downloaded = True
+        except (OSError, ValueError):
+            downloaded = False
+        catalog.append({
+            "id": key,
+            "label": details["label"],
+            "description": details["description"],
+            "downloaded": downloaded,
+        })
+    return {
+        "selection": selected,
+        "models": catalog,
+        "downloads": list_download_tasks(),
+        "model_storage": str(models_root()),
+        "runtime_note": (
+            "Core application dependencies are installed once during first-run "
+            "setup. Whisper model weights are separate and are managed here."
+        ),
+    }
+
+
+@app.post("/api/local-models/whisper/select")
+async def select_local_whisper_model(request: Request):
+    """Select a catalog model size or an existing local faster-whisper model."""
+    from clippy_local_models import save_whisper_selection
+
+    payload = await request.json()
+    try:
+        if payload.get("model_path"):
+            selection = save_whisper_selection(model_path=payload["model_path"])
+        else:
+            selection = save_whisper_selection(model_size=payload.get("model_size"))
+        return {"ok": True, "selection": selection}
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/local-models/whisper/download")
+async def download_local_whisper_model(request: Request, background_tasks: BackgroundTasks):
+    """Download one supported Whisper model without installing app dependencies."""
+    from clippy_local_models import WHISPER_MODELS, queue_whisper_download, start_whisper_download
+
+    payload = await request.json()
+    model_size = payload.get("model_size")
+    if model_size not in WHISPER_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported Whisper model size.")
+    task_id = str(uuid.uuid4())
+    try:
+        queue_whisper_download(task_id, model_size)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    # Run in FastAPI's background task pool so the UI remains responsive.
+    background_tasks.add_task(start_whisper_download, task_id, model_size)
+    return {"ok": True, "task_id": task_id}
+
 
 @app.get("/health")
 async def health():
@@ -5251,7 +5316,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
 
 
 # --- Remotion Render Proxy ---
-RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://renderer:3100")
+RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://127.0.0.1:13100")
 # render id -> owner user id (None for self-host / BYOK), for the status poll.
 _render_owners: Dict[str, Optional[str]] = {}
 

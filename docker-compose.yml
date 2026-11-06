@@ -4,6 +4,9 @@ services:
     container_name: openshorts-backend
     ports:
       - "8000:8000"
+    environment:
+      - OUTPUT_DIR=/app/output
+      - RENDER_SERVICE_URL=http://renderer:3100
     volumes:
       - .:/app
       - /app/__pycache__
@@ -20,6 +23,9 @@ services:
     volumes:
       - ./dashboard:/app
       - /app/node_modules
+    environment:
+      - VITE_PROXY_TARGET=http://backend:8000
+      - VITE_RENDER_TARGET=http://renderer:3100
     restart: unless-stopped
     depends_on:
       - backend
@@ -37,6 +43,8 @@ services:
       - REMOTION_BUNDLE_PATH=/app/remotion
       - OUTPUT_DIR=/output
       - PORT=3100
+      - HOST=0.0.0.0
+      - RENDERER_PUBLIC_URL=http://localhost:3100
     restart: unless-stopped
     depends_on:
       - backend
