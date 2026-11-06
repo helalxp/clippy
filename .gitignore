@@ -49,3 +49,5 @@ skills-lock.json
 
 # Instrucciones locales con datos de infra (repo público)
 CLAUDE.local.md
+target/
+gen/

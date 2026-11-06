@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.helal.clippy",
   "build": {
-    "beforeDevCommand": "npm --prefix ../../dashboard run dev -- --host 127.0.0.1",
+    "beforeDevCommand": "npm --prefix ../dashboard run dev -- --host 127.0.0.1",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../dashboard/build-desktop.ps1",
-    "frontendDist": "../../dashboard/dist"
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../dashboard/build-desktop.ps1",
+    "frontendDist": "../dashboard/dist"
   },
   "app": {
     "windows": [
