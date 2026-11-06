@@ -17,12 +17,21 @@ pub struct RuntimeManifest {
     pub components: std::collections::HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuInfo {
+    pub vendor: String,
+    pub renderer: String,
+    pub vram_mb: Option<u64>,
+    pub compute_api: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BootstrapStatus {
     pub stage: String,
     pub progress: f32,
     pub message: String,
     pub error: Option<String>,
+    pub gpu: Option<GpuInfo>,
 }
 
 pub struct Bootstrap {
@@ -99,6 +108,9 @@ impl Bootstrap {
         let missing = self.validate_components()?;
         let progress = if missing.is_empty() { 100.0 } else { 0.0 };
 
+        // Detect GPU status
+        let gpu_info = self.detect_gpu_status();
+
         Ok(BootstrapStatus {
             stage: "validation".to_string(),
             progress,
@@ -112,7 +124,49 @@ impl Bootstrap {
             } else {
                 Some(missing.join("; "))
             },
+            gpu: gpu_info,
         })
+    }
+
+    fn detect_gpu_status(&self) -> Option<GpuInfo> {
+        // Run nvidia-smi to get GPU info
+        let output = Command::new("nvidia-smi")
+            .arg("--query-gpu=name,memory.total,driver.version")
+            .output();
+
+        // Handle both Ok and Err exhaustively
+        if let Ok(result) = output {
+            if result.status.success() {
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let lines: Vec<&str> = stdout.lines().collect();
+                if let Some(first_line) = lines.first() {
+                    let parts: Vec<&str> = first_line.split(',').map(|s| s.trim()).collect();
+                    if parts.len() >= 3 {
+                        let vendor = if parts[0].contains("NVIDIA") {
+                            "nvidia"
+                        } else if parts[0].contains("AMD") {
+                            "amd"
+                        } else if parts[0].contains("Intel") {
+                            "intel"
+                        } else {
+                            "unknown"
+                        };
+                        let renderer = parts[0].to_string();
+                        let vram_mb: Option<u64> = parts[1].replace(" MiB", "").parse().ok();
+
+                        return Some(GpuInfo {
+                            vendor: vendor.to_string(),
+                            renderer,
+                            vram_mb,
+                            compute_api: vec!["cuda".to_string()],
+                        });
+                    }
+                }
+            }
+        }
+
+        // No NVIDIA GPU or nvidia-smi failed
+        None
     }
 
     pub fn install_from_archive(
