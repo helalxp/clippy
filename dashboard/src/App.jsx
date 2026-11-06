@@ -25,6 +25,7 @@ import LoginModal from './components/LoginModal';
 import TrialGate from './components/TrialGate';
 import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
+import ReferenceTemplateLibrary from './components/ReferenceTemplateLibrary';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
@@ -1979,37 +1980,7 @@ function App() {
               discovery surface rather than a row of pretend apply buttons. */}
           {activeTab === 'templates' && (
             <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-6 md:p-10 animate-fade">
-              <div className="max-w-6xl mx-auto">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-8">
-                  <div>
-                    <p className="eyebrow text-brass mb-2">WORKSPACE · STYLE LIBRARY</p>
-                    <h1 className="font-display text-3xl text-ink">Templates</h1>
-                    <p className="text-muted mt-2 max-w-2xl">Choose a visual direction before generation. Template rendering will be enabled once its configuration is connected to the existing Remotion and FFmpeg pipelines.</p>
-                  </div>
-                  <button onClick={() => goToTab('dashboard')} className="btn-primary px-4 py-2 text-sm">Create clips first</button>
-                </div>
-                <div className="grid lg:grid-cols-[1.2fr_.8fr] gap-5">
-                  <div className="card p-5 sm:p-6">
-                    <div className="flex items-center justify-between gap-3 mb-5"><h2 className="text-base font-medium text-ink">Template workflow</h2><span className="badge-brass">Planned integration</span></div>
-                    <div className="grid sm:grid-cols-3 gap-3">
-                      {[
-                        ['1', 'Browse styles', 'Caption, background, watermark, safe-zone and effect presets.'],
-                        ['2', 'Preview safely', 'Use sample footage first, then selected source footage when available.'],
-                        ['3', 'Apply on approval', 'Persist the selection with the generation request and editor state.'],
-                      ].map(([step, title, copy]) => <div key={step} className="rounded-input border border-rule bg-paper p-4"><span className="readout text-brass">{step}</span><p className="text-sm font-medium text-ink mt-3">{title}</p><p className="text-xs text-muted mt-1 leading-relaxed">{copy}</p></div>)}
-                    </div>
-                    <div className="mt-5 rounded-card border border-dashed border-rule2 bg-paper p-5 text-sm text-muted leading-relaxed">
-                      No visual template has been applied yet. This avoids implying that a style is already burned into output when the renderer has not received one.
-                    </div>
-                  </div>
-                  <div className="card p-5 sm:p-6">
-                    <Bot size={20} className="text-brass mb-3" />
-                    <h2 className="text-base font-medium text-ink">Agent-friendly by design</h2>
-                    <p className="text-sm text-muted mt-2 leading-relaxed">The future template model will expose named, structured configuration instead of opaque UI-only state, so an MCP agent can propose a style and stop at an approval checkpoint.</p>
-                    <button onClick={() => goToTab('ai-agent')} className="btn-ghost mt-5 px-4 py-2 text-sm">Open AI Agents</button>
-                  </div>
-                </div>
-              </div>
+              <ReferenceTemplateLibrary />
             </div>
           )}
 

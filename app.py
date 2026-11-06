@@ -33,6 +33,7 @@ import recut
 import layout_ranges
 import watermarked
 import media_auth
+import reference_templates
 
 load_dotenv()
 
@@ -41,6 +42,7 @@ UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "output"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+REFERENCE_TEMPLATES_DIR = str(reference_templates.root())
 
 # Configuration
 # Default to 1 if not set, but user can set higher for powerful servers
@@ -2477,6 +2479,7 @@ app.mount("/videos", RestoringStaticFiles(
 THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+app.mount("/reference-templates-media", StaticFiles(directory=REFERENCE_TEMPLATES_DIR), name="reference-template-media")
 
 
 def _safe_under(base_dir: str, user_rel_path: str) -> Optional[str]:
@@ -3017,6 +3020,119 @@ async def delete_upload(upload_id: str, request: Request):
     except OSError:
         pass
     return {"deleted": upload_id}
+
+
+# --------------------------------------------------------------------------- #
+# Reference-derived templates
+#
+# This is intentionally self-host only for now. Cloud needs an owned storage
+# model before references can be exposed safely across accounts.  The local
+# library is outside uploads/ and output/, so neither job retention sweep can
+# silently delete a style the user has saved for future work.
+# --------------------------------------------------------------------------- #
+class ReferenceTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    overrides: Optional[Dict[str, Any]] = None
+
+
+def _reference_template_response(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Add public local-media paths without persisting environment-specific URLs."""
+    item = json.loads(json.dumps(manifest))
+    ref = item.get("reference") or {}
+    template_id = item["id"]
+    item["media"] = {
+        "reference_url": f"/reference-templates-media/{template_id}/{ref['video']}",
+        "poster_url": (f"/reference-templates-media/{template_id}/{ref['poster']}"
+                       if ref.get("poster") else None),
+    }
+    return item
+
+
+def _reference_templates_local_only():
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=501,
+            detail="Reference template storage needs account-scoped cloud storage before it can be enabled in managed mode.")
+
+
+@app.get("/api/reference-templates")
+async def list_reference_templates():
+    _reference_templates_local_only()
+    return {"templates": [_reference_template_response(item) for item in reference_templates.list_all()]}
+
+
+@app.get("/api/reference-templates/{template_id}")
+async def get_reference_template(template_id: str):
+    _reference_templates_local_only()
+    try:
+        return _reference_template_response(reference_templates.get(template_id))
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Reference template not found")
+
+
+@app.post("/api/reference-templates")
+async def create_reference_template(
+    video: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+):
+    """Store a reference once and extract the deterministic style blueprint."""
+    _reference_templates_local_only()
+    original_name = os.path.basename(video.filename or "reference.mp4")
+    suffix = os.path.splitext(original_name)[1].lower()
+    if suffix not in reference_templates.VIDEO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Upload an MP4, MOV, MKV, WebM, M4V, or AVI reference video")
+
+    staged = reference_templates.root() / f".upload_{uuid.uuid4().hex}{suffix}"
+    limit = MAX_FILE_SIZE_MB * 1024 * 1024
+    size = 0
+    try:
+        with open(staged, "wb") as out:
+            while chunk := await video.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail=f"Reference video is too large. Max size {MAX_FILE_SIZE_MB}MB")
+                out.write(chunk)
+        if not size:
+            raise HTTPException(status_code=400, detail="Reference video is empty")
+        try:
+            manifest = await asyncio.get_event_loop().run_in_executor(
+                None, reference_templates.create, staged, original_name, name, category)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _reference_template_response(manifest)
+    finally:
+        try:
+            if staged.exists():
+                staged.unlink()
+        except OSError:
+            pass
+        await video.close()
+
+
+@app.patch("/api/reference-templates/{template_id}")
+async def update_reference_template(template_id: str, update: ReferenceTemplateUpdate):
+    """Save human-approved corrections without overwriting detected evidence."""
+    _reference_templates_local_only()
+    try:
+        manifest = reference_templates.get(template_id)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Reference template not found")
+    if update.name is not None:
+        manifest["name"] = update.name.strip()[:120] or manifest["name"]
+    if update.category is not None:
+        manifest["category"] = update.category.strip()[:80] or "Uncategorized"
+    if update.overrides is not None:
+        try:
+            json.dumps(update.overrides)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Template overrides must be JSON-compatible")
+        manifest["overrides"] = update.overrides
+    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    manifest["version"] = int(manifest.get("version") or 1) + 1
+    reference_templates.save(manifest)
+    return _reference_template_response(manifest)
 
 
 def _sweep_pending_uploads(now=None):
@@ -4773,18 +4889,27 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
     clip = clips[req.clip_index]
     current_url = clip.get("video_url") or ""
     current_name = os.path.basename((req.input_filename or current_url).split("?", 1)[0])
-    # The first background edit records its source. Reapplying/changing the
-    # background starts from that same source rather than shrinking a previous
-    # background render into another background (the nested-frame regression).
-    source_name = os.path.basename(clip.get("background_source_filename") or current_name)
-    source_path = os.path.join(output_dir, source_name)
-    if not os.path.isfile(source_path):
-        # Some deliveries are archived remotely. Fall back to the canonical
-        # generated clip in the job directory; never fetch a client URL.
-        base = os.path.basename(json_files[0]).replace("_metadata.json", "")
-        canonical_name = f"{base}_clip_{req.clip_index + 1}.mp4"
-        source_path = os.path.join(output_dir, canonical_name)
-        source_name = canonical_name
+    # Remove wm_ prefix if present to find clean twin
+    if current_name.startswith("wm_"):
+        clean_name = current_name[len("wm_"):]
+    else:
+        clean_name = current_name
+
+    # First try the clean twin (same pattern as watermark endpoint)
+    clean_path = os.path.join(output_dir, clean_name)
+    if os.path.isfile(clean_path):
+        source_path = clean_path
+    else:
+        # Fall back to original logic: first try background_source_filename,
+        # then the canonical clip name in the job directory.
+        source_name = os.path.basename(clip.get("background_source_filename") or current_name)
+        source_path = os.path.join(output_dir, source_name)
+        if not os.path.isfile(source_path):
+            # Some deliveries are archived remotely. Fall back to the canonical
+            # generated clip in the job directory; never fetch a client URL.
+            base = os.path.basename(json_files[0]).replace("_metadata.json", "")
+            canonical_name = f"{base}_clip_{req.clip_index + 1}.mp4"
+            source_path = os.path.join(output_dir, canonical_name)
     if not os.path.isfile(source_path):
         raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
     out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
@@ -4896,9 +5021,22 @@ async def edit_clip_watermark(
         raise HTTPException(status_code=404, detail="Clip not found")
     clip = clips[clip_index]
     current_name = os.path.basename((clip.get("video_url") or "").split("?", 1)[0])
-    source_path = os.path.join(output_dir, current_name)
-    if not os.path.isfile(source_path):
-        raise HTTPException(status_code=409, detail="Current clip is not available locally")
+    base_name = os.path.basename(current_name)
+    # Remove wm_ prefix if present to find clean twin
+    if base_name.startswith("wm_"):
+        clean_name = base_name[len("wm_"):]
+    else:
+        clean_name = base_name
+
+    # Check for clean twin first (like rerender/subtitle endpoints)
+    clean_path = os.path.join(output_dir, clean_name)
+    if os.path.isfile(clean_path):
+        source_path = clean_path
+    else:
+        # Fall back to original behavior
+        source_path = os.path.join(output_dir, current_name)
+        if not os.path.isfile(source_path):
+            raise HTTPException(status_code=409, detail="Current clip is not available locally")
     logo_path = os.path.join(output_dir, f"watermark_upload_{uuid.uuid4().hex}{suffix}")
     out_name = f"watermarked_{int(time.time())}_{uuid.uuid4().hex[:8]}_{clip_index + 1}.mp4"
     out_path = os.path.join(output_dir, out_name)
