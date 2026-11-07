@@ -43,6 +43,61 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# First-run wizard state
+_FIRST_RUN = True
+_USER_MODEL_SIZE = None
+_USER_GPU_MODE = None
+
+def is_first_run() -> bool:
+    global _FIRST_RUN
+    return _FIRST_RUN
+
+def mark_first_run_complete(model_size: str, gpu_mode: bool):
+    global _FIRST_RUN, _USER_MODEL_SIZE, _USER_GPU_MODE
+    _FIRST_RUN = False
+    _USER_MODEL_SIZE = model_size
+    _USER_GPU_MODE = gpu_mode
+    # Save settings
+    import json
+    from pathlib import Path
+    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    if not settings_path.parent.exists():
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+    if settings_path.exists():
+        existing = json.loads(settings_path.read_text(encoding="utf-8"))
+    else:
+        existing = {}
+    existing["whisper"] = existing.get("whisper", {})
+    existing["whisper"]["model_size"] = model_size
+    existing["whisper"]["gpu_mode"] = gpu_mode
+    settings_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+def get_user_model_size() -> str:
+    if _USER_MODEL_SIZE:
+        return _USER_MODEL_SIZE
+    # Check saved settings
+    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    if settings_path.exists():
+        try:
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            return saved.get("whisper", {}).get("model_size", "base")
+        except (OSError, ValueError):
+            pass
+    return "base"
+
+def get_user_gpu_mode() -> bool:
+    if _USER_GPU_MODE is not None:
+        return _USER_GPU_MODE
+    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    if settings_path.exists():
+        try:
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            return saved.get("whisper", {}).get("gpu_mode", True)
+        except (OSError, ValueError):
+            pass
+    return True
+
 REFERENCE_TEMPLATES_DIR = str(reference_templates.root())
 
 # Configuration
@@ -2820,6 +2875,9 @@ async def select_local_whisper_model(request: Request):
             selection = save_whisper_selection(model_path=payload["model_path"])
         else:
             selection = save_whisper_selection(model_size=payload.get("model_size"))
+        # Also update first-run state if not complete
+        if is_first_run():
+            mark_first_run_complete(selection.get("model_size", "base"), selection.get("source") == "local" and selection.get("model_path") is None)
         return {"ok": True, "selection": selection}
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2873,6 +2931,28 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        "firstRun": not is_first_run(),
+        "userModelSize": get_user_model_size(),
+        "userGpuMode": get_user_gpu_mode(),
+    }
+
+@app.post("/api/first-run/complete")
+async def first_run_complete(request: Request):
+    """Mark first-run as complete with user model preferences."""
+    global _FIRST_RUN, _USER_MODEL_SIZE, _USER_GPU_MODE
+    payload = await request.json()
+    model_size = payload.get("model_size", "base")
+    gpu_mode = payload.get("gpu_mode", True)
+    mark_first_run_complete(model_size, gpu_mode)
+    return {"ok": True}
+
+@app.get("/api/first-run/status")
+async def first_run_status():
+    """Return first-run wizard status for the dashboard."""
+    return {
+        "isFirstRun": is_first_run(),
+        "userModelSize": get_user_model_size(),
+        "userGpuMode": get_user_gpu_mode(),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
