@@ -35,24 +35,26 @@ Clippy is a Windows-first desktop product evolving from the OpenShorts codebase.
 
 ## 2. Repository snapshot and branches
 
-Repository metadata observed through GitHub:
+Repository metadata refreshed through GitHub on 2026-11-09:
 - Public repository: `helalxp/clippy`
-- Repository ID: `1430643349`
 - Default branch: `main`
-- Main source snapshot: `ff879df772fc0051ffb3eb75f1e5e02987c95789`
-- Reported repository size: 79,360 KB (GitHub repository size metadata; not a local checkout measurement).
-- Main recursive tree: 460 entries, 410 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
+- Current main HEAD: `2bc5f12f135a284e64ee19894a67e95e267083bc`
+- Application-code snapshot audited: `1710a1d4e98cd5579d27e6c97c959557034799e0`. A GitHub comparison confirms the 79 commits after that snapshot modify only `CLIPPY_REPO_AUDIT.md`; no application source, tests, configs, assets or workflows changed during this audit sequence.
+- Main recursive tree: 460 entries, 410 files, 50 directories; the tree response was not truncated.
+- Tracked blob size was previously estimated at ~86.38 MB; this is a Git tree estimate, not a working-copy or Docker image size.
 
 ### Branch inventory
 
-| Branch | HEAD at inspection | GitHub comparison against main | Interpretation |
-|---|---|---|---|
-| `main` | `ff879df772fc` | Default branch | Docker-oriented Clippy application, current dashboard and backend source. |
-| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 30 behind the application-code snapshot; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
-| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 29 behind the application-code snapshot; status `diverged` | Contains a unique reference-template feature commit. |
-| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 29 behind the application-code snapshot; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
+Branch comparisons below are against the application-code snapshot `1710a1d4e98c`, not the later audit-document-only main HEAD. Re-run comparisons before any cherry-pick or merge.
 
-Branch tips are moving references. Re-run comparisons before cherry-picks, merges, or release decisions.
+| Branch | Current HEAD | Comparison to application-code snapshot | Interpretation |
+|---|---|---|---|
+| `main` | `2bc5f12f135a` | Default branch; 79 audit-document-only commits after source snapshot | Docker-oriented Clippy application and current engineering audit. |
+| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 30 behind; status `behind` | Historical UI branch. No unique commits ahead of the application-code snapshot. |
+| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 29 behind; status `diverged` | Contains a unique local reference-template library feature. |
+| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 29 behind; status `diverged` | Native Windows/Tauri migration and Windows-specific adaptations. |
+
+The current Windows migration tree has 508 entries: 451 files and 57 directories. Branch tips are moving references; refresh before integrating.
 
 ### Main tree composition
 
