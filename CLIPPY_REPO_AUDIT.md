@@ -1192,3 +1192,20 @@ Evidence:
 Impact: for a metered URL job whose duration is known to the reservation probe but unreadable to OpenCV, the safety cap silently skips the cut and the pipeline can process the entire downloaded source rather than the reserved minutes. This can exceed the user's plan allowance and increase compute/bandwidth cost. The partial-plan MAX_SOURCE_MINUTES path does not have the same fail-open because it still attempts the FFmpeg -t cut when duration is unknown.
 
 Fix direction: use the same ffprobe-based duration probe as metering, or enforce the reserved -t cut regardless of whether OpenCV can report duration. Treat an unreadable duration as a reason to fail safely or perform the bounded cut, not as permission to process the entire source. Add tests where ffprobe returns a valid duration but cv2 reports zero, and assert the resulting media is capped.
+
+
+### F-34: Windows supervisor does not add the managed FFmpeg/FFprobe directory to PATH — high Stage 3B runtime blocker
+
+Evidence:
+- desktop/FIRST_RUN_SETUP_CONTRACT.md says the bootstrapper must install FFmpeg and FFprobe under the Clippy-managed runtime, without requiring a system-wide FFmpeg install.
+- desktop/src-tauri/src/supervisor.rs RuntimePaths contains root, python, node, output and logs, but no ffmpeg/ffprobe paths. start() sets PYTHONPATH, OUTPUT_DIR, RENDER_SERVICE_URL and PORT, but does not set FFMPEG_PATH, FFPROBE_PATH or prepend the managed FFmpeg bin directory to PATH.
+- main.py and many helpers invoke literal "ffmpeg" and "ffprobe" commands; only selected paths consult FFMPEG_PATH/FFPROBE_PATH.
+- The repository's bin/ffmpeg helper is a POSIX shell wrapper, not a Windows executable, and the Windows branch tree contains no ffmpeg.exe/ffprobe.exe binary.
+- The managed runtime manifest/downloader is not yet wired into bootstrap (F-05/F-06), so the expected bundled executable paths are not installed or validated today.
+
+Impact: after Stage 3B installs FFmpeg under %LOCALAPPDATA%\Clippy\runtime, the backend will still fail to locate it unless the user happens to have a system FFmpeg on PATH. This contradicts the first-run contract that no system FFmpeg install is required and will break clipping, probing, watermarking, subtitle burning and most video edits on a clean Windows machine.
+
+Fix direction: add explicit ffmpeg and ffprobe fields to RuntimePaths; validate both files; set FFMPEG_PATH and FFPROBE_PATH in the backend environment; prepend the managed FFmpeg bin directory to PATH for every Python and Node child process; and replace/skip the POSIX bin/ffmpeg wrapper on Windows. Add a clean-machine test with a deliberately minimal inherited PATH proving all media commands resolve only from the managed runtime. This is a Stage 3B release blocker, not a claim that the current Stage 3A scaffold already ships a working installer.
+
+### Windows migration positive control
+- The native branch wires platform_compat.resolve_cookies_write_path into main.py, so the main-branch hard-coded /app/cookies.txt issue is fixed for Windows in that branch. Windows uses the script directory; Docker uses /app when present. Keep this helper in the migration.
