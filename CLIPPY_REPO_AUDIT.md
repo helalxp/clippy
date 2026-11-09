@@ -8,6 +8,10 @@
 
 ---
 
+## Finding ID integrity note
+
+The audit grew through multiple append-only review passes. Repeated IDs were ambiguous, so later occurrences have been assigned unique IDs beginning at F-76. Their headings retain the former number in parentheses. Existing cross-references using an old number continue to refer to its first occurrence. Where two findings describe related symptoms, read both before proposing a fix; do not assume they are identical.
+
 ## 0. Mandatory instructions for agents
 
 1. Read this file before engineering work, then read branch-specific `AGENTS.md` / `CLAUDE.md` and platform contracts if present.
@@ -680,7 +684,7 @@ Fix direction: replace the direct StaticFiles mount with an authenticated/capabi
 
 ## Phase 3 checkpoint: video pipeline and media processing
 
-### F-02 production impact confirmed
+### F-76 production impact confirmed (formerly F-2)
 The production watermark implementation was inspected at main.py around lines 1462-1528. Its actual callable is apply_watermark(video_path, output_path=None); it does not accept backdrop_type or backdrop_color. recut.py passes both keyword arguments to the default implementation. Therefore the current source-path recut watermark branch is broken in production, not merely a test-fixture mismatch. The CI test failure is a valid signal of a real integration defect.
 
 ### Additional pipeline inspection
@@ -862,17 +866,17 @@ Phase 5 remains partial. No Remotion bundle build, renderer test, actual video r
 - desktop/build.ps1, desktop/build-tauri.ps1, render-service/run.ps1, render-service/start.ps1, render-service/start-renderer.bat.
 - render-service/src/paths.ts, render-service/src/server.ts, render-service/src/render-worker.ts.
 
-### F-05 refinement: runtime manifest path is hard-coded, and the manifest is not read at all — Stage 3B blocker
+### F-77 refinement: runtime manifest path is hard-coded, and the manifest is not read at all — Stage 3B blocker (formerly F-5)
 
 The native Tauri command check_runtime constructs manifest_path as D:\openshorts\runtime-manifest.json, which is not portable. More importantly, bootstrap.rs never reads config.manifest_path or parses RuntimeManifest. get_status only checks whether Python, Node and FFmpeg executables exist and can run their version commands. verify_installation only checks existence and is not used by get_status. There is no manifest version/hash validation in the current code path.
 
 This is consistent with desktop/README.md saying the runtime-manifest/download/bootstrap flow is not implemented in Stage 3A. Treat it as a required Stage 3B implementation item, not as a functioning checksum-verification system. The fixed path is still a concrete bug in the scaffold's exposed check_runtime command.
 
-### F-06 refinement: runtime-manifest.json contains placeholder values — Stage 3B release blocker
+### F-78 refinement: runtime-manifest.json contains placeholder values — Stage 3B release blocker (formerly F-6)
 
 The Python, Node and FFmpeg SHA-256 fields are obvious non-hex placeholder strings; the FFmpeg release URL also contains a placeholder build identifier, and manifest_sha256 is the literal manifest_hash_placeholder. Because bootstrap currently does not consume the file and the downloader is not wired, these values are not currently being used to install code. They make the manifest unusable for a real installer and must be replaced by verified immutable artifact URLs and checksums before any Stage 3B release.
 
-### F-07 refinement: unsafe custom ZIP extractor is currently dormant, not on the active install path
+### F-79 refinement: unsafe custom ZIP extractor is currently dormant, not on the active install path (formerly F-7)
 
 downloader.rs::Downloader::extract joins dest with entry.name() and writes files without canonical containment validation. This is a ZIP-slip hazard if that method is ever called with an untrusted archive. However, no call site for Downloader::extract or Downloader::new was found in the inspected native branch. bootstrap.rs::install_from_archive currently calls zip::ZipArchive::extract instead. Therefore F-07 is a latent unsafe helper, not a confirmed reachable exploit in the current Stage 3A flow. Remove the duplicate helper or harden it before wiring the downloader into bootstrap. The active zip crate extraction path still needs an explicit malicious-archive test before being relied upon.
 
@@ -1474,7 +1478,7 @@ Impact: Stripe retries or concurrent deliveries can trigger duplicate invoice-pa
 
 Fix direction: claim the event ID before dispatch using an atomic INSERT ... ON CONFLICT DO NOTHING RETURNING, with explicit processing/completed/failed status and safe retry semantics. For DB-only effects, commit state and event completion in one transaction where possible. For external effects, use an outbox or their own idempotency keys. Add a database-backed concurrent delivery test asserting one dispatch and one external notification.
 
-### F-38: OAuth authorization-code redemption can mint multiple API keys under concurrent requests — high security/idempotency gap
+### F-80: OAuth authorization-code redemption can mint multiple API keys under concurrent requests — high security/idempotency gap (formerly F-38)
 
 Evidence:
 - cloud/mcp_oauth.py::token selects OAuthCode by code_hash and checks used_at is None, then sets used_at and inserts a new ApiKey in the same transaction.
@@ -1504,7 +1508,7 @@ Fix direction: do not delete the Project row unless the full prefix listing and 
 - Remaining cloud audit work: inspect the rest of every cloud module, migrations/schema constraints, OAuth/API-key revocation and expiry semantics, lifecycle/email retry behavior, Upload-Post profile ownership and secret storage, storage key construction and presigned URL policy, and test concurrency with a real PostgreSQL service. Phase 6 remains partial.
 
 
-### F-40: Lifecycle and checkout-recovery email claims are permanent before delivery — medium delivery-loss defect
+### F-81: Lifecycle and checkout-recovery email claims are permanent before delivery — medium delivery-loss defect (formerly F-40)
 
 Evidence:
 - cloud/lifecycle.py::claim inserts LifecycleEmail before attempting SMTP delivery; the unique (user_id, kind) constraint permanently prevents another attempt.
@@ -1517,7 +1521,7 @@ Impact: a transient SMTP outage, timeout or provider rejection on the first atte
 
 Fix direction: model delivery as pending/sending/sent/failed with attempt count and next_attempt_at, or use a transactional outbox. Claim with a short lease, send outside the DB transaction, then mark sent; failures should release/expire the lease and retry with bounded backoff. Preserve a unique logical (user_id, kind) key so concurrent instances still cannot send duplicates. Add tests for SMTP false/exception, process crash after claim, and successful retry.
 
-### F-41: Magic-link rate limits are check-then-insert and can be exceeded by concurrent requests — medium abuse-control race
+### F-82: Magic-link rate limits are check-then-insert and can be exceeded by concurrent requests — medium abuse-control race (formerly F-41)
 
 Evidence:
 - cloud/auth.py magic-link request handler counts recent rows for the email and request IP, compares them to MAGIC_RATE_LIMIT / MAGIC_RATE_LIMIT_IP, and then inserts the new MagicLinkToken in the same transaction.
@@ -1560,7 +1564,7 @@ Impact: an unauthenticated caller can enqueue many concurrent high-resolution/lo
 Fix direction: authenticate renderer requests with a backend-only service credential and authorize job ownership; put renders behind a bounded queue and semaphore; validate maximum durationInFrames, width, height, fps and total pixel-frames; enforce execution timeout/cancellation; and expire terminal job records after a defined TTL. Add stress tests proving a burst is queued/rejected within a fixed concurrency budget and that old records are pruned.
 
 
-### F-42: Public renderer accepts arbitrary video URLs and makes Chromium fetch them — high SSRF / internal-network reachability risk
+### F-83: Public renderer accepts arbitrary video URLs and makes Chromium fetch them — high SSRF / internal-network reachability risk (formerly F-42)
 
 Evidence:
 - render-service/src/server.ts accepts POST /render without authentication and validates props.videoUrl only as a string; it does not require a local /output path, HTTPS host allowlist or signed media capability.
@@ -1599,7 +1603,7 @@ Impact: PAID_PROXY_DAILY_MB does not stop new processing jobs from using the pai
 Fix direction: call budget_exceeded() in /api/process immediately before constructing the child environment and remove PROXY_URL when the cap is reached. Make the cap an atomic reservation rather than a read-only sum if concurrent downloads must stay within a hard ceiling; reserve expected bytes before dispatch and settle actual bytes afterward. Invalidate/update the cache when record_download persists new usage. Add tests proving a fresh job and a resumed job both lose PROXY_URL after the cap, including concurrent submissions that cross the threshold.
 
 
-### F-43: Thumbnail image uploads have no byte cap and are copied wholly into RAM — high resource-exhaustion risk
+### F-84: Thumbnail image uploads have no byte cap and are copied wholly into RAM — high resource-exhaustion risk (formerly F-43)
 
 Evidence:
 - app.py::thumbnail_generate accepts optional face/background UploadFile values.
@@ -1611,7 +1615,7 @@ Impact: a very large face/background image or several concurrent requests can ex
 
 Fix direction: enforce a small streaming byte cap per image, validate actual image format by decoding, cap width/height/total pixels, reject unsupported formats, and avoid whole-file reads. Add tests for oversized streams, spoofed MIME types, malformed images and decompression-bomb dimensions.
 
-### F-44: Thumbnail publish buffers the entire source video and thumbnail in memory before upload — high availability risk for large videos
+### F-85: Thumbnail publish buffers the entire source video and thumbnail in memory before upload — high availability risk for large videos (formerly F-44)
 
 Evidence:
 - app.py::thumbnail_publish::do_upload opens the source video and thumbnail, then builds multipart file values with vf.read() and tf.read().
@@ -1622,7 +1626,7 @@ Impact: publishing a large source video can allocate gigabytes of RAM per reques
 
 Fix direction: pass open file objects to httpx's multipart encoder (or use a streaming multipart implementation), retain bounded chunking, and ensure files remain open until the request completes. Add a memory-bounded integration test with a large sparse fixture and a mocked upload server.
 
-### F-45: Failed thumbnail quota reservation leaves the already-uploaded source file behind — medium disk leak
+### F-86: Failed thumbnail quota reservation leaves the already-uploaded source file behind — medium disk leak (formerly F-45)
 
 Evidence:
 - app.py::thumbnail_upload saves the complete uploaded source into UPLOAD_DIR before calling reserve_managed_action.
@@ -1640,7 +1644,7 @@ Fix direction: reserve before accepting/writing the upload when possible, or wra
 - Remaining risks: thumbnail session state and publish jobs are in-memory only; uploaded sources and generated thumbnails need durable owner metadata for restart-safe erasure/retention (F-22). The frontend's publish polling has no timeout/abort control. The static /thumbnails mount remains publicly accessible to anyone who has the URL. Phase 3/6 cross-links remain in progress.
 
 
-### F-46: SaaSShorts retry can adopt another user's on-disk job after a backend restart — critical cross-tenant ownership failure
+### F-87: SaaSShorts retry can adopt another user's on-disk job after a backend restart — critical cross-tenant ownership failure (formerly F-46)
 
 Evidence:
 - app.py::saasshorts_generate checks an in-memory saas_jobs record and calls _assert_job_owner when one exists.
@@ -1653,7 +1657,7 @@ Impact: after a restart, an entitled user who knows another user's SaaSShorts jo
 
 Fix direction: persist SaaSShorts job ownership durably at job creation (database row or signed .owner sidecar) and require it on disk recovery/retry. Never infer ownership from possession of a job ID or claim an orphan directory for the current caller. If a directory has no verifiable owner record, refuse retry and quarantine it for admin cleanup. Add a restart simulation test: create user A's job, clear saas_jobs, attempt retry as user B, and assert 404 with no file changes; then assert user A can retry.
 
-### F-47: SaaSShorts actor-options accepts unbounded parallel generation count — medium resource/cost abuse
+### F-88: SaaSShorts actor-options accepts unbounded parallel generation count — medium resource/cost abuse (formerly F-47)
 
 Evidence:
 - app.py::SaaSActorRequest defines num_options as a plain int with default 3 and no ge/le bounds.
@@ -1687,7 +1691,7 @@ Impact: a user can exceed the intended Starter/Creator/Pro simultaneous-job cap 
 Fix direction: create an atomic database-backed active-job lease/slot per user and plan, claimed before the long duration probe and released on completion/failure. Enforce the limit in the same transaction as admission, with a unique/conditional claim so concurrent requests cannot both take the final slot. Add an async test that launches more simultaneous requests than the plan limit and asserts exactly the configured number are admitted, including when two API instances share the database.
 
 
-### F-48: Free-tool global daily caps are process-local and reset on restart/replica changes — medium cost-control weakness
+### F-89: Free-tool global daily caps are process-local and reset on restart/replica changes — medium cost-control weakness (formerly F-48)
 
 Evidence:
 - free_tools.py::RateLimiter stores both per-IP windows and the global UTC-day counter in Python dictionaries protected by a threading.Lock.
@@ -1699,7 +1703,7 @@ Impact: the configured global daily ceilings (1,500 transcript lookups and 2,000
 
 Fix direction: move cost-bearing global counters to a shared atomic store with UTC-day keys and an explicit fail-open/fail-closed policy. If the limits are intentionally best-effort abuse controls, rename/document them as per-process limits and add monitoring for aggregate spend. Test multiple workers and reset behavior.
 
-### F-49: SaaSShorts fetches caller-selected website and actor-image responses without byte limits — medium memory/disk exhaustion risk
+### F-90: SaaSShorts fetches caller-selected website and actor-image responses without byte limits — medium memory/disk exhaustion risk (formerly F-49)
 
 Evidence:
 - saasshorts.py::scrape_website uses httpx.Client.get and then response.text for the main website and up to three subpages. It truncates extracted text only after the entire response body has been downloaded and decoded.
@@ -1733,7 +1737,7 @@ Impact: a slow but successful job that runs longer than three hours can receive 
 Fix direction: replace a fixed-age refund with a liveness-aware lease. Extend/heartbeat the reservation while the job manifest is active; only release when the job is terminal, the manifest heartbeat is stale beyond a conservative grace period, and no other instance owns the lease. Serialize commit/release on the UsageLedger row (and keep a consistent lock order with User) with an atomic status transition. Add tests for an active job older than three hours, a stale abandoned job, and concurrent commit/refund.
 
 
-### F-50: Agent upload PUT endpoint does not verify the upload slot owner — high cross-tenant upload integrity gap
+### F-91: Agent upload PUT endpoint does not verify the upload slot owner — high cross-tenant upload integrity gap (formerly F-50)
 
 Evidence:
 - POST /api/uploads stamps each pending_uploads record with the authenticated managed user_id.
@@ -1777,7 +1781,7 @@ Impact: a user can potentially craft a source URL or media metadata that is refl
 Fix direction: HTML-escape body before placing it inside <pre>, and separately sanitize subject control characters. Keep Telegram plain text. Add a test using an error containing <img>, <a href> and ampersands and assert the delivered email contains escaped text rather than active markup.
 
 
-### F-52: Disk cleanup can delete active SaaSShorts job directories — high data-loss defect
+### F-92: Disk cleanup can delete active SaaSShorts job directories — high data-loss defect (formerly F-52)
 
 Evidence:
 - SaaSShorts stores job records in saas_jobs keyed by the bare UUID, but stores files under OUTPUT_DIR/saas_<uuid>.
@@ -1789,7 +1793,7 @@ Impact: if a SaaSShorts directory is older than JOB_RETENTION_SECONDS (default 1
 
 Fix direction: give SaaSShorts jobs a durable active marker/manifest and teach both cleanup paths to resolve the directory name to the matching saas_jobs record. Better: centralize active-directory ownership in a registry shared by every pipeline. Add tests that advance the clock past retention and exceed the size cap while a SaaSShorts job is processing, asserting its directory survives; then assert completed/failed jobs become eligible after the retention window.
 
-### F-53: Generic upload cleanup does not recognize active Thumbnail Studio source files — medium data-loss defect
+### F-93: Generic upload cleanup does not recognize active Thumbnail Studio source files — medium data-loss defect (formerly F-53)
 
 Evidence:
 - Thumbnail Studio saves source videos under UPLOAD_DIR using names like thumb_<session_uuid>_<filename> and stores the session in thumbnail_sessions.
@@ -1821,7 +1825,7 @@ Impact: if an operator sets R2_PUBLIC_BASE to a public R2 custom domain, every h
 Fix direction: either remove the public-base shortcut for user-owned media and keep signed URLs, or clearly separate public gallery assets from private user-library objects. If the public domain is retained, require an explicit opt-in setting with a warning, document the permanent bearer-link behavior in operator and user privacy documentation, and add tests proving which URL mode is returned for user clips.
 
 
-### F-54: Cloud schema bootstrap silently continues when additive database changes fail — high deployment consistency risk
+### F-94: Cloud schema bootstrap silently continues when additive database changes fail — high deployment consistency risk (formerly F-54)
 
 Evidence:
 - cloud/database.py::init_engine uses SQLAlchemy create_all, which creates missing tables but never alters existing tables.
@@ -1840,7 +1844,7 @@ Fix direction: make required DDL failures fatal during startup, or move schema c
 - Remaining concerns: R2_PUBLIC_BASE deliberately makes all objects under the configured bucket prefix publicly retrievable, so privacy depends on bucket/domain isolation and object-key secrecy; no signed-token Worker is implemented. R2 object delete/list operations do not inspect per-object delete errors from delete_objects. Schema migrations remain additive/manual and not versioned. Phase 6 remains partial.
 
 
-### F-55: R2 bulk-delete responses are not checked, so account erasure can succeed while objects remain — critical privacy/erasure failure
+### F-95: R2 bulk-delete responses are not checked, so account erasure can succeed while objects remain — critical privacy/erasure failure (formerly F-55)
 
 Evidence:
 - cloud/account.py::delete_account intentionally deletes the user's entire R2 prefix before deleting database rows, because the database is the only index of the user's objects.
@@ -1868,7 +1872,7 @@ Impact: a user can receive a successful account-deletion response and confirmati
 Fix direction: make _rm_under return a verified result (removed, already absent, or failed) and propagate failures to the account-erasure coordinator. Persist a local-erasure tombstone/retry task before deleting the user row, and keep retrying until all user-owned paths are confirmed absent. If immediate erasure cannot complete, report the partial state accurately rather than returning deleted=true. Add tests that simulate PermissionError/locked files and verify the deletion record retains a retryable pending state until cleanup succeeds.
 
 
-### F-56: Free retention can leave a Project row pointing at clips already deleted by per-video expiry — medium broken-project/data consistency defect
+### F-96: Free retention can leave a Project row pointing at clips already deleted by per-video expiry — medium broken-project/data consistency defect (formerly F-56)
 
 Evidence:
 - cloud/videos.py::purge_free_expired selects UserVideo rows by UserVideo.created_at < cutoff and Project rows independently by Project.updated_at < cutoff.
@@ -1910,7 +1914,7 @@ Impact: after a transient Upload-Post outage or provider error, the Clippy accou
 Fix direction: persist a third-party-erasure task before deleting the local profile mapping, including provider, deterministic profile username, attempt state and last error. Retry until the provider confirms deletion or a documented terminal/manual state is reached. Do not tell the user the social connections were deleted until confirmed; expose a clear partial-erasure state if the provider is unavailable. Add tests for 500, timeout and 404 provider responses.
 
 
-### F-57: Windows first-run runtime bootstrap is not wired into the Tauri application — critical release blocker
+### F-97: Windows first-run runtime bootstrap is not wired into the Tauri application — critical release blocker (formerly F-57)
 
 Evidence:
 - desktop/src-tauri/src/lib.rs registers only start_services, stop_services, service_status and check_runtime as Tauri commands.
@@ -1983,7 +1987,7 @@ Impact: a flaky network during a replacement upload can destroy the previously v
 
 Fix direction: set complete=False and bytes=0 before accepting a replacement, stream into a unique temporary file, validate size and ffprobe duration, then atomically replace slot.path and set complete=True only after validation. On every exception/cancellation, delete the temporary file and leave the previous completed file intact. Add a test that completes an initial upload, aborts the second PUT mid-stream, and verifies the first upload remains usable.
 
-### F-62: Main process upload is moved to its final path before quota reservation, but rejected reservations do not clean it up — medium disk leak and lost-upload defect
+### F-98: Main process upload is moved to its final path before quota reservation, but rejected reservations do not clean it up — medium disk leak and lost-upload defect (formerly F-62)
 
 Evidence:
 - app.py::process_video moves a completed pending upload from pending_<id>_* to <job_id>_<filename> and removes its pending_uploads slot before calling reserve_process_minutes.
@@ -2006,7 +2010,7 @@ Impact: while a source is being probed, the FastAPI event loop is blocked. Healt
 
 Fix direction: run _media_duration_seconds through asyncio.to_thread/run_in_executor (or convert it to an async subprocess helper) everywhere it is called from an async route. Add a responsiveness test with a delayed fake ffprobe and assert /health/ready plus an unrelated request remain responsive.
 
-### F-64: Resume manifest is deleted before billing, R2 archive and webhook side effects finish — high crash-consistency gap
+### F-99: Resume manifest is deleted before billing, R2 archive and webhook side effects finish — high crash-consistency gap (formerly F-64)
 
 Evidence:
 - run_job_wrapper clears .resume.json immediately after the pipeline reaches a terminal state.
@@ -2018,7 +2022,7 @@ Impact: if the backend/container crashes after .resume.json is removed but befor
 
 Fix direction: separate pipeline completion from post-processing completion. Persist a terminal manifest/outbox row until reservation settlement, R2 archive and required callbacks are durably acknowledged. Make each action idempotent and retryable after restart; only then clear the manifest. Add crash-injection tests at every boundary between render completion, reservation settlement, archive, webhook and notification.
 
-### F-65: Managed R2 archiving is best-effort with no durable retry, despite being the only durable copy — high data-retention/reliability defect
+### F-100: Managed R2 archiving is best-effort with no durable retry, despite being the only durable copy — high data-retention/reliability defect (formerly F-65)
 
 Evidence:
 - app.py::_archive_managed_job catches archive_job exceptions, logs them and returns; run_job_wrapper continues to webhooks and notifications as if the job is complete.
@@ -2046,7 +2050,7 @@ Impact: two builds from the same Git commit can contain different renderer, extr
 Fix direction: copy and enforce render-service/package-lock.json with npm ci; use npm ci in the dashboard stages; commit Cargo.lock for the Tauri binary; pin yt-dlp and bgutil to tested versions/commits (with a deliberate update cadence for extractor breakage); pin Deno and base-image digests; and add dependency/SBOM scanning to CI. Keep the update process explicit so the YouTube extractor can still be refreshed quickly when upstream changes require it.
 
 
-### F-66: OAuth consent screen trusts an arbitrary client_name and hides the redirect domain — high consent-phishing risk
+### F-101: OAuth consent screen trusts an arbitrary client_name and hides the redirect domain — high consent-phishing risk (formerly F-66)
 
 Evidence:
 - cloud/mcp_oauth.py exposes unauthenticated dynamic client registration and accepts any client_name up to 80 characters plus any HTTPS redirect URI.
@@ -2073,7 +2077,7 @@ Impact: a third-party MCP client that receives the OAuth access token can use it
 
 Fix direction: introduce enforceable API-key scopes and issue OAuth keys with a narrowly defined MCP scope. Enforce route-level permissions in auth dependencies, not only in the MCP tool list. At minimum, deny billing, subscription/cancellation, account, key-management, social-connection and Autopilot-settings routes to MCP-scoped keys unless the user explicitly grants those scopes. Make the consent screen list the exact permissions and add integration tests that use an OAuth-issued key against every excluded endpoint and expect 403.
 
-### F-68: Public OAuth dynamic client registration has no application rate limit or cleanup — medium database-abuse risk
+### F-102: Public OAuth dynamic client registration has no application rate limit or cleanup — medium database-abuse risk (formerly F-68)
 
 Evidence:
 - POST /oauth/register is intentionally unauthenticated for RFC 7591 dynamic registration.
@@ -2086,7 +2090,7 @@ Impact: an anonymous caller can create an unbounded number of OAuthClient rows a
 Fix direction: cap request-body and individual URI/name lengths, apply a conservative per-IP registration rate limit at the trusted edge or in a shared limiter, and expire/delete clients that have never completed authorization or have been inactive for a defined period. Add burst tests and metrics for registrations per IP/day.
 
 
-### F-69: Google sign-in links an existing account by email without checking email_verified or Google's email authority — high account-takeover risk, exploitability depends on provider email
+### F-103: Google sign-in links an existing account by email without checking email_verified or Google's email authority — high account-takeover risk, exploitability depends on provider email (formerly F-69)
 
 Evidence:
 - cloud/oauth.py::google_callback reads userinfo.email and userinfo.sub, but never checks userinfo.email_verified or hd.
@@ -2099,7 +2103,7 @@ Impact: a Google identity with an unverified or non-authoritative third-party em
 Fix direction: always require email_verified=true. For @gmail.com, Google's authority is established by the Gmail domain; for Workspace, require verified email plus a validated hd claim. For other domains, do not auto-link by email: require the user to complete the existing magic-link challenge to that address or explicitly link Google from an already-authenticated session. Add tests for unverified email, verified third-party email without hd, verified Gmail, verified Workspace and an existing magic-link account collision.
 
 
-### F-70: Native Tauri Content Security Policy blocks React inline style attributes used by core editors — medium UI functionality defect, needs WebView confirmation
+### F-104: Native Tauri Content Security Policy blocks React inline style attributes used by core editors — medium UI functionality defect, needs WebView confirmation (formerly F-70)
 
 Evidence:
 - desktop/src-tauri/tauri.conf.json sets `default-src 'self'` but does not declare a `style-src` or `style-src-attr` exception. Under CSP fallback rules, style attributes are disallowed unless explicitly permitted.
@@ -2140,7 +2144,7 @@ Impact: one hung GPU/ASR process can occupy a host slot forever. If all configur
 Fix direction: use a bounded, cancellation-aware wait for slot acquisition and surface a retryable capacity error when the deadline expires. Add a lease/heartbeat or supervisor watchdog for the holder so a genuinely wedged inference process can be terminated and the lock released. Add tests for cancellation while waiting, timeout with all slots occupied, and recovery after killing a holder process.
 
 
-### F-71: Uvicorn trusts forwarded headers from every remote IP despite documentation warning against it — high IP-spoofing/rate-limit bypass risk
+### F-105: Uvicorn trusts forwarded headers from every remote IP despite documentation warning against it — high IP-spoofing/rate-limit bypass risk (formerly F-71)
 
 Evidence:
 - Dockerfile's production CMD explicitly starts Uvicorn with `--proxy-headers --forwarded-allow-ips '*'`.
@@ -2153,7 +2157,7 @@ Impact: any client able to reach the published backend port can send a forged X-
 
 Fix direction: replace `*` with a configurable, narrow trusted-proxy allowlist (e.g. exact Traefik container IP or private Docker subnet), and ensure the proxy overwrites rather than appends client-supplied forwarded headers. Do not publish the backend port publicly in managed production if only Traefik should reach it. Add an integration test with a trusted and untrusted source IP proving an untrusted caller cannot influence request.client.host or the stored attestation.
 
-### F-72: Managed cloud mode starts without R2 configuration and silently skips durable archiving — critical data-loss release risk
+### F-106: Managed cloud mode starts without R2 configuration and silently skips durable archiving — critical data-loss release risk (formerly F-72)
 
 Evidence:
 - cloud/config.py::validate_required checks only DATABASE_URL and JWT_SECRET; it does not require R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID or R2_SECRET_ACCESS_KEY.
@@ -2165,7 +2169,7 @@ Impact: a managed deployment can start, accept paying users and process videos w
 
 Fix direction: make R2 configuration mandatory when BILLING_ENABLED=true unless an explicitly named and documented local-only managed mode is enabled. At startup, perform a non-destructive bucket connectivity/permission check (list/head a configured health key) and fail readiness if unavailable. Do not settle a managed job as delivered until archive is confirmed. Add a cloud startup test with missing, partial and invalid R2 credentials.
 
-### F-73: Documented global per-IP rate-limit settings are not implemented — medium abuse-control/documentation mismatch
+### F-107: Documented global per-IP rate-limit settings are not implemented — medium abuse-control/documentation mismatch (formerly F-73)
 
 Evidence:
 - .env.example documents RATE_LIMIT_ENABLED, RATE_LIMIT_AUTH, RATE_LIMIT_PROCESS and RATE_LIMIT_MCP, and says they are implemented by rate_limit.py.
@@ -2204,7 +2208,7 @@ Impact: two builds from the same Git commit can contain different yt-dlp, bgutil
 Fix direction: pin bgutil to a reviewed commit, pin yt-dlp to a tested release or controlled update channel, commit lockfiles for render-service and Remotion, use npm ci in production builds, and record image digests/build provenance. Keep a scheduled dependency-update PR if yt-dlp must move quickly. Add CI image builds and a small YouTube-extractor/Remotion smoke test before promotion.
 
 
-### F-74: Failed managed R2 archiving is logged and abandoned; local clips are later swept — high data-durability gap
+### F-108: Failed managed R2 archiving is logged and abandoned; local clips are later swept — high data-durability gap (formerly F-74)
 
 Evidence:
 - app.py run_job marks a successful processing job completed, then the queue wrapper commits the minute reservation and calls _archive_managed_job.
