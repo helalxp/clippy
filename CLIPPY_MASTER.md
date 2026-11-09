@@ -531,7 +531,7 @@ These notes are useful leads, not assertions about today's working tree.
 - The reference-template feature is one commit ahead of main on `codex/reference-templates` and is also included in the native migration branch comparison.
 - The `codex/new-ui` branch is behind main and has no unique commits ahead according to the comparison at inspection time.
 - Main's README is still the upstream-style OpenShorts product/installation README and describes Docker as the self-host setup. It is not yet a complete Clippy native desktop user manual.
-- Main's `CLAUDE.md` contains extensive upstream architecture notes and hard rules. The native branch's `AGENTS.md` contains Clippy's Windows-first mission, migration stages, and agent workflow. This master file consolidates the durable project-level guidance from both, but subsystem docs may still contain details not repeated here.
+- Main's former `CLAUDE.md` and the native branch's former `AGENTS.md` contained overlapping agent guidance. Their durable project-level instructions have been consolidated here; those files are now short pointers to this master guide. Subsystem/product documents remain separate where they serve a distinct purpose.
 
 ### Required next audits
 1. Generate an exact tracked-file tree with `git ls-files` on each active branch.
