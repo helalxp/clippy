@@ -1683,3 +1683,34 @@ Evidence:
 Impact: a user can exceed the intended Starter/Creator/Pro simultaneous-job cap by submitting requests concurrently. This can multiply GPU/CPU work beyond the plan's admission policy and contribute to resource contention even though minute balance accounting remains atomic.
 
 Fix direction: create an atomic database-backed active-job lease/slot per user and plan, claimed before the long duration probe and released on completion/failure. Enforce the limit in the same transaction as admission, with a unique/conditional claim so concurrent requests cannot both take the final slot. Add an async test that launches more simultaneous requests than the plan limit and asserts exactly the configured number are admitted, including when two API instances share the database.
+
+
+### F-48: Free-tool global daily caps are process-local and reset on restart/replica changes — medium cost-control weakness
+
+Evidence:
+- free_tools.py::RateLimiter stores both per-IP windows and the global UTC-day counter in Python dictionaries protected by a threading.Lock.
+- There is no shared Redis/PostgreSQL counter, persistent row, or distributed rate-limit backend.
+- The same limiter instance is imported by one process only. A container restart resets all counters; multiple API replicas each receive their own full global_day allowance.
+- tests/test_free_tools.py verifies one in-memory limiter instance only and does not test restart or multiple replicas.
+
+Impact: the configured global daily ceilings (1,500 transcript lookups and 2,000 metadata generations per process) are not deployment-wide quotas. Restarting or scaling the service multiplies the effective allowance and can multiply use of the server's Gemini key and shared YouTube/proxy resources. Per-IP limits are likewise per process.
+
+Fix direction: move cost-bearing global counters to a shared atomic store with UTC-day keys and an explicit fail-open/fail-closed policy. If the limits are intentionally best-effort abuse controls, rename/document them as per-process limits and add monitoring for aggregate spend. Test multiple workers and reset behavior.
+
+### F-49: SaaSShorts fetches caller-selected website and actor-image responses without byte limits — medium memory/disk exhaustion risk
+
+Evidence:
+- saasshorts.py::scrape_website uses httpx.Client.get and then response.text for the main website and up to three subpages. It truncates extracted text only after the entire response body has been downloaded and decoded.
+- app.py::saasshorts_generate accepts selected_actor_url from the request. For HTTP(S) URLs it calls assert_public_url, then uses httpx.Client.get and writes resp.content to disk with no Content-Length check, streaming cap or image-dimension validation.
+- Several fal.ai output downloads in saasshorts.py similarly use resp.content and write the entire response at once.
+- assert_public_url validates the host class but does not bound response size; the SSRF DNS/redirect race is tracked separately in F-10.
+
+Impact: an entitled user can submit a public URL that returns a very large HTML body or actor image and force the API worker to buffer the full response in memory. Concurrent requests can exhaust memory or fill the output volume. A malicious or compromised fal.ai response can have the same effect.
+
+Fix direction: stream responses in bounded chunks, enforce Content-Length and cumulative byte caps, validate MIME and actual decoded image dimensions, and stop after the expected asset size. Add tests with chunked responses that omit Content-Length and exceed the cap.
+
+### Free tools and SaaSShorts resource-control checkpoint
+- Read the full free_tools rate-limiter, YouTube transcript route, metadata generator and relevant tests.
+- Positive controls: transcript URLs are reduced to a strict 11-character YouTube video ID before yt-dlp; playlist/other-host input is rejected; caption tracks exclude machine translations; transcript fetch concurrency and timeouts are bounded; metadata brief/keyword/audience text is truncated and output is normalized.
+- Remaining concerns: the limiter/cache are process-local; timed-out asyncio.to_thread calls continue running in their worker threads until the underlying blocking call returns; the metadata generator has no explicit semaphore; rate-limit and cache behavior across multiple replicas is untested.
+- SaaSShorts route validation is mostly in-memory; no dedicated test module exists. The retry ownership takeover (F-46) is the priority security regression.
