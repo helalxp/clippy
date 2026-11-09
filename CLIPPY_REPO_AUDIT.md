@@ -366,15 +366,15 @@ This ledger prevents agents from mistaking a structural survey for a complete li
 | Main README and agent docs | Clippy README, audit, CLAUDE | Targeted read |
 | Historical status/quality docs | Read before removal; durable facts migrated into this audit |
 | Architecture docs | agent access, autopilot, billing/jobs and other docs | Targeted partial read |
-| Main API/backend | app.py first 90 lines; route/module structure not exhaustively traced | Partial |
-| Core processing | main.py first 90 lines and module inventory | Partial |
-| Cloud auth/metering | cloud/auth.py and cloud/metering.py first 90 lines | Partial |
-| Security/media | security_utils.py and media_auth.py first 90 lines | Partial |
-| Frontend API/result card | api.js and ResultCard.jsx first 90 lines | Partial |
-| Renderer | server.ts and render-worker.ts first 90 lines | Partial |
-| Windows desktop code | Branch tree and agent/master docs; Rust source not yet exhaustively reviewed | Inventory + docs only |
-| Tests | Test file inventory; test source/results not exhaustively reviewed | Inventory only |
-| CI/workflows | Workflow files inventoried, not executed | Not verified |
+| Main API/backend | app.py:1-500 targeted; route families and call paths not exhaustively traced | Partial |
+| Core processing | main.py:80-230 plus selected download/processing paths; full file not read | Partial |
+| Cloud auth/metering | auth.py:1-240, metering.py:1-260, account.py:1-260; other cloud modules not read | Partial |
+| Security/media | full security_utils.py and media_auth.py; callers/redirect behavior need deeper review | Partial |
+| Frontend API/result card | api.js and AuthContext.jsx targeted; ResultCard.jsx and other components not fully read | Partial |
+| Renderer | full main server.ts and render-worker.ts read; integration/auth tests not run | Targeted; integration remains |
+| Windows desktop code | supervisor.rs, bootstrap.rs, downloader.rs, lib.rs, platform_compat.py, local model manager and manifest targeted | Partial; no Windows build/install test |
+| Tests | tree inventory, two failing test sources, latest completed CI log | Partial; remaining test files not read individually |
+| CI/workflows | CI definition, latest completed run for ec3092e and failure logs; later documentation runs pending | Verified for inspected run; latest pending |
 | Runtime/build/installer/GPU | Not executable through GitHub source inspection | Not tested |
 
 **Definition of complete audit:** every tracked text/source/config/test file on each branch is read or deliberately excluded with reason; high-risk flows are traced end-to-end; findings include path + line references + severity + evidence; tests/builds are executed in declared environments; binary/media assets are inventoried and licensing/use checked; branch-specific conclusions are kept separate. This file is the shared starting point and audit ledger, not a false declaration that those steps are already complete.
