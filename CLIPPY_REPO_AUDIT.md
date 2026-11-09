@@ -799,3 +799,49 @@ Fix direction: read a bounded request stream (limit + 1) or use a server-level b
 - Auth, API key and metering controls are promising but not a complete cloud audit. Billing, OAuth, MCP OAuth, social profile, autopilot, cancellation, lifecycle/email, proxy ledger, onboarding, alerts and digest modules remain to be reviewed.
 
 Phase 4 remains partial; no PostgreSQL, Stripe, R2, OAuth, concurrency, or account-erasure integration test was executed during this remote source inspection.
+
+
+## Phase 5 checkpoint: Remotion renderer and render API
+
+### Files inspected
+- render-service/src/server.ts (full file)
+- render-service/src/render-worker.ts (full file)
+- render-service/src/composition-metadata.test.ts (full file)
+- remotion/src/compositions/ShortVideo.tsx (full file)
+- app.py /api/render and /api/render/{render_id} proxy routes
+- renderer package scripts and TypeScript configuration were inspected in Phase 1.
+
+### F-16: Render job ID is used as an unchecked filesystem path — high, confirmed path traversal
+
+Evidence:
+- render-service/src/server.ts accepts jobId as any non-empty string (Zod min(1)); it does not enforce a UUID or safe path segment.
+- render-service/src/render-worker.ts computes jobOutputDir with path.join(outputDir, jobId), then creates it recursively and writes a generated MP4 inside it.
+- app.py /api/render forwards the caller's JSON body to the renderer without validating jobId or checking that the caller owns the referenced job.
+
+Impact: a caller who can reach the renderer can supply traversal components in jobId so the worker creates directories and writes generated media outside OUTPUT_DIR. The generated filename is timestamped and not an arbitrary overwrite primitive, but the directory escape can write files outside the intended media root and consume disk in other writable locations. The direct renderer route is unauthenticated (F-03); the backend proxy also lacks a job ownership/path check.
+
+Fix direction: treat jobId as a strict UUID (or server-issued opaque identifier) at both API boundaries; derive output paths only from a validated server-side job record; resolve the final path and assert it remains beneath OUTPUT_DIR before mkdir/write. Add traversal, absolute-path, Windows drive-prefix and separator tests.
+
+### F-17: Render proxy accepts untrusted video URL and unbounded render parameters — high, confirmed missing validation
+
+Evidence:
+- app.py /api/render checks managed entitlement but forwards the caller's entire JSON body without validating job ownership or the video URL.
+- render-service/src/server.ts validates only that videoUrl is a string and that durationInFrames, fps, width and height are positive; there are no practical upper bounds.
+- The renderer rewrites paths matching /videos/<job>/<file> to its own /output static server, but otherwise passes the supplied videoUrl through unchanged.
+- remotion/src/compositions/ShortVideo.tsx passes videoUrl directly to the browser-side Video component, which is loaded by the server-side Remotion renderer.
+- The renderer has no per-user concurrency/queue limit. Its HTTP server starts an executeRender task for each request.
+- The backend commits the fixed render reservation as soon as the renderer accepts the job, not when the actual render completes.
+
+Impact: the render service can make server-originated requests to arbitrary URLs during rendering, creating an SSRF/internal-resource fetch surface. The caller can also request a render of another job's media by supplying a foreign jobId/videoUrl because the proxy does not verify ownership of the referenced job. Positive-only duration/dimension validation allows pathological values that can consume excessive CPU, memory and disk. The fixed charge at enqueue does not bound actual work.
+
+Fix direction: accept a job_id/clip_index only, load the caller-owned job and clip server-side, derive the source media URL internally, and reject arbitrary caller-provided videoUrl. Enforce strict maximum duration, fps, width, height, effects/subtitle payload size, render queue depth and per-user concurrency. Reserve/settle usage based on a bounded render policy, with failed/cancelled jobs handled consistently. Add SSRF, cross-tenant, huge-dimension, huge-duration and queue-flood tests.
+
+### Renderer architecture and CI observations
+- Render status is held in a process-local Map; restart loses queued/running/completed state. The backend's _render_owners map is also process-local, so cloud polling after a backend restart cannot recover ownership/status even if the renderer process still has the job.
+- The renderer exposes the entire shared OUTPUT_DIR under /output. This bypasses the backend's /videos allowlist and owner/capability checks; see F-03.
+- render-service/package.json defines a test script for composition metadata, but .github/workflows/ci.yml runs only Python tests and the dashboard build. The renderer test is not run by CI.
+- remotion/package.json defines a TypeScript build/typecheck script, but CI does not run it.
+- The renderer Dockerfile uses Node 18 and npm install, while the frontend CI uses Node 20. Lockfile/reproducibility and supported-runtime alignment remain open.
+- The current renderer contract test checks dynamic composition metadata and fallback defaults, but no render integration, path containment, authorization, output retention or process-restart test is present in the inspected test file.
+
+Phase 5 remains partial. No Remotion bundle build, renderer test, actual video render, network-isolation test, queue stress test or restart recovery test was run in this remote source inspection.
