@@ -1906,3 +1906,60 @@ Evidence:
 Impact: after a transient Upload-Post outage or provider error, the Clippy account is deleted while the remote Upload-Post profile and connected social-account tokens may remain active at the provider. The user loses the ability to manage or disconnect that profile from Clippy, and the third-party data may outlive the account without a retry path.
 
 Fix direction: persist a third-party-erasure task before deleting the local profile mapping, including provider, deterministic profile username, attempt state and last error. Retry until the provider confirms deletion or a documented terminal/manual state is reached. Do not tell the user the social connections were deleted until confirmed; expose a clear partial-erasure state if the provider is unavailable. Add tests for 500, timeout and 404 provider responses.
+
+
+### F-57: Windows first-run runtime bootstrap is not wired into the Tauri application — critical release blocker
+
+Evidence:
+- desktop/src-tauri/src/lib.rs registers only start_services, stop_services, service_status and check_runtime as Tauri commands.
+- The Downloader module is declared but no command calls Downloader::download or Downloader::extract. Bootstrap::install_from_archive and register_environment are also never called.
+- check_runtime only constructs Bootstrap and calls get_status; it does not read the manifest, download missing components, install Python packages, compile the renderer or write a completed manifest.
+- runtime-manifest.json contains placeholder/non-hex SHA-256 strings and a manifest_hash_placeholder, plus a fabricated FFmpeg release URL. It cannot be used for checksum verification.
+- tauri.conf.json bundles the dashboard and desktop shell but declares no backend/runtime resources. RuntimePaths::validate expects an already-populated %LOCALAPPDATA%/Clippy/app/current tree and managed Python/Node runtimes.
+- The first-run contract requires a resumable installer/bootstrapper, but the current command surface has no setup/install/repair operation.
+
+Impact: a clean Windows installation has no implemented path to obtain or install the backend payload, Python dependencies, Node renderer packages, FFmpeg/FFprobe or Remotion runtime. start_services only validates and then fails if the files are absent. The Windows branch is therefore an early desktop shell/scaffold, not an installable product.
+
+Fix direction: implement and wire a real bootstrap state machine before enabling Start: signed/verified manifest, real pinned URLs and SHA-256 values, resumable bounded downloads, safe extraction, Python dependency installation, renderer build/package, ffprobe validation, manifest persistence and repair/update paths. Do not ship the placeholder manifest or present the installer as production-ready. Add a clean Windows VM install test with no system Python/Node/FFmpeg.
+
+### F-58: Native Windows supervisor stores uploaded source files inside the versioned app payload — medium data-loss risk on update
+
+Evidence:
+- RuntimePaths::discover sets current_dir to %LOCALAPPDATA%/Clippy/app/current and sets OUTPUT_DIR to %LOCALAPPDATA%/Clippy/data/output.
+- Supervisor.start sets OUTPUT_DIR but never sets UPLOAD_DIR.
+- app.py defaults UPLOAD_DIR to the relative path "uploads". Because the backend is launched with current_dir = app/current, user-uploaded source videos and Thumbnail Studio source uploads are written under app/current/uploads.
+- The desktop first-run contract explicitly requires user projects, generated videos, settings, caches and downloaded models to live outside the application install directory and survive app updates.
+
+Impact: source uploads are placed inside the replaceable versioned application payload, not the persistent data directory. Updating/replacing app/current can remove in-flight or retained source videos, breaking source-based clip editing, retries, thumbnail sessions and project restoration. The OUTPUT_DIR survives, but its source uploads do not.
+
+Fix direction: set UPLOAD_DIR to %LOCALAPPDATA%/Clippy/data/uploads in the supervisor environment, and similarly audit every relative data/cache/model path (reference templates, cookies, temp work, thumbnails) so only immutable code lives under app/current. Add an update simulation test that swaps app/current while preserving data/uploads and data/output.
+
+### F-59: Stopping the native app kills only direct service processes, not their descendant process trees — high shutdown/restart reliability risk
+
+Evidence:
+- desktop/src-tauri/src/supervisor.rs::stop_child calls Child::kill and Child::wait on the direct backend and renderer processes only.
+- The backend launches separate Python main.py job subprocesses through subprocess.Popen; those launch FFmpeg/ffprobe and other child processes. The renderer launches Chromium/browser workers during Remotion renders.
+- Windows does not automatically terminate a process's descendants when its parent process is terminated. No Windows Job Object, CREATE_NEW_PROCESS_GROUP/CTRL_BREAK handling or taskkill /T tree cleanup is implemented.
+- The backend's graceful deploy-drain logic is not invoked by Supervisor.stop; the supervisor force-kills the Uvicorn process.
+
+Impact: after the user clicks Stop or exits Clippy, a main.py worker, FFmpeg process or Chromium child can remain alive, continue consuming CPU/GPU/RAM and writing into the shared data directory. Restarting can create duplicate workers or file races, and the UI may claim the services stopped while work continues in the background.
+
+Fix direction: place backend and renderer process trees in dedicated Windows Job Objects with KILL_ON_JOB_CLOSE, or use a controlled graceful-stop protocol followed by bounded tree termination. Ensure children cannot escape the job object. Add Windows integration tests that start a backend job and renderer, stop Clippy, and assert every descendant PID has exited and ports 8000/13100 are released.
+
+### F-60: Tauri's packaged frontend build does not use the desktop API URL build script — critical desktop UI connectivity defect
+
+Evidence:
+- dashboard/src/config.js uses VITE_API_URL or an empty string; empty means API requests are relative to the current WebView origin.
+- dashboard/build-desktop.ps1 correctly sets VITE_API_URL=http://127.0.0.1:8000 before running npm build.
+- desktop/src-tauri/tauri.conf.json beforeBuildCommand instead runs `cd ../../dashboard && npm run build` directly and never sets VITE_API_URL or invokes build-desktop.ps1.
+- The packaged WebView is served by Tauri, not Vite's development proxy. Its relative `/api/...` calls therefore resolve against the Tauri asset origin instead of the local FastAPI server.
+
+Impact: a normal Tauri package build embeds a frontend with no API base URL. The desktop shell can open, but authentication, configuration, upload, processing and every other API request target the WebView asset origin rather than http://127.0.0.1:8000. The separately created build-desktop.ps1 does not help because Tauri does not call it.
+
+Fix direction: set VITE_API_URL in the actual Tauri beforeBuildCommand or use a dedicated npm build:desktop script that Tauri invokes. Add a production bundle test that inspects the built config and a packaged WebView smoke test proving API calls reach loopback.
+
+### Windows native branch checkpoint
+- Read the Tauri bootstrap/downloader/supervisor/lib/config, build scripts, runtime manifest, platform compatibility helpers, renderer path helper/tests, and desktop first-run contract.
+- Positive controls: renderer binds to loopback by default on native installs; Docker explicitly opts into 0.0.0.0; Windows subprocess priority avoids POSIX preexec_fn; Windows file locking has an msvcrt path; renderer path helper now rejects encoded traversal and unsafe job IDs.
+- Still missing: clean-machine build/install/runtime tests; managed FFmpeg/FFprobe PATH and upload path wiring; process-tree shutdown; bootstrap downloads/manifest validation; persistent per-user settings and model directory verification; installer signing/update/repair; native GPU detection beyond nvidia-smi; CI build on Windows.
+- Branch is not ready to merge as a complete native migration. Phase 7 remains partial.
