@@ -10,7 +10,7 @@
 
 ## Finding ID integrity note
 
-The audit grew through multiple append-only review passes. Repeated IDs were ambiguous, so later occurrences have been assigned unique IDs beginning at F-76. Their headings retain the former number in parentheses. Existing cross-references using an old number continue to refer to its first occurrence. Where two findings describe related symptoms, read both before proposing a fix; do not assume they are identical.
+The audit grew through multiple append-only review passes. Repeated IDs were ambiguous, so later occurrences have been assigned unique IDs beginning at F-76. Their headings retain the former number in parentheses. Subsequent addenda were also normalized through F-113. Existing cross-references using an old number continue to refer to its first occurrence. Where two findings describe related symptoms, read both before proposing a fix; do not assume they are identical.
 
 ## 0. Mandatory instructions for agents
 
@@ -2145,7 +2145,7 @@ Impact: a managed whole-video job can perform a full-length Whisper transcriptio
 Fix direction: disable EARLY_AUDIO whenever either MAX_SOURCE_MINUTES or SOURCE_CAP_MINUTES is set, unless the audio download itself is guaranteed to use the exact reserved range and the transcript is proven to cover only that range. Prefer passing a shared bounded range to both audio and video downloads. Add tests for a source moderately longer than the cap (below the current range threshold) and assert no early full-source transcription starts and total transcribed duration never exceeds the reserved cap.
 
 
-### F-77: CLI advertises an unsupported --format example — low command-line contract bug
+### F-111: CLI advertises an unsupported --format example — low command-line contract bug (formerly F-77)
 
 Evidence:
 - cli/openshorts_cli.py exposes --format as an unrestricted string and its help text gives `1080p` as the example.
@@ -2157,7 +2157,7 @@ Impact: users following the CLI's own help text receive a 400/422 error. The opt
 
 Fix direction: rename the option to --output-format or change its help to list auto, vertical, horizontal and square. If resolution control is intended, add a separate API field and wire it end-to-end. Add CLI argument tests for accepted and rejected values.
 
-### F-78: CLI remains OpenShorts-branded while the repository and product engineering docs are Clippy-branded — product identity decision required
+### F-112: CLI remains OpenShorts-branded while the repository and product engineering docs are Clippy-branded — product identity decision required (formerly F-78)
 
 Evidence:
 - cli/README.md, cli/openshorts_cli.py, cli/pyproject.toml and tracked cli/openshorts.egg-info all publish the package as `openshorts` and describe the OpenShorts product.
@@ -2175,7 +2175,7 @@ Fix direction: decide whether to preserve `openshorts` as a compatibility alias 
 - The package is intentionally zero-dependency, but there is no lock file for the build-system requirement `setuptools>=68`; CI installs the latest compatible build tool at publish time.
 
 
-### F-79: Cloud schema has no Alembic revision history; runtime startup relies on create_all and hand-written additive ALTERs — medium migration/release risk
+### F-113: Cloud schema has no Alembic revision history; runtime startup relies on create_all and hand-written additive ALTERs — medium migration/release risk (formerly F-79)
 
 Evidence:
 - The repository contains alembic.ini, alembic/env.py and alembic/script.py.mako, but no alembic/versions directory or migration revision files.
