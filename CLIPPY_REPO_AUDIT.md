@@ -2138,3 +2138,41 @@ Evidence:
 Impact: one hung GPU/ASR process can occupy a host slot forever. If all configured slots become stuck, every subsequent job that reaches transcription waits indefinitely, consuming queue capacity and potentially retaining reservations until the three-hour metering sweeper intervenes (F-60).
 
 Fix direction: use a bounded, cancellation-aware wait for slot acquisition and surface a retryable capacity error when the deadline expires. Add a lease/heartbeat or supervisor watchdog for the holder so a genuinely wedged inference process can be terminated and the lock released. Add tests for cancellation while waiting, timeout with all slots occupied, and recovery after killing a holder process.
+
+
+### F-71: Uvicorn trusts forwarded headers from every remote IP despite documentation warning against it — high IP-spoofing/rate-limit bypass risk
+
+Evidence:
+- Dockerfile's production CMD explicitly starts Uvicorn with `--proxy-headers --forwarded-allow-ips '*'`.
+- .env.example says the Dockerfile defaults to private Docker ranges, tells operators to narrow the value to Traefik, and explicitly says NEVER `*`; the actual command contradicts that documentation.
+- docker-compose.yml publishes backend port 8000 to the host, and docker-compose.cloud.yml inherits the base backend service/port mapping.
+- cloud/auth.py uses request.client.host as the magic-link IP-rate-limit key. app.py also takes the first X-Forwarded-For value as the rights-attestation IP. Uvicorn's ProxyHeadersMiddleware trusts those headers because the allowlist is `*`.
+- No application middleware reads the documented FORWARDED_ALLOW_IPS variable to override the hard-coded command argument.
+
+Impact: any client able to reach the published backend port can send a forged X-Forwarded-For header and choose the IP address used by the magic-link per-IP limit and the legal rights-attestation record. This weakens anti-abuse controls and makes the recorded source IP unreliable. It does not bypass the separate per-email magic-link cap, but it removes the intended network-level limit.
+
+Fix direction: replace `*` with a configurable, narrow trusted-proxy allowlist (e.g. exact Traefik container IP or private Docker subnet), and ensure the proxy overwrites rather than appends client-supplied forwarded headers. Do not publish the backend port publicly in managed production if only Traefik should reach it. Add an integration test with a trusted and untrusted source IP proving an untrusted caller cannot influence request.client.host or the stored attestation.
+
+### F-72: Managed cloud mode starts without R2 configuration and silently skips durable archiving — critical data-loss release risk
+
+Evidence:
+- cloud/config.py::validate_required checks only DATABASE_URL and JWT_SECRET; it does not require R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID or R2_SECRET_ACCESS_KEY.
+- cloud-compose.cloud.yml does not declare or validate R2 settings, and .env.example does not provide a clear R2 configuration section for managed mode.
+- cloud/videos.py::archive_job immediately returns when settings.r2_configured is false. app.py::_archive_managed_job treats that return as a successful no-op and run_job_wrapper continues to mark the job completed and send notifications.
+- The default managed local retention is one hour. Without R2, completed clips have no durable cloud copy and are deleted by the local cleanup sweep.
+
+Impact: a managed deployment can start, accept paying users and process videos while R2 credentials are absent or mistyped. Jobs appear successful, but no project/history rows or durable clips are created; after local retention the user's output disappears. This is the no-R2 version of F-65 and should be treated as a deployment blocker, not merely an optional feature.
+
+Fix direction: make R2 configuration mandatory when BILLING_ENABLED=true unless an explicitly named and documented local-only managed mode is enabled. At startup, perform a non-destructive bucket connectivity/permission check (list/head a configured health key) and fail readiness if unavailable. Do not settle a managed job as delivered until archive is confirmed. Add a cloud startup test with missing, partial and invalid R2 credentials.
+
+### F-73: Documented global per-IP rate-limit settings are not implemented — medium abuse-control/documentation mismatch
+
+Evidence:
+- .env.example documents RATE_LIMIT_ENABLED, RATE_LIMIT_AUTH, RATE_LIMIT_PROCESS and RATE_LIMIT_MCP, and says they are implemented by rate_limit.py.
+- The current main tree contains no rate_limit.py or equivalent global rate-limit middleware; app.py installs CORS and static mounts but no general request limiter.
+- The only rate limits found are route-specific in-memory counters for metering probes, analytics, magic-link requests and free tools. They are not a global per-IP policy and have different scopes/storage.
+- The MCP endpoint has no request-rate limiter, and public OAuth dynamic registration has none (F-68).
+
+Impact: operators may believe the documented RATE_LIMIT_* variables protect authentication, processing and MCP endpoints when the settings are ignored. This leaves API endpoints more exposed to bursts and makes deployment security depend on an external proxy/WAF that is not described as mandatory.
+
+Fix direction: either implement and test the advertised shared rate-limit middleware (with trusted client-IP resolution and a shared store in multi-replica cloud mode), or remove the dead configuration claims and document exactly which routes have local best-effort limits. Add CI tests that prove each advertised environment variable changes actual request behavior.
