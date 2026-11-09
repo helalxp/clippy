@@ -1817,3 +1817,22 @@ Evidence:
 Impact: if an operator sets R2_PUBLIC_BASE to a public R2 custom domain, every history link becomes a permanent bearer URL. Anyone who obtains a user's clip URL can fetch the object until it is deleted by retention or account erasure; the configured expires value has no effect. This is a deliberate public-domain deployment mode, not an unconditional exposure when the setting is empty, but it changes the product's privacy boundary materially.
 
 Fix direction: either remove the public-base shortcut for user-owned media and keep signed URLs, or clearly separate public gallery assets from private user-library objects. If the public domain is retained, require an explicit opt-in setting with a warning, document the permanent bearer-link behavior in operator and user privacy documentation, and add tests proving which URL mode is returned for user clips.
+
+
+### F-54: Cloud schema bootstrap silently continues when additive database changes fail — high deployment consistency risk
+
+Evidence:
+- cloud/database.py::init_engine uses SQLAlchemy create_all, which creates missing tables but never alters existing tables.
+- Existing production databases therefore depend on the hand-maintained _ADDITIVE_COLUMNS tuple for new columns and indexes.
+- Each additive DDL statement is wrapped in a broad except that only prints a warning and continues startup. The API can become ready even when a required column/index was not added.
+- cloud/models.py documents multiple columns/indexes that rely on these hand-maintained statements. The repository has alembic.ini and alembic/env.py, but the current tree contains no alembic/versions migration scripts; `alembic upgrade head` therefore has no versioned schema changes to apply.
+- No deployment test creates an old-version database schema, starts the new application, and verifies every required column/index exists.
+
+Impact: a permission error, lock timeout or SQL typo during an additive change can leave the application running against a partially upgraded schema. The first affected request then fails at runtime, potentially impacting authentication, billing, account deletion or metering. The warning can be missed among startup logs.
+
+Fix direction: make required DDL failures fatal during startup, or move schema changes into reviewed, versioned Alembic migrations and fail deployment until `alembic upgrade head` succeeds. Keep create_all only for disposable development/test databases. Add a migration test from the previous production schema to current head and assert model/schema parity.
+
+### Cloud schema and storage checkpoint
+- Read cloud/__init__.py, database.py, models.py, config.py, storage.py, requirements-billing.txt, alembic.ini and alembic/env.py.
+- Positive controls: R2 keys are namespaced by user ID and job ID; presigned URLs are time-limited when R2_PUBLIC_BASE is unset; the public custom-domain behavior is explicitly documented as public/bearer-by-URL; PostgreSQL pool uses pre-ping; cloud mode fails fast for missing DATABASE_URL/JWT_SECRET.
+- Remaining concerns: R2_PUBLIC_BASE deliberately makes all objects under the configured bucket prefix publicly retrievable, so privacy depends on bucket/domain isolation and object-key secrecy; no signed-token Worker is implemented. R2 object delete/list operations do not inspect per-object delete errors from delete_objects. Schema migrations remain additive/manual and not versioned. Phase 6 remains partial.
