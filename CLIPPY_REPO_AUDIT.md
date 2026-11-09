@@ -1457,3 +1457,46 @@ Evidence:
 Impact: once the downloader is connected to first-run setup, a compromised URL or unexpectedly large response can fill the user's disk. The manifest's size_bytes field gives the UI an apparent bound but does not enforce one.
 
 Fix direction: abort the stream immediately if total_bytes exceeds the declared size or a separately configured hard maximum; validate the final byte count equals size_bytes; validate Content-Range starts at the requested offset before appending; delete corrupt partials after checksum/length mismatch; and add tests for oversized, truncated, wrong-range and server-ignores-Range responses.
+
+
+### F-37: Stripe webhook idempotency is not atomic with event dispatch — high duplicate-side-effect risk
+
+Evidence:
+- cloud/billing.py::stripe_webhook verifies the Stripe signature, checks whether StripeEvent exists, calls handle_event(event), and only afterwards inserts the event ID into stripe_events.
+- There is no transaction, row lock, advisory lock or in-progress claim spanning the check and dispatch.
+- Two concurrent deliveries of the same Stripe event can both observe no StripeEvent row and both run handle_event before either inserts the dedupe row.
+- handle_event includes non-transactional side effects such as invoice-paid notifications/revenue tracking and lifecycle recovery emails. Some database writes have their own idempotency guards, but those do not make the whole event dispatch atomic.
+- tests/test_billing_states.py covers entitlement-state helpers, not concurrent webhook delivery or duplicate side effects.
+
+Impact: Stripe retries or concurrent deliveries can trigger duplicate invoice-paid notifications/revenue signals and other external side effects. Relying on the final unique event insert only prevents a duplicate event record, not duplicate work already performed.
+
+Fix direction: claim the event ID before dispatch using an atomic INSERT ... ON CONFLICT DO NOTHING RETURNING, with explicit processing/completed/failed status and safe retry semantics. For DB-only effects, commit state and event completion in one transaction where possible. For external effects, use an outbox or their own idempotency keys. Add a database-backed concurrent delivery test asserting one dispatch and one external notification.
+
+### F-38: OAuth authorization-code redemption can mint multiple API keys under concurrent requests — high security/idempotency gap
+
+Evidence:
+- cloud/mcp_oauth.py::token selects OAuthCode by code_hash and checks used_at is None, then sets used_at and inserts a new ApiKey in the same transaction.
+- The select does not use SELECT FOR UPDATE and there is no conditional UPDATE ... WHERE used_at IS NULL ... RETURNING claim.
+- Two concurrent token requests can both read the unused code before either transaction commits, both pass PKCE/client/redirect checks, and both insert distinct API keys.
+- tests/test_mcp_oauth.py explicitly says the database-backed register/authorize/token pieces are exercised manually after deploy; its tests cover only pure helpers and discovery/validation.
+
+Impact: a one-time authorization code is not reliably one-time under concurrency. A client or network retry racing the original request can create multiple long-lived API keys for the same consent event. The API keys are independently revocable, but this violates the one-use code guarantee and creates extra credentials.
+
+Fix direction: atomically claim the code with UPDATE ... SET used_at=now WHERE code_hash=? AND used_at IS NULL AND expires_at>now RETURNING user_id, client_id, redirect_uri, code_challenge, scope; only the winner may insert the ApiKey. Alternatively SELECT FOR UPDATE and keep the row lock until the ApiKey and used_at commit. Add a PostgreSQL-backed concurrent redemption test that proves exactly one success and one ApiKey.
+
+### F-39: Free-plan retention deletes project database rows even when object listing fails — medium data-orphaning/retention defect
+
+Evidence:
+- cloud/videos.py::purge_free_expired lists all object keys beneath each expired project's R2 job prefix so it can remove canonical clips and superseded derivatives.
+- If storage.list_keys raises, the broad except falls back to deleting only p.metadata_r2_key.
+- The function then continues to delete the Project row from the database in the same outer try block.
+- This can leave the project's videos and derivatives in R2 with no Project row or retained prefix metadata to drive a later cleanup. The exception is intentionally swallowed, so the user-facing result is still logged as a successful purge.
+
+Impact: a transient R2 listing failure can permanently orphan video objects, defeating the free-plan retention policy and accumulating storage cost. It can also leave inaccessible user media in the bucket after the database says it has been erased.
+
+Fix direction: do not delete the Project row unless the full prefix listing and every required object deletion have succeeded. Treat list failure as a failed purge and retry on the next sweep; persist a purge-pending state or deletion job if needed. Add tests for list failure, partial delete failure and successful retry, asserting the Project row remains until all required objects are removed.
+
+### Cloud modules reviewed in this pass
+- Read the key transactional paths in cloud/autopilot.py, cloud/billing.py, cloud/metering.py, cloud/videos.py, cloud/mcp_oauth.py and cloud/account.py, plus relevant model definitions and focused tests.
+- Positive controls: autopilot claims use a database uniqueness constraint on (user_id, video_id); usage reservations serialize on a per-user User row lock; account erasure has a schema-driven test that checks every FK child table is included in the deletion list; subscription upserts use a row lock and Stripe event timestamp ordering.
+- Remaining cloud audit work: inspect the rest of every cloud module, migrations/schema constraints, OAuth/API-key revocation and expiry semantics, lifecycle/email retry behavior, Upload-Post profile ownership and secret storage, storage key construction and presigned URL policy, and test concurrency with a real PostgreSQL service. Phase 6 remains partial.
