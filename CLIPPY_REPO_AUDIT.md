@@ -476,7 +476,7 @@ Caller review now narrows the scope: SaaSShorts scrape_website disables automati
 
 These findings apply to `windows-native-migration`, not main.
 
-### F-05 — Desktop runtime manifest path is hard-coded to a developer checkout — high functional blocker
+### F-05 — Desktop runtime manifest path is hard-coded to a developer checkout — low current impact, latent portability defect
 
 Evidence:
 - `desktop/src-tauri/src/lib.rs:34`
@@ -875,19 +875,19 @@ The Python, Node and FFmpeg SHA-256 fields are obvious non-hex placeholder strin
 
 downloader.rs::Downloader::extract joins dest with entry.name() and writes files without canonical containment validation. This is a ZIP-slip hazard if that method is ever called with an untrusted archive. However, no call site for Downloader::extract or Downloader::new was found in the inspected native branch. bootstrap.rs::install_from_archive currently calls zip::ZipArchive::extract instead. Therefore F-07 is a latent unsafe helper, not a confirmed reachable exploit in the current Stage 3A flow. Remove the duplicate helper or harden it before wiring the downloader into bootstrap. The active zip crate extraction path still needs an explicit malicious-archive test before being relied upon.
 
-### F-18: Native supervisor kills only service parent processes, not their descendants — high reliability defect
+### F-18: Native supervisor kills only service parent processes, not their descendants — high reliability defect (expanded by the native audit)
 
 Evidence:
 - desktop/src-tauri/src/supervisor.rs starts Uvicorn and the Node renderer as separate Child processes.
 - The backend launches main.py job processes; the Remotion renderer launches browser/render worker processes.
-- stop_child only calls Child::kill() and Child::wait() on the direct process. Startup rollback paths use the same direct-child kill pattern.
+- stop_child only calls Child::kill() and Child::wait() on the direct process. Startup rollback paths use the same direct-child kill pattern. Supervisor.stop force-kills the renderer first and then Uvicorn; it does not invoke the backend's graceful deploy-drain protocol.
 - No Windows Job Object, process group, descendant enumeration, or tree-kill mechanism is present in the inspected supervisor.
 
 On Windows, terminating a process with TerminateProcess does not automatically terminate its child processes. A stop/restart can therefore leave Python pipeline jobs, Chromium/Remotion helpers or other descendants running after the UI reports the backend/renderer stopped. Orphans can continue consuming CPU/GPU/RAM/disk, keep files locked, or interfere with the next startup.
 
-Fix direction: create each service tree inside a Windows Job Object configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, assign the process immediately after spawn, and close/terminate the job on stop and every startup-failure path. Ensure descendants cannot escape the job. Add a Windows integration test that starts a fake parent which spawns a child, stops the service, and verifies both PIDs exit.
+Fix direction: create each service tree inside a Windows Job Object configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, assign the process immediately after spawn, and close/terminate the job on stop and every startup-failure path. Ensure descendants cannot escape the job. Add a Windows integration test that starts a fake parent which spawns a child, stops the service, and verifies both PIDs exit; also assert ports 8000/13100 are released and no FFmpeg/Chromium descendant remains.
 
-### F-19: Packaged desktop frontend build does not set the required API base URL — high functional blocker
+### F-19: Packaged desktop frontend build does not set the required API base URL — high functional blocker (confirmed in Tauri config)
 
 Evidence:
 - dashboard/src/config.js sets API_BASE_URL to import.meta.env.VITE_API_URL or an empty string. Empty means relative /api paths.
@@ -896,6 +896,7 @@ Evidence:
 - However, tauri.conf.json beforeBuildCommand runs cd ../../dashboard && npm run build directly; it does not invoke build-desktop.ps1 or set VITE_API_URL.
 - desktop/build.ps1 and desktop/build-tauri.ps1 also run npm run build without setting VITE_API_URL.
 - dashboard/package.json has only dev, build, lint and preview scripts; there is no build:desktop script that injects the URL.
+- The newer dashboard/build-desktop.ps1 correctly sets VITE_API_URL, but tauri.conf.json still does not invoke it. This was rechecked against the current windows-native-migration branch.
 
 The normal Tauri build therefore embeds an empty API base URL unless the developer happened to export VITE_API_URL in the parent environment. The packaged WebView then sends relative /api requests to its Tauri origin rather than the local FastAPI server at 127.0.0.1:8000. This contradicts the documented desktop contract and is likely to make the packaged UI unable to reach its backend.
 
@@ -1933,30 +1934,6 @@ Evidence:
 Impact: source uploads are placed inside the replaceable versioned application payload, not the persistent data directory. Updating/replacing app/current can remove in-flight or retained source videos, breaking source-based clip editing, retries, thumbnail sessions and project restoration. The OUTPUT_DIR survives, but its source uploads do not.
 
 Fix direction: set UPLOAD_DIR to %LOCALAPPDATA%/Clippy/data/uploads in the supervisor environment, and similarly audit every relative data/cache/model path (reference templates, cookies, temp work, thumbnails) so only immutable code lives under app/current. Add an update simulation test that swaps app/current while preserving data/uploads and data/output.
-
-### F-59: Stopping the native app kills only direct service processes, not their descendant process trees — high shutdown/restart reliability risk
-
-Evidence:
-- desktop/src-tauri/src/supervisor.rs::stop_child calls Child::kill and Child::wait on the direct backend and renderer processes only.
-- The backend launches separate Python main.py job subprocesses through subprocess.Popen; those launch FFmpeg/ffprobe and other child processes. The renderer launches Chromium/browser workers during Remotion renders.
-- Windows does not automatically terminate a process's descendants when its parent process is terminated. No Windows Job Object, CREATE_NEW_PROCESS_GROUP/CTRL_BREAK handling or taskkill /T tree cleanup is implemented.
-- The backend's graceful deploy-drain logic is not invoked by Supervisor.stop; the supervisor force-kills the Uvicorn process.
-
-Impact: after the user clicks Stop or exits Clippy, a main.py worker, FFmpeg process or Chromium child can remain alive, continue consuming CPU/GPU/RAM and writing into the shared data directory. Restarting can create duplicate workers or file races, and the UI may claim the services stopped while work continues in the background.
-
-Fix direction: place backend and renderer process trees in dedicated Windows Job Objects with KILL_ON_JOB_CLOSE, or use a controlled graceful-stop protocol followed by bounded tree termination. Ensure children cannot escape the job object. Add Windows integration tests that start a backend job and renderer, stop Clippy, and assert every descendant PID has exited and ports 8000/13100 are released.
-
-### F-60: Tauri's packaged frontend build does not use the desktop API URL build script — critical desktop UI connectivity defect
-
-Evidence:
-- dashboard/src/config.js uses VITE_API_URL or an empty string; empty means API requests are relative to the current WebView origin.
-- dashboard/build-desktop.ps1 correctly sets VITE_API_URL=http://127.0.0.1:8000 before running npm build.
-- desktop/src-tauri/tauri.conf.json beforeBuildCommand instead runs `cd ../../dashboard && npm run build` directly and never sets VITE_API_URL or invokes build-desktop.ps1.
-- The packaged WebView is served by Tauri, not Vite's development proxy. Its relative `/api/...` calls therefore resolve against the Tauri asset origin instead of the local FastAPI server.
-
-Impact: a normal Tauri package build embeds a frontend with no API base URL. The desktop shell can open, but authentication, configuration, upload, processing and every other API request target the WebView asset origin rather than http://127.0.0.1:8000. The separately created build-desktop.ps1 does not help because Tauri does not call it.
-
-Fix direction: set VITE_API_URL in the actual Tauri beforeBuildCommand or use a dedicated npm build:desktop script that Tauri invokes. Add a production bundle test that inspects the built config and a packaged WebView smoke test proving API calls reach loopback.
 
 ### Windows native branch checkpoint
 - Read the Tauri bootstrap/downloader/supervisor/lib/config, build scripts, runtime manifest, platform compatibility helpers, renderer path helper/tests, and desktop first-run contract.
