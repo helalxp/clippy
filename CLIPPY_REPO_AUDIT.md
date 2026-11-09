@@ -2223,7 +2223,7 @@ Impact: a transient R2 outage, timeout, permission error or process restart duri
 Fix direction: persist an archive-pending job record before marking the managed job fully durable; retry idempotently until every clip, clean twin and project state is confirmed in R2. Keep local files while archive state is pending, and only start the retention clock after durable archive confirmation. Track edit-archive tasks in the same durable queue instead of bare asyncio.create_task. Add tests for R2 500/timeouts, partial object upload, backend restart mid-archive and cleanup refusing to delete an archive-pending directory.
 
 
-### F-75: Several FFmpeg subprocess paths have no execution timeout — medium stuck-job/API-thread risk
+### F-109: Several FFmpeg subprocess paths have no execution timeout — medium stuck-job/API-thread risk (formerly F-75)
 
 Evidence:
 - subtitles.py's subtitle-burn path invokes subprocess.run through gpu_decode.run with stderr=PIPE but no timeout. The /api/subtitle route awaits this work in an executor and has no endpoint-level deadline for the FFmpeg process.
@@ -2243,7 +2243,7 @@ Fix direction: define a per-operation FFmpeg timeout policy based on source dura
 - Branch comparisons are against application-code snapshot 1710a1d4, not the later audit-document-only main HEAD: codex/new-ui 0 ahead / 30 behind; codex/reference-templates 1 ahead / 29 behind; windows-native-migration 14 ahead / 29 behind.
 - Latest completed CI run inspected: 42667586873. Frontend production build passed. Backend suite: 1,226 passed, 30 skipped, 2 failed. Failures remain F-01 (duration override unexpectedly capped at 25 seconds instead of requested 30) and F-02 (recut passes backdrop_type/backdrop_color to apply_watermark, whose real signature accepts only video_path/output_path; the test fake also rejects the extra keywords). No code fixes have been applied.
 - Latest run for current audit-only HEAD 2e4b3a8 was queued when checked; the previous completed run is the authoritative test result recorded above.
-- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 108 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation.
+- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 107 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation. One later FFmpeg-timeout entry was assigned F-109 to avoid a repeated F-75.
 - Source reading has materially expanded across cloud auth/billing/storage, MCP/OAuth, SaaSShorts, Thumbnail Studio, upload slots, job lifecycle/cleanup, renderer/Remotion, Docker/CI configuration and the Windows-native branch. The audit is still **IN PROGRESS**; not every tracked source file has been read line by line, and no local runtime, Windows WebView, Docker image, or integration build has been executed.
 
 
