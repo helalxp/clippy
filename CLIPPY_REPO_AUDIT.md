@@ -2028,3 +2028,17 @@ Evidence:
 Impact: an R2 outage or per-object upload failure can produce a successful completed job that is not durably archived. The dashboard/email may tell the user the clips are ready, but after local retention expires the videos are gone. Partial uploads can also leave a project that appears complete but is missing some clips.
 
 Fix direction: make archive completion a required durable job phase. Record expected clip/object count and per-object state; retry failed uploads with bounded backoff; only mark the managed job fully delivered after all required objects and metadata are verified. Keep local output pinned while archive is pending. Add tests for metadata upload failure, one-of-many clip failure, R2 outage and recovery after process restart.
+
+
+### F-71: Renderer and backend container builds do not fully pin the dependencies they execute — medium reproducibility/supply-chain risk
+
+Evidence:
+- render-service/Dockerfile copies render-service/package.json but does not copy the tracked render-service/package-lock.json before running npm install. The lockfile is therefore not used in the renderer image build.
+- The renderer's package.json uses semver ranges for Remotion, Express, UUID and other dependencies; an image rebuild can resolve different transitive versions without a source commit changing.
+- dashboard/Dockerfile copies package-lock.json but uses npm install rather than npm ci, allowing npm to reconcile/update the lock rather than enforcing the committed dependency graph.
+- The backend Dockerfile installs the latest pre-release yt-dlp (`pip install --upgrade --pre`) and the latest bgutil-ytdlp-pot-provider package without a pinned version; it also clones the provider's default Git branch at build time with `git clone --depth 1` and runs npm install without a committed provider lockfile.
+- The Deno binary is copied from the floating denoland/deno:bin tag. The Dockerfile does not pin the base images by digest.
+
+Impact: two builds from the same Git commit can contain different renderer, extractor, helper and runtime dependencies. A breaking upstream release can silently break YouTube ingest or Remotion rendering; a compromised upstream package/tag can enter a production image without a source diff. Reproducing a production incident or rolling back to a known-good image becomes harder.
+
+Fix direction: copy and enforce render-service/package-lock.json with npm ci; use npm ci in the dashboard stages; pin yt-dlp and bgutil to tested versions/commits (with a deliberate update cadence for extractor breakage); pin Deno and base-image digests; and add dependency/SBOM scanning to CI. Keep the update process explicit so the YouTube extractor can still be refreshed quickly when upstream changes require it.
