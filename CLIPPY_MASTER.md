@@ -43,11 +43,11 @@ The product direction is a normal Windows application:
 | Branch | Relationship to main at inspection | Purpose / known contents |
 |---|---|---|
 | `main` | Default branch | Current committed OpenShorts-derived application and feature work. Docker Compose is still the documented full-stack workflow. |
-| `codex/new-ui` | Behind main by 4 commits; no unique commits ahead in the comparison | Earlier workspace UI work. The UI merge is already represented in main history. Treat this as a historical/possibly stale branch, not a separate active feature line. |
-| `codex/reference-templates` | Diverged: 1 commit ahead and 3 behind main | Reference-template library feature and related cleanup. Adds `reference_templates.py`, `dashboard/src/components/ReferenceTemplateLibrary.jsx`, a template asset/manifest, and tests; modifies `app.py`, `layout_picker.py`, and `dashboard/src/App.jsx`; removes several temporary patch files. |
-| `windows-native-migration` | Diverged: 12 commits ahead and 3 behind main | Native Windows compatibility and desktop migration line. Adds Tauri/Rust desktop scaffold, bootstrap/downloader/supervisor, local model settings, platform compatibility, renderer path/server changes, runtime manifest, tests, and `AGENTS.md`. Also includes reference-template work. |
+| `codex/new-ui` | Behind main; no unique commits ahead in the comparison | Earlier workspace UI work. The UI merge is already represented in main history. Treat this as a historical/possibly stale branch, not a separate active feature line. |
+| `codex/reference-templates` | Diverged from main; contains a unique reference-template feature commit | Reference-template library feature and related cleanup. Adds `reference_templates.py`, `dashboard/src/components/ReferenceTemplateLibrary.jsx`, a template asset/manifest, and tests; modifies `app.py`, `layout_picker.py`, and `dashboard/src/App.jsx`; removes several temporary patch files. |
+| `windows-native-migration` | Diverged from main; contains the native Windows migration and reference-template work | Native Windows compatibility and desktop migration line. Adds Tauri/Rust desktop scaffold, bootstrap/downloader/supervisor, local model settings, platform compatibility, renderer path/server changes, runtime manifest, tests, and `AGENTS.md`. Also includes reference-template work. |
 
-Branch relationships above are based on GitHub branch search and branch comparisons against `main` after the documentation commits on 2026-11-09. Re-run comparisons before any merge or release; branch tips move. These counts include the documentation commits made during this task.
+Branch relationships above are qualitative summaries of GitHub branch comparisons on 2026-11-09. Exact ahead/behind counts are intentionally omitted because the documentation commits themselves change those counts. Re-run comparisons before any merge or release; branch tips move.
 
 ### Mainline history observed
 Recent main commits included:
