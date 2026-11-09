@@ -2259,3 +2259,33 @@ Evidence:
 Impact: a managed whole-video job can perform a full-length Whisper transcription and AI clip analysis on source minutes beyond the amount reserved/charged, then repeat transcription on the capped video. This creates unmetered model/GPU work and can materially increase compute cost for long sources.
 
 Fix direction: disable EARLY_AUDIO whenever either MAX_SOURCE_MINUTES or SOURCE_CAP_MINUTES is set, unless the audio download itself is guaranteed to use the exact reserved range and the transcript is proven to cover only that range. Prefer passing a shared bounded range to both audio and video downloads. Add tests for a source moderately longer than the cap (below the current range threshold) and assert no early full-source transcription starts and total transcribed duration never exceeds the reserved cap.
+
+
+### F-77: CLI advertises an unsupported --format example — low command-line contract bug
+
+Evidence:
+- cli/openshorts_cli.py exposes --format as an unrestricted string and its help text gives `1080p` as the example.
+- cmd_process forwards that value unchanged as output_format to POST /api/process.
+- app.py validates output_format against the supported aspect/layout values (auto, vertical, horizontal, square), so `--format 1080p` is rejected rather than selecting a 1080p resolution.
+- The CLI has no choices/validation to catch this before making the request.
+
+Impact: users following the CLI's own help text receive a 400/422 error. The option name and example imply a resolution selector while the API field is an aspect/layout selector.
+
+Fix direction: rename the option to --output-format or change its help to list auto, vertical, horizontal and square. If resolution control is intended, add a separate API field and wire it end-to-end. Add CLI argument tests for accepted and rejected values.
+
+### F-78: CLI remains OpenShorts-branded while the repository and product engineering docs are Clippy-branded — product identity decision required
+
+Evidence:
+- cli/README.md, cli/openshorts_cli.py, cli/pyproject.toml and tracked cli/openshorts.egg-info all publish the package as `openshorts` and describe the OpenShorts product.
+- The CLI default API endpoint is https://api.openshorts.app, and project URLs point to openshorts.app and the original upstream GitHub repository.
+- The root README and CLIPPY_REPO_AUDIT.md now identify the repository/product as Clippy, while the hosted dashboard/legal pages remain OpenShorts-branded as previously recorded.
+
+Impact: users and contributors may not know whether `openshorts` is an intentionally backward-compatible CLI name for Clippy, an upstream legacy package, or an unrebranded product surface. Blindly renaming the PyPI package would break existing installs and command scripts, so this requires a deliberate compatibility decision.
+
+Fix direction: decide whether to preserve `openshorts` as a compatibility alias or publish a new `clippy` package/command. Document the migration and keep old package/command support if compatibility is required. Do not rename the PyPI project or default API endpoint until the hosted-domain/operator identity decision is settled.
+
+### CLI and release-pipeline checkpoint
+- Read all seven CLI source/metadata files: README, entrypoint, pyproject and tracked egg-info files.
+- The CLI uses only the Python standard library and exposes process/status/clips/quota/publish commands. API paths and JSON field names were compared with the corresponding backend routes; the --format example mismatch is F-77.
+- No CLI-specific automated test files exist. publish-cli.yml builds the wheel, installs it and runs only `openshorts --help`; it does not exercise request construction, auth headers, webhook submission, polling, clip URL handling or publish payloads.
+- The package is intentionally zero-dependency, but there is no lock file for the build-system requirement `setuptools>=68`; CI installs the latest compatible build tool at publish time.
