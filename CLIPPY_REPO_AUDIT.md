@@ -1636,3 +1636,36 @@ Fix direction: reserve before accepting/writing the upload when possible, or wra
 - Read the complete thumbnail.py helper module and all thumbnail routes in app.py: upload/transcribe, analyze, title refinement, generation, frame extraction, description generation, publish and publish-status.
 - Positive controls: thumbnail uploads use chunked reads and a per-file size cap; session IDs are UUIDs for normal upload flow; thumbnail frames and publish status enforce session ownership in managed mode; thumbnail publishing uses a realpath containment helper to stop a path traversal from reading arbitrary server files.
 - Remaining risks: thumbnail session state and publish jobs are in-memory only; uploaded sources and generated thumbnails need durable owner metadata for restart-safe erasure/retention (F-22). The frontend's publish polling has no timeout/abort control. The static /thumbnails mount remains publicly accessible to anyone who has the URL. Phase 3/6 cross-links remain in progress.
+
+
+### F-46: SaaSShorts retry can adopt another user's on-disk job after a backend restart — critical cross-tenant ownership failure
+
+Evidence:
+- app.py::saasshorts_generate checks an in-memory saas_jobs record and calls _assert_job_owner when one exists.
+- If the record is absent (including after a backend restart), it falls back to _safe_under(OUTPUT_DIR, f"saas_{retry_job_id}") and accepts any existing directory beneath OUTPUT_DIR.
+- The fallback does not read or verify an owner sidecar, manifest, database row or durable job record. It then creates saas_jobs[retry_job_id] with user_id set to the *current requester* and output_dir set to the pre-existing directory.
+- app.py::_purge_local_jobs_for_user explicitly documents that SaaSShorts jobs have no marker file and that a restart loses the link between the directory and its owner.
+- SaaSShorts output URLs include the job ID in /videos/saas_<job_id>/..., and public media URLs are bearer-by-URL in this deployment (F-03/F-25). A job ID can therefore be disclosed through a shared clip URL or other copied artifact.
+
+Impact: after a restart, an entitled user who knows another user's SaaSShorts job ID can submit it as retry_job_id. The server can reassign the old directory to the attacker, run a new generation into it, expose the old job under the attacker's account, and later erase it when the attacker's account is deleted. This crosses the tenant boundary and can overwrite or destroy another user's generated media.
+
+Fix direction: persist SaaSShorts job ownership durably at job creation (database row or signed .owner sidecar) and require it on disk recovery/retry. Never infer ownership from possession of a job ID or claim an orphan directory for the current caller. If a directory has no verifiable owner record, refuse retry and quarantine it for admin cleanup. Add a restart simulation test: create user A's job, clear saas_jobs, attempt retry as user B, and assert 404 with no file changes; then assert user A can retry.
+
+### F-47: SaaSShorts actor-options accepts unbounded parallel generation count — medium resource/cost abuse
+
+Evidence:
+- app.py::SaaSActorRequest defines num_options as a plain int with default 3 and no ge/le bounds.
+- /api/saasshorts/actor-options passes the caller's value directly to saasshorts.generate_actor_images.
+- saasshorts.py uses ThreadPoolExecutor(max_workers=num_options) and submits one paid fal.ai generation per option. There is no clamp at the API boundary or inside the helper.
+- There is no dedicated SaaSShorts test file in the repository.
+
+Impact: a caller can request an arbitrarily large number of parallel image-generation tasks, causing thread/resource exhaustion and potentially unexpected provider spend on the caller's fal.ai account. Managed mode still requires entitlement, but a paid account is not a concurrency or cost limit.
+
+Fix direction: enforce a small bounded range in the Pydantic model and helper (for example 1–4), add a per-user generation concurrency/rate limit, and test both boundary values and rejected excessive values.
+
+### SaaSShorts source review checkpoint
+- Read saasshorts.py's URL scraper, fal.ai queue client, asset upload/download helpers, actor image generation, voice generation, talking-head generation, b-roll generation and FFmpeg composition paths.
+- Read app.py's SaaSShorts analyze, actor upload/options, gallery, post, generate, retry and status routes.
+- Positive controls: scrape_website disables automatic redirects and validates each redirect target; actor-upload reads at most 25 MiB; retry paths use _safe_under against directory traversal; job status/post check in-memory owner records; generation uses a shared concurrency semaphore.
+- Major gap: SaaasShorts has no dedicated automated test module. There is no end-to-end test for owner isolation, retry recovery, provider failures, storage cleanup, memory-bounded downloads, scheduled publishing or public gallery consent.
+- Additional resource concerns to investigate: website scraping reads complete HTTP response bodies without a response-byte cap; selected_actor_url and fal.ai output downloads also buffer complete response bodies; actor upload checks declared MIME but does not decode/verify the image; request fields (script, descriptions, num_scripts, num_options) need explicit practical bounds.
