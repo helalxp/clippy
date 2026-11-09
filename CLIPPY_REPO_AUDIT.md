@@ -1030,3 +1030,47 @@ Fix direction: remove the "encrypted" claim and do not treat XOR/base64 as prote
 - apiFetch attaches the cloud bearer token consistently for relative API calls and translates 402 responses into QuotaError. The inspected components generally use this wrapper for protected API routes.
 - AccountPage checkout polling clears its interval on paid-plan activation, retry exhaustion or unmount. AutopilotTab polling also uses an effect cleanup.
 - ThumbnailStudio publish polling has no overall timeout or abort controller in the inspected path; if the backend publish status remains "uploading" forever or the status endpoint never resolves, the modal can remain busy indefinitely. Add a bounded timeout and explicit cancel/retry state.
+
+
+### F-27: Unsubscribe GET endpoint performs the state change immediately — medium, confirmed behavior
+
+Evidence:
+- cloud/marketing.py: GET /api/marketing/unsubscribe and POST /api/marketing/unsubscribe both call _opt_out.
+- _opt_out immediately updates User.marketing_opt_out=True for either method.
+- The email body footer uses an ordinary HTTPS link, which is fetched with GET by the user's browser and may also be prefetched/scanned by email security services.
+- The POST route is explicitly intended for RFC 8058 one-click unsubscribe, which is the correct place for an automatic state-changing request.
+
+Impact: link scanners and security gateways that prefetch the email's ordinary GET link can unsubscribe a user without the user choosing to do so. It also makes a GET request mutate account state, contrary to safe HTTP semantics.
+
+Fix direction: make GET validate the token and render a confirmation page with a POST form/button, without changing the account. Keep the RFC 8058 POST endpoint as the one-click state-changing path. Add tests proving GET never changes the database and POST does.
+
+### F-28: Cookie banner says analytics waits for consent, but analytics is always enabled and initialized on first load — high privacy/disclosure mismatch
+
+Evidence:
+- dashboard/src/components/CookieBanner.jsx says audience measurement "stays off until you say yes" and presents a Reject all button.
+- The same component marks analytics as locked/always-on in the details view and describes it as exempt from prior consent.
+- dashboard/src/lib/consent.js getConsent() returns analytics:true for both EEA and non-EEA visitors, including before a decision. setConsent() always writes analytics:true; rejectAll() therefore does not disable analytics.
+- dashboard/src/main.jsx calls applyConsent() before React mounts and before the banner decision.
+- dashboard/src/lib/consent.js applyConsent() unconditionally invokes window.__osAnalyticsInit when it exists.
+- dashboard/index.html's initializer loads OpenPanel when the build credentials and hostname match. It is not gated on a user decision.
+- dashboard/src/Legal.jsx says nothing non-essential loads until acceptance, which is also inconsistent with the actual first-load behavior.
+
+Impact: on the hosted hostname with analytics credentials present, OpenPanel is initialized before a visitor acts on the banner. Reject all does not turn analytics off. The detail panel does disclose analytics as always-on/exempt, but the prominent copy, Reject all label and legal hub imply the opposite. Whether first-party audience measurement qualifies for an exemption is a legal determination; the implementation and disclosures must not contradict one another.
+
+Fix direction: obtain a jurisdiction-specific legal review of the asserted first-party analytics exemption. If analytics requires consent, default analytics to false, gate applyConsent on allows('analytics'), and make Reject all actually disable it. If the operator is relying on an exemption, remove misleading opt-in/reject wording and clearly explain the always-on measurement and legal basis. Add tests for first visit, EEA/non-EEA behavior, Reject all, Accept all, and tracker initialization count.
+
+### F-29: User-controlled video title is interpolated into transactional email HTML without escaping — medium, confirmed HTML injection surface
+
+Evidence:
+- cloud/emails.py send_clips_ready_email interpolates title directly into both the HTML body and the subject.
+- The title comes from the processed video/job and can be derived from user-supplied filenames or remote video metadata.
+- send_autopilot_clips_email correctly applies html.escape to its corresponding video_title, showing the safe pattern exists elsewhere in the same module.
+
+Impact: a crafted video title can inject HTML into the clips-ready email. Most email clients block script execution, but markup injection can still alter the message, insert deceptive links or images, and make the service's transactional email a phishing surface.
+
+Fix direction: html.escape the title before HTML interpolation, keep the subject as plain text with control characters stripped and a sensible length limit, and test titles containing tags, quotes, ampersands and CR/LF. Apply the same escaping rule to every user-controlled value inserted into HTML email templates.
+
+### Privacy and branding reconciliation
+- The hosted frontend, landing page, SEO metadata, static assets and legal hub remain OpenShorts-branded and reference openshorts.app, while the GitHub repository and engineering docs are Clippy-branded. This may be intentional because the repo is a fork or because the hosted service still uses the OpenShorts identity, but it is not a complete product rebrand. Do not bulk-replace legal/operator identity, domains, support addresses or license attribution without an explicit product/legal decision.
+- dashboard/src/App.css is generic Vite starter CSS and is not imported by App.jsx or main.jsx in the inspected source. It appears to be an orphaned starter file; retain until the full import/build scan is complete.
+- Landing.jsx demo video references are live page content, so those assets are not eligible for deletion merely because they are demo media.
