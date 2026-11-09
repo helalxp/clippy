@@ -845,3 +845,82 @@ Fix direction: accept a job_id/clip_index only, load the caller-owned job and cl
 - The current renderer contract test checks dynamic composition metadata and fallback defaults, but no render integration, path containment, authorization, output retention or process-restart test is present in the inspected test file.
 
 Phase 5 remains partial. No Remotion bundle build, renderer test, actual video render, network-isolation test, queue stress test or restart recovery test was run in this remote source inspection.
+
+
+## Phase 7 checkpoint: Windows-native migration branch
+
+**Branch inspected:** windows-native-migration @ 653e3bc380dc. Its recursive tree contains 508 entries / 451 files and is not truncated. The branch is 14 commits ahead and 29 behind the then-current main snapshot at the time of comparison; it is not merged and must be audited as a separate product line.
+
+### Files read in this batch
+- AGENTS.md, CLIPPY_MASTER.md, desktop/README.md, desktop/FIRST_RUN_SETUP_CONTRACT.md.
+- All six Rust source/build files: build.rs, bootstrap.rs, downloader.rs, lib.rs, main.rs, supervisor.rs.
+- Cargo.toml, Cargo.lock metadata, tauri.conf.json, capabilities/default.json, runtime-manifest.json.
+- platform_compat.py, clippy_local_models.py.
+- dashboard/package.json, dashboard/src/config.js, dashboard/src/lib/api.js, dashboard/vite.config.js, dashboard/build-desktop.ps1.
+- desktop/build.ps1, desktop/build-tauri.ps1, render-service/run.ps1, render-service/start.ps1, render-service/start-renderer.bat.
+- render-service/src/paths.ts, render-service/src/server.ts, render-service/src/render-worker.ts.
+
+### F-05 refinement: runtime manifest path is hard-coded, and the manifest is not read at all — Stage 3B blocker
+
+The native Tauri command check_runtime constructs manifest_path as D:\openshorts\runtime-manifest.json, which is not portable. More importantly, bootstrap.rs never reads config.manifest_path or parses RuntimeManifest. get_status only checks whether Python, Node and FFmpeg executables exist and can run their version commands. verify_installation only checks existence and is not used by get_status. There is no manifest version/hash validation in the current code path.
+
+This is consistent with desktop/README.md saying the runtime-manifest/download/bootstrap flow is not implemented in Stage 3A. Treat it as a required Stage 3B implementation item, not as a functioning checksum-verification system. The fixed path is still a concrete bug in the scaffold's exposed check_runtime command.
+
+### F-06 refinement: runtime-manifest.json contains placeholder values — Stage 3B release blocker
+
+The Python, Node and FFmpeg SHA-256 fields are obvious non-hex placeholder strings; the FFmpeg release URL also contains a placeholder build identifier, and manifest_sha256 is the literal manifest_hash_placeholder. Because bootstrap currently does not consume the file and the downloader is not wired, these values are not currently being used to install code. They make the manifest unusable for a real installer and must be replaced by verified immutable artifact URLs and checksums before any Stage 3B release.
+
+### F-07 refinement: unsafe custom ZIP extractor is currently dormant, not on the active install path
+
+downloader.rs::Downloader::extract joins dest with entry.name() and writes files without canonical containment validation. This is a ZIP-slip hazard if that method is ever called with an untrusted archive. However, no call site for Downloader::extract or Downloader::new was found in the inspected native branch. bootstrap.rs::install_from_archive currently calls zip::ZipArchive::extract instead. Therefore F-07 is a latent unsafe helper, not a confirmed reachable exploit in the current Stage 3A flow. Remove the duplicate helper or harden it before wiring the downloader into bootstrap. The active zip crate extraction path still needs an explicit malicious-archive test before being relied upon.
+
+### F-18: Native supervisor kills only service parent processes, not their descendants — high reliability defect
+
+Evidence:
+- desktop/src-tauri/src/supervisor.rs starts Uvicorn and the Node renderer as separate Child processes.
+- The backend launches main.py job processes; the Remotion renderer launches browser/render worker processes.
+- stop_child only calls Child::kill() and Child::wait() on the direct process. Startup rollback paths use the same direct-child kill pattern.
+- No Windows Job Object, process group, descendant enumeration, or tree-kill mechanism is present in the inspected supervisor.
+
+On Windows, terminating a process with TerminateProcess does not automatically terminate its child processes. A stop/restart can therefore leave Python pipeline jobs, Chromium/Remotion helpers or other descendants running after the UI reports the backend/renderer stopped. Orphans can continue consuming CPU/GPU/RAM/disk, keep files locked, or interfere with the next startup.
+
+Fix direction: create each service tree inside a Windows Job Object configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, assign the process immediately after spawn, and close/terminate the job on stop and every startup-failure path. Ensure descendants cannot escape the job. Add a Windows integration test that starts a fake parent which spawns a child, stops the service, and verifies both PIDs exit.
+
+### F-19: Packaged desktop frontend build does not set the required API base URL — high functional blocker
+
+Evidence:
+- dashboard/src/config.js sets API_BASE_URL to import.meta.env.VITE_API_URL or an empty string. Empty means relative /api paths.
+- desktop/README.md says the packaged dashboard must use http://127.0.0.1:8000 because Tauri's packaged UI is not served by Vite's development proxy.
+- dashboard/build-desktop.ps1 sets VITE_API_URL to http://127.0.0.1:8000 before running npm run build.
+- However, tauri.conf.json beforeBuildCommand runs cd ../../dashboard && npm run build directly; it does not invoke build-desktop.ps1 or set VITE_API_URL.
+- desktop/build.ps1 and desktop/build-tauri.ps1 also run npm run build without setting VITE_API_URL.
+- dashboard/package.json has only dev, build, lint and preview scripts; there is no build:desktop script that injects the URL.
+
+The normal Tauri build therefore embeds an empty API base URL unless the developer happened to export VITE_API_URL in the parent environment. The packaged WebView then sends relative /api requests to its Tauri origin rather than the local FastAPI server at 127.0.0.1:8000. This contradicts the documented desktop contract and is likely to make the packaged UI unable to reach its backend.
+
+Fix direction: add an explicit build:desktop script or change beforeBuildCommand to invoke a checked-in script that sets VITE_API_URL and fails if it is absent; use the same path in every supported packaging command. Inspect the final built bundle for the literal loopback API base and test an installed NSIS build.
+
+### F-20: Desktop build scripts compile the Rust binary but do not build the NSIS installer — medium packaging mismatch
+
+Evidence:
+- tauri.conf.json declares NSIS as the bundle target.
+- desktop/README.md instructs developers to use cargo tauri build to produce the installer.
+- desktop/build.ps1 and desktop/build-tauri.ps1 call cargo build, not cargo tauri build. They therefore compile the crate but do not invoke Tauri's bundler or produce the documented NSIS installer.
+- Both scripts hard-code D:\openshorts paths, so they are not clone-location portable.
+
+Fix direction: use cargo tauri build (or the supported tauri-cli invocation) in the packaging script, resolve the repository root from $PSScriptRoot, and verify the expected installer artifact exists before printing success. Keep a separate cargo build command if a fast compile-only workflow is desired.
+
+### Native branch render-service comparison
+- The Windows migration branch has already added render-service/src/paths.ts. Its resolveJobOutputDirectory validates jobId against a strict safe-character pattern and checks containment beneath OUTPUT_DIR; render-worker.ts uses it. This addresses the main-branch F-16 path traversal in this branch.
+- The same paths.ts validates path segments when translating /videos or /output URLs, rejecting decoded dot segments, slashes and NUL bytes.
+- F-17 is not closed by that helper: resolveRendererVideoUrl returns non-/videos and non-/output URLs unchanged, so the renderer can still fetch arbitrary caller-supplied URLs. server.ts still accepts unbounded positive duration/fps/dimensions and has no authentication or queue cap.
+- The branch renderer defaults to binding 127.0.0.1, which is appropriate for the desktop shell. Verify that Docker deployment explicitly sets HOST=0.0.0.0 and that host port exposure is intentional; loopback-only desktop mode does not fix the main Docker deployment.
+- render-service/run.ps1, start.ps1, start-renderer.bat and the desktop build scripts contain hard-coded D:\openshorts paths. These are developer convenience scripts but fail when the repository is cloned elsewhere.
+
+### Native branch documentation and implementation alignment
+- AGENTS.md directs agents to CLIPPY_MASTER.md rather than the new main-branch CLIPPY_REPO_AUDIT.md. The branch's CLIPPY_MASTER.md is a 556-line branch-local handover and should be reconciled before this branch is merged or used as the main development branch.
+- The native README correctly labels Stage 3A as a scaffold and explicitly says runtime download, signed/checksummed manifest, resumable installer UI, payload updater and production NSIS packaging are not implemented. Preserve this status; do not describe the branch as an end-user-ready installer.
+- BootstrapStatus reports GPU only via nvidia-smi. The AMD/Intel vendor branches are unreachable with nvidia-smi output; the current implementation is NVIDIA/CUDA detection only. Align the UI/documentation with the actual supported accelerator set or add vendor-specific detection.
+- The first-run contract expects embedded Python packages, FFmpeg, Node, Remotion browser runtime and optional GPU components, but bootstrap currently only checks Python/Node/FFmpeg executables. The full dependency installation/health checks are still Stage 3B work.
+
+Phase 7 remains partial. No Windows cargo build, Tauri dev run, NSIS packaging, Job Object test, clean-machine first-run install, or installed-app API smoke test was executed. Branch-specific test files and remaining scripts/configs still require review.
