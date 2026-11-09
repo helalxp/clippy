@@ -2176,3 +2176,29 @@ Evidence:
 Impact: operators may believe the documented RATE_LIMIT_* variables protect authentication, processing and MCP endpoints when the settings are ignored. This leaves API endpoints more exposed to bursts and makes deployment security depend on an external proxy/WAF that is not described as mandatory.
 
 Fix direction: either implement and test the advertised shared rate-limit middleware (with trusted client-IP resolution and a shared store in multi-replica cloud mode), or remove the dead configuration claims and document exactly which routes have local best-effort limits. Add CI tests that prove each advertised environment variable changes actual request behavior.
+
+
+### F-74: Cloud Compose interpolates the raw Postgres password into a database URL without URL-encoding — medium deployment blocker for valid passwords
+
+Evidence:
+- docker-compose.cloud.yml correctly requires POSTGRES_PASSWORD and passes the raw value to the Postgres container.
+- The same raw value is interpolated into `DATABASE_URL=postgresql+asyncpg://openshorts:${POSTGRES_PASSWORD}@db:5432/openshorts`.
+- Passwords containing URL-reserved characters such as `@`, `:`, `/`, `?`, `#` or `%` are not safely represented in that URL unless percent-encoded. For example, `@` is parsed as the user-info/host separator, so the backend can fail to connect even though Postgres initialized successfully with the literal password.
+- No Compose config test exercises passwords containing reserved characters.
+
+Impact: operators who generate a strong random password containing common special characters can start Postgres successfully but leave the backend unable to connect. This is a confusing first-deploy failure and can encourage weakening the password to make the stack start.
+
+Fix direction: construct DATABASE_URL from a separately encoded password or use a supported SQLAlchemy URL assembly mechanism at application startup. Alternatively require a URL-safe generated password and validate/document that constraint explicitly. Add a compose/config test with `@:/?#%` in the password and verify the backend connects.
+
+### F-75: Production image builds resolve several critical dependencies from moving upstream heads — medium reproducibility and supply-chain risk
+
+Evidence:
+- Dockerfile clones bgutil-ytdlp-pot-provider with `--depth 1` from the default branch and builds it without a commit/tag pin.
+- The same Dockerfile runs `pip install --upgrade --pre yt-dlp[default]` and installs bgutil-ytdlp-pot-provider without a version pin, despite requirements.txt listing yt-dlp without a version.
+- render-service/Dockerfile and remotion dependencies use `npm install` with caret ranges and no committed package-lock.json files in those directories. Their dependency graph can change between builds without a source commit.
+- The dashboard does have package-lock.json and CI uses npm ci, but dashboard/Dockerfile uses npm install rather than npm ci.
+- CI does not build the backend Docker image, GPU image, renderer Docker image or native Windows package, so these moving dependencies are not exercised by the test workflow.
+
+Impact: two builds from the same Git commit can contain different yt-dlp, bgutil, Remotion, renderer or transitive dependency versions. This can introduce extraction/render regressions or a compromised upstream dependency without any repository diff, and makes production incidents difficult to reproduce.
+
+Fix direction: pin bgutil to a reviewed commit, pin yt-dlp to a tested release or controlled update channel, commit lockfiles for render-service and Remotion, use npm ci in production builds, and record image digests/build provenance. Keep a scheduled dependency-update PR if yt-dlp must move quickly. Add CI image builds and a small YouTube-extractor/Remotion smoke test before promotion.
