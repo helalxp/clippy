@@ -2245,3 +2245,17 @@ Fix direction: define a per-operation FFmpeg timeout policy based on source dura
 - Latest run for current audit-only HEAD 2e4b3a8 was queued when checked; the previous completed run is the authoritative test result recorded above.
 - The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 108 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation.
 - Source reading has materially expanded across cloud auth/billing/storage, MCP/OAuth, SaaSShorts, Thumbnail Studio, upload slots, job lifecycle/cleanup, renderer/Remotion, Docker/CI configuration and the Windows-native branch. The audit is still **IN PROGRESS**; not every tracked source file has been read line by line, and no local runtime, Windows WebView, Docker image, or integration build has been executed.
+
+
+### F-76: Early-audio optimization transcribes the full source before the metered source cap is applied — high metering/compute bypass
+
+Evidence:
+- main.py enables use_early when EARLY_AUDIO is on and MAX_SOURCE_MINUTES is empty. The guard does not check SOURCE_CAP_MINUTES, which is the variable used for whole-video managed metering.
+- For a URL job, download_youtube_video starts an audio-only download in parallel and calls _on_audio(audio_path, audio_duration). _early_work then calls transcribe_video(audio_path) and get_viral_clips using the full audio duration.
+- The main pipeline applies SOURCE_CAP_MINUTES only after download_youtube_video returns. If cap_source_duration rewrites the source, it sets early['invalid']=True and discards the early transcript, then later transcribes the capped video again.
+- download_youtube_video only uses ranged downloads when the source is far beyond the cap threshold. For a source that exceeds the reserved duration but falls below that threshold, the early audio download still contains the full source.
+- The early thread has already performed the full transcription/analysis before the later invalid flag is set, so the compute is consumed even though the result is discarded. The job's managed reservation covers only the capped duration.
+
+Impact: a managed whole-video job can perform a full-length Whisper transcription and AI clip analysis on source minutes beyond the amount reserved/charged, then repeat transcription on the capped video. This creates unmetered model/GPU work and can materially increase compute cost for long sources.
+
+Fix direction: disable EARLY_AUDIO whenever either MAX_SOURCE_MINUTES or SOURCE_CAP_MINUTES is set, unless the audio download itself is guaranteed to use the exact reserved range and the transcript is proven to cover only that range. Prefer passing a shared bounded range to both audio and video downloads. Add tests for a source moderately longer than the cap (below the current range threshold) and assert no early full-source transcription starts and total transcribed duration never exceeds the reserved cap.
