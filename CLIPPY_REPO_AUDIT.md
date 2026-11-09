@@ -1954,3 +1954,17 @@ Evidence:
 Impact: a user can switch Autopilot off or request account deletion while a publish batch is in flight, yet additional clips may still be scheduled to their connected social accounts. This violates the expected user control boundary and can publish content after the user believes automation has stopped.
 
 Fix direction: persist per-run/per-clip publish state and an explicit cancellation flag/lease. On disable or account deletion, atomically mark pending publish work cancelled before removing settings/profile rows; have _publish re-check that state before every external upload/schedule request. Track background tasks by user/run so the current process can cancel promptly, while the durable flag handles restarts and multi-instance deployments. Add tests that disable Autopilot and delete an account between two clip uploads and assert no subsequent provider request is made.
+
+
+### F-70: Container and Windows runtime definitions pin Node.js to end-of-life major versions — high supply-chain/security maintenance risk
+
+Evidence:
+- dashboard/Dockerfile uses node:18-alpine for both development and production builds.
+- render-service/Dockerfile uses node:18-bookworm-slim for the Remotion renderer.
+- The Windows runtime-manifest.json declares Node.js 20.11.0 for the managed desktop runtime.
+- The official Node.js release schedule lists Node 18 as EOL on 2025-04-30 and Node 20 as EOL on 2026-04-30. Both are unsupported as of this audit date (2026-11-09), and EOL releases no longer receive upstream security fixes.
+- Official release schedule: https://nodejs.org/en/about/previous-releases
+
+Impact: the frontend build/dev container, renderer container and planned Windows runtime all rely on unsupported Node major versions. Newly disclosed Node runtime vulnerabilities will not be patched on those release lines, and dependency ecosystems may increasingly drop compatibility. This is a production security and maintenance concern, not only a version-number cleanup.
+
+Fix direction: move all Node build/runtime images and the managed Windows runtime to a supported LTS line (Node 22 or 24 after Remotion/Tauri/Vite compatibility testing). Pin a current patch release or digest, update the runtime manifest and lockfiles, and add CI that fails when a configured Node major is EOL. Do not use the placeholder manifest as a production source until its version, URL, size and checksum are real and verified.
