@@ -1444,3 +1444,16 @@ Evidence:
 Impact: launching the packaged Tauri application opens the WebView but does not start either local service. The app cannot process clips or render videos. The registered commands are inert until a UI integration or Tauri setup hook invokes them. The README's description of a local-process supervisor is therefore ahead of the actual startup wiring.
 
 Fix direction: choose one explicit lifecycle owner. Prefer a Tauri setup/on-run hook that calls the supervisor and emits structured startup progress, or add a dashboard startup bridge that calls check_runtime, starts services and polls status. Ensure stop is called on app exit and startup failures are visible. Add a Windows integration test that launches the built app, verifies backend and renderer PIDs/health, processes a tiny fixture, closes the app, and verifies the complete process tree exits.
+
+
+### F-53: Native runtime downloader does not enforce the manifest's declared size — high disk-exhaustion risk when activated
+
+Evidence:
+- desktop/src-tauri/src/downloader.rs::Downloader::download uses RuntimeComponent.size_bytes only to decide whether to send a Range header and to calculate a progress percentage.
+- The streaming loop writes every byte returned by the server and never stops when total_bytes exceeds size_bytes. It does not validate Content-Length or Content-Range against the manifest.
+- SHA-256 is checked only after the entire response has been written to disk, so a malicious, compromised or misconfigured distribution endpoint can send an arbitrarily large body before the checksum rejects it.
+- The helper is not yet wired into the Stage 3A bootstrap, so this is a latent installer risk rather than a currently reachable production endpoint. It must be fixed before Stage 3B activates downloads.
+
+Impact: once the downloader is connected to first-run setup, a compromised URL or unexpectedly large response can fill the user's disk. The manifest's size_bytes field gives the UI an apparent bound but does not enforce one.
+
+Fix direction: abort the stream immediately if total_bytes exceeds the declared size or a separately configured hard maximum; validate the final byte count equals size_bytes; validate Content-Range starts at the requested offset before appending; delete corrupt partials after checksum/length mismatch; and add tests for oversized, truncated, wrong-range and server-ignores-Range responses.
