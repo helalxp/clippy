@@ -2221,3 +2221,16 @@ Evidence:
 Impact: a transient R2 outage, timeout, permission error or process restart during archive can turn a successfully processed and paid job into permanent clip loss after the local retention window. The UI and billing ledger still say the job completed, so the user may discover the loss only when reopening history later.
 
 Fix direction: persist an archive-pending job record before marking the managed job fully durable; retry idempotently until every clip, clean twin and project state is confirmed in R2. Keep local files while archive state is pending, and only start the retention clock after durable archive confirmation. Track edit-archive tasks in the same durable queue instead of bare asyncio.create_task. Add tests for R2 500/timeouts, partial object upload, backend restart mid-archive and cleanup refusing to delete an archive-pending directory.
+
+
+### F-75: Several FFmpeg subprocess paths have no execution timeout — medium stuck-job/API-thread risk
+
+Evidence:
+- subtitles.py's subtitle-burn path invokes subprocess.run through gpu_decode.run with stderr=PIPE but no timeout. The /api/subtitle route awaits this work in an executor and has no endpoint-level deadline for the FFmpeg process.
+- main.py process_video_to_vertical extracts audio and performs the final mux with subprocess.run(..., stderr=PIPE) and no timeout. These are inside the main job subprocess and can keep the job active indefinitely if FFmpeg stalls.
+- reframe_v2.py's full-frame trajectory decoder and active_speaker.py's mouth-activity decoder use Popen pipes and wait/read loops without a process deadline. The sparse trajectory path kills the process in finally, but the full-frame path only waits for exit.
+- Other code paths already use explicit 600–1800 second timeouts (for example recut._run_ffmpeg and reframe_v2._run), showing the missing bounds are inconsistent rather than an intentional global policy.
+
+Impact: a stuck/corrupt media decoder or encoder can hold an API worker thread or main job process indefinitely. In the job pipeline this can consume a concurrency slot and reservation; in the subtitle API it can leave the request and executor thread occupied with no bounded recovery.
+
+Fix direction: define a per-operation FFmpeg timeout policy based on source duration and stage, apply it consistently to every subprocess.run/Popen path, and ensure Popen readers are closed and processes killed/reaped on timeout or cancellation. Add tests with a fake FFmpeg process that never exits and assert each route/job fails within its configured deadline and releases its reservation/slot.
