@@ -2125,3 +2125,16 @@ Evidence:
 Impact: longer or slower source videos can hang during the frame-processing stage, leaving a Clippy job stuck, consuming a worker slot and retaining its reservation until the stuck-reservation sweeper intervenes (F-60). This can appear as an indefinite cell/job hang with no new logs.
 
 Fix direction: drain stderr continuously in a dedicated thread/async reader, or route it to a bounded log file/DEVNULL and use -nostats -loglevel error. Add a timeout and ensure the encoder is terminated and reaped on exceptions or broken pipes. Add a regression test with a fake FFmpeg child that writes more than a pipe buffer to stderr while reading stdin; the frame loop must complete or fail within a bounded time.
+
+
+### F-73: Host-wide ASR slot acquisition can wait forever behind a hung transcription — medium availability/queue-stall risk
+
+Evidence:
+- transcribe_backends.host_asr_slot.__enter__ polls every second in an unconditional while True until one of ASR_HOST_SLOTS file locks becomes available.
+- The context manager has no maximum wait, job deadline, cancellation event or stale-holder recovery. flock/msvcrt locks are released when the process exits, but a live process stuck inside model inference retains its slot indefinitely.
+- main.transcribe_video and the Thumbnail Studio transcription path acquire this host-wide lock. The separate subtitle transcription path bypasses it (F-46), so the intended global GPU cap is also incomplete.
+- The job runner does not impose a bounded timeout on the entire main.py process, so a transcription that never returns can pin a slot and its job indefinitely.
+
+Impact: one hung GPU/ASR process can occupy a host slot forever. If all configured slots become stuck, every subsequent job that reaches transcription waits indefinitely, consuming queue capacity and potentially retaining reservations until the three-hour metering sweeper intervenes (F-60).
+
+Fix direction: use a bounded, cancellation-aware wait for slot acquisition and surface a retryable capacity error when the deadline expires. Add a lease/heartbeat or supervisor watchdog for the holder so a genuinely wedged inference process can be terminated and the lock released. Add tests for cancellation while waiting, timeout with all slots occupied, and recovery after killing a holder process.
