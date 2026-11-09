@@ -924,3 +924,48 @@ Fix direction: use cargo tauri build (or the supported tauri-cli invocation) in 
 - The first-run contract expects embedded Python packages, FFmpeg, Node, Remotion browser runtime and optional GPU components, but bootstrap currently only checks Python/Node/FFmpeg executables. The full dependency installation/health checks are still Stage 3B work.
 
 Phase 7 remains partial. No Windows cargo build, Tauri dev run, NSIS packaging, Job Object test, clean-machine first-run install, or installed-app API smoke test was executed. Branch-specific test files and remaining scripts/configs still require review.
+
+
+### F-21: OAuth authorization-code redemption is not serialized as single-use — medium, confirmed race
+
+Evidence:
+- cloud/mcp_oauth.py around lines 315-351: /oauth/token selects OAuthCode by code_hash, checks used_at, validates client/redirect/PKCE, then sets used_at and inserts a new ApiKey in the same session.
+- The select does not use SELECT FOR UPDATE and there is no conditional UPDATE ... WHERE used_at IS NULL.
+- cloud/models.py defines code_hash as the primary key and used_at as a nullable timestamp; no separate atomic-consumption constraint exists.
+- tests/test_mcp_oauth.py covers PKCE and input rules but explicitly says the database-backed token exchange is exercised manually after deploy; there is no concurrent single-use redemption test.
+
+Two concurrent token requests using the same valid code and verifier can both read used_at=NULL before either commits, then each mint a long-lived API key. This violates the documented single-use code contract and can create multiple persistent credentials from one consent grant. Both credentials belong to the same user/client, so this is primarily a credential proliferation and replay-control defect rather than a cross-user privilege escalation.
+
+Fix direction: lock the OAuthCode row with SELECT FOR UPDATE inside an explicit transaction, or atomically update used_at with a WHERE used_at IS NULL and require rowcount == 1 before minting the API key. Add a concurrent redemption test proving exactly one request succeeds and exactly one ApiKey row is created.
+
+### F-22: Account erasure cannot find thumbnail files after a backend restart — high privacy/erasure defect
+
+Evidence:
+- app.py around lines 2321-2385: _purge_local_jobs_for_user states that thumbnail session ownership is stored only in thumbnail_sessions memory. It skips the entire output/thumbnails directory while scanning .owner sidecars.
+- The same function deletes a thumbnail directory only by iterating the in-memory thumbnail_sessions map.
+- app.py cleanup task explicitly skips the thumbnails directory; its own comment says thumbnails are not removed by the normal one-hour cleanup sweep.
+- thumbnail.py writes generated images and person_reference.jpg under output/thumbnails/<session_id>/ but no .owner sidecar is written there.
+- app.py mounts /thumbnails as public StaticFiles, with no authentication guard (F-11).
+
+After a backend restart, thumbnail_sessions is empty and there is no durable owner marker. Account deletion can no longer associate those generated images and face-reference crops with the deleted user, so it leaves them on disk. Because the directory is publicly served and excluded from normal cleanup, the files may remain accessible indefinitely unless an operator manually removes them. This is separate from the public-mount issue: fixing access control alone does not satisfy deletion/retention.
+
+Fix direction: write an owner sidecar/metadata record for each thumbnail session and make startup recovery/cleanup enumerate it; account erasure must remove the session directory and its source upload using that durable owner record. Apply an explicit retention policy to orphaned thumbnail directories. Add a test that creates a session, simulates a restart by clearing memory, deletes the account, and verifies every thumbnail/frame/reference file is gone and no URL serves it.
+
+### F-23: Stripe webhook event deduplication occurs after side effects — medium, confirmed concurrency/idempotency gap
+
+Evidence:
+- cloud/billing.py around lines 362-410: stripe_webhook checks whether StripeEvent exists, calls handle_event, and only afterward inserts the event row with ON CONFLICT DO NOTHING.
+- The initial existence check and final insert are separate transactions; concurrent deliveries of the same event can both pass the check and execute handle_event.
+- invoice.paid invokes _notify_invoice_paid and _track_invoice_revenue, which send an admin alert and an analytics revenue event without their own event/invoice deduplication in the inspected functions.
+- charge.refunded also emits an analytics revenue event; duplicate delivery can mirror the same refund more than once.
+- Some state handlers have their own guards (subscription last_event_at, top-up stripe_session_id check), so this does not mean every repeated event double-credits a balance.
+
+Impact: duplicate or concurrent webhook delivery can produce duplicate payment alerts and duplicate revenue/refund analytics even when the subscription/top-up database state is protected. A failure after external side effects but before StripeEvent insertion can also cause the side effects to repeat on Stripe retry.
+
+Fix direction: implement an inbox/event-processing state machine with a unique event claim before side effects, retryable processing state, and idempotency keys for outbound analytics/alerts. Keep state changes and event claim coordinated; do not simply mark processed before work and lose events on crashes. Add concurrent duplicate-delivery and failure-after-side-effect tests.
+
+### Phase 4/6 cloud coverage update
+- Authentication, API-key management, magic-link issuance/verification, core quota reservation, account erasure, R2 storage, project restore/history, Stripe checkout/webhook, MCP OAuth, social profiles and autopilot were inspected at the function/route level with selected implementation sections read.
+- Billing webhook signatures, top-up duplicate checks, subscription event ordering, row locks in metering/subscription updates, PKCE S256, registered redirect URI checks and user-scoped history were verified as positive controls.
+- Still open: detailed billing cancellation/retention paths, email deliverability and unsubscribe security, lifecycle scheduling/idempotency, alert/admin access, marketing/onboarding, proxy ledger accounting, autopilot crash/retry semantics, MCP protocol authorization on every tool, and database migration tests.
+- No live Stripe, PostgreSQL, Upload-Post, OAuth-client, R2, or concurrency integration test was run.
