@@ -2110,3 +2110,18 @@ Evidence:
 Impact: in the native packaged app, WebView2 can block the style attributes used by Clip Editor, Reframe Editor and subtitle/watermark previews. Static Tailwind classes may still render, but dynamic timeline positions, crop boxes, colors and layout states can disappear or become incorrect. This is not proven in a packaged WebView run yet, so keep severity medium pending a direct test.
 
 Fix direction: run the packaged app with CSP violation logging and add a WebView2 smoke test covering the clip editor and reframe/subtitle preview. If confirmed, permit style attributes narrowly with `style-src-attr 'unsafe-inline'` while keeping script-src strict, or refactor dynamic styles to safe CSS classes/custom properties under an explicitly tested CSP. Do not broadly add `unsafe-inline` to script-src.
+
+
+### F-72: Raw-frame FFmpeg encoder can deadlock on its undrained stderr pipe — high pipeline hang defect
+
+Evidence:
+- main.py process_video_to_vertical starts FFmpeg with subprocess.Popen(stdin=PIPE, stdout=DEVNULL, stderr=PIPE).
+- The FFmpeg command does not include -nostats or -loglevel error, so normal FFmpeg progress/statistics are written to stderr during encoding.
+- The frame loop writes raw BGR frames to encoder.stdin. The code does not read encoder.stderr concurrently; it closes stdin only after the entire frame loop, then calls encoder.stderr.read(), and only after that calls encoder.wait().
+- If FFmpeg's stderr pipe buffer fills before the frame loop ends, FFmpeg blocks while writing progress output and stops consuming stdin. The Python frame loop then blocks in encoder.stdin.write. Neither side can make progress because the parent does not drain stderr until after the write loop finishes.
+- There is no timeout on this Popen process or on the subsequent wait. The main job worker waits for the main.py process, so the job can remain processing indefinitely and hold its quota reservation.
+- bin/ffmpeg only adds decoder/filter thread caps; it does not disable stats or redirect stderr. No test exercises this raw-pipe path with enough output to fill stderr.
+
+Impact: longer or slower source videos can hang during the frame-processing stage, leaving a Clippy job stuck, consuming a worker slot and retaining its reservation until the stuck-reservation sweeper intervenes (F-60). This can appear as an indefinite cell/job hang with no new logs.
+
+Fix direction: drain stderr continuously in a dedicated thread/async reader, or route it to a bounded log file/DEVNULL and use -nostats -loglevel error. Add a timeout and ensure the encoder is terminated and reaped on exceptions or broken pipes. Add a regression test with a fake FFmpeg child that writes more than a pipe buffer to stderr while reading stdin; the frame loop must complete or fail within a bounded time.
