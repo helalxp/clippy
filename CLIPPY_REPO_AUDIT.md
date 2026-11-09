@@ -1289,3 +1289,28 @@ Positive controls observed:
 - Stripe subscription upserts use last_event_at ordering to reject stale state changes; top-ups have a unique Stripe session ID.
 - Magic-link raw tokens are not stored, are hashed, expire, and are marked used under a row lock at verification.
 - Schema bootstrap uses create_all plus explicit additive ALTER/INDEX statements. This is intentionally additive-only and not a general migration system; any future column/type/constraint change needs a controlled migration rather than relying on create_all.
+
+
+### F-40: Autopilot publishing is launched as an in-memory background task with no restart recovery — high reliability gap
+
+Evidence:
+- cloud/autopilot.py on_job_finished first changes the AutopilotRun row from PROCESSING to COMPLETED using a guarded database UPDATE.
+- After that transaction commits, it emails the user and starts _publish via asyncio.create_task; the task is held only in process-local _bg_tasks.
+- _publish uploads/schedules each clip and only writes posted_count/reason after the whole loop finishes.
+- No durable publish-task table, per-clip delivery state, outbox record, startup recovery query, or retry worker was found for this path.
+- If the process exits after the run is marked COMPLETED but before _publish starts or finishes, the durable row remains completed with posted_count at zero/partial and there is no restart path that resumes the remaining uploads.
+- The existing Autopilot tests cover selection, ranking, scheduling and outcome parsing, but do not simulate a process restart between completion and publish, nor a mid-batch failure/restart.
+
+Impact: a completed Autopilot run can silently fail to publish some or all clips after a deploy, crash or worker restart. The user has already received the "Autopilot clipped your new video" email and the run appears completed, so the missing posts may not be obvious.
+
+Fix direction: persist publish jobs and per-clip states before acknowledging completion; use a transactional outbox or durable queue with idempotency keys per run/clip/platform; have startup workers reclaim pending/expired leases and resume safely. Keep Upload-Post idempotency or query remote post state before retrying to avoid duplicate posts. Add restart and partial-failure integration tests.
+
+### Remaining cloud module coverage
+- Full-file structural and route review now also completed for cloud/autopilot.py, social_profiles.py, api_keys.py, marketing.py, emails.py, alerts.py, analytics.py, digest.py, onboarding.py, proxy_ledger.py and managed_keys.py.
+- Autopilot claims are protected by a unique user/video constraint and completion uses a guarded UPDATE, which are positive controls. Publishing itself is not durable (F-40).
+- Social connection return targets are selected from a closed allowlist; client input cannot supply an arbitrary redirect URL.
+- API keys are high-entropy random values; only hashes are stored, ownership is checked before revocation, and raw values are shown only at creation.
+- Upload-Post profile usernames are derived from the user UUID and managed profile tokens are scoped to one profile before history lookup.
+- Marketing unsubscribe tokens are HMACs bound to the user ID; however GET still performs the unsubscribe state change (F-27).
+- Email HTML escaping is inconsistent: Autopilot titles are escaped but clips-ready titles are not (F-29). Other templates and every dynamic URL still need a systematic sink-by-sink review.
+- Cloud social, Autopilot, billing, account and OAuth route ownership checks were traced at the inspected entry points. Full call-graph tracing from all dashboard actions and all webhook event types remains outstanding.
