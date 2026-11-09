@@ -1249,7 +1249,7 @@ Evidence:
 - Its own comment explicitly notes that Uvicorn resolves this from X-Forwarded-For under the wildcard trust setting and a client can forge it.
 - The rate limit also counts by normalized email, so the IP bypass does not remove the per-email cap; it does permit an attacker to rotate the forwarded IP value and avoid the network-wide cap across many email addresses.
 
-Impact: a bot can send a distinct X-Forwarded-For value on every request and evade the per-IP throttle, increasing email/MX verification load and mail-sending abuse. This is a defense-in-depth and service-abuse issue, not a way to bypass the per-email rate limit for one address.
+Impact: a bot can send a distinct X-Forwarded-For value on every request and evade the per-IP throttle, increasing email/MX verification load and mail-sending abuse. The same spoofable request.client.host is used by the first-video free-overflow grant's per-network fingerprint (app.py reserve_process_minutes), so an attacker operating multiple free accounts can rotate the forwarded IP to evade the one-first-video-per-network restriction as well. This is a defense-in-depth/service-abuse issue; it does not bypass the per-email limit for one address or the per-user first-video guard.
 
 Additional configuration defect: .env.example tells operators to set FORWARDED_ALLOW_IPS, but the Dockerfile hard-codes --forwarded-allow-ips '*' and never reads that variable. There is no rate_limit.py in the repository tree despite the .env.example rate-limit section. Operators therefore cannot apply the documented forwarded-IP fix by setting the advertised environment variable.
 
