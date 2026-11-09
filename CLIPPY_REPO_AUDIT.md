@@ -1963,3 +1963,17 @@ Fix direction: set VITE_API_URL in the actual Tauri beforeBuildCommand or use a 
 - Positive controls: renderer binds to loopback by default on native installs; Docker explicitly opts into 0.0.0.0; Windows subprocess priority avoids POSIX preexec_fn; Windows file locking has an msvcrt path; renderer path helper now rejects encoded traversal and unsafe job IDs.
 - Still missing: clean-machine build/install/runtime tests; managed FFmpeg/FFprobe PATH and upload path wiring; process-tree shutdown; bootstrap downloads/manifest validation; persistent per-user settings and model directory verification; installer signing/update/repair; native GPU detection beyond nvidia-smi; CI build on Windows.
 - Branch is not ready to merge as a complete native migration. Phase 7 remains partial.
+
+
+### F-69: In-flight Autopilot publishing is not cancelled when a user disables Autopilot or deletes the account — high consent/control race
+
+Evidence:
+- cloud/autopilot.on_job_finished reads the user's AutopilotSettings, resolves the Upload-Post profile and launches _publish as an asyncio.create_task.
+- _publish receives a snapshot of profile, items, platforms and preferences, then iterates and calls _upload_clip without re-checking that the user still exists, Autopilot remains enabled, autopublish is still enabled, or the run is still valid.
+- The task is tracked only in the process-local _bg_tasks set, not in a per-user task registry. The settings update/disable route does not cancel or invalidate a running publish task.
+- cloud/account.delete_account checks reserved UsageLedger rows, but a job that has completed and committed its reservation is no longer considered in flight. The account-erasure path deletes AutopilotSettings and the remote Upload-Post profile, but it does not cancel _bg_tasks or revoke a durable publish lease before deletion.
+- If the task has already captured the profile/prefs, it can continue attempting scheduled uploads after the user disables Autopilot or starts account deletion. If the remote profile deletion fails (best-effort behavior in F-68), the task may still successfully schedule posts.
+
+Impact: a user can switch Autopilot off or request account deletion while a publish batch is in flight, yet additional clips may still be scheduled to their connected social accounts. This violates the expected user control boundary and can publish content after the user believes automation has stopped.
+
+Fix direction: persist per-run/per-clip publish state and an explicit cancellation flag/lease. On disable or account deletion, atomically mark pending publish work cancelled before removing settings/profile rows; have _publish re-check that state before every external upload/schedule request. Track background tasks by user/run so the current process can cancel promptly, while the durable flag handles restarts and multi-instance deployments. Add tests that disable Autopilot and delete an account between two clip uploads and assert no subsequent provider request is made.
