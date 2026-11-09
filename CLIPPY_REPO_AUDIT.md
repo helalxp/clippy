@@ -1556,3 +1556,28 @@ Evidence:
 Impact: an unauthenticated caller can enqueue many concurrent high-resolution/long-duration renders and exhaust the renderer container's CPU, RAM, browser processes or output disk. Even ordinary completed renders accumulate permanently in renderJobs, causing process memory usage to grow over time.
 
 Fix direction: authenticate renderer requests with a backend-only service credential and authorize job ownership; put renders behind a bounded queue and semaphore; validate maximum durationInFrames, width, height, fps and total pixel-frames; enforce execution timeout/cancellation; and expire terminal job records after a defined TTL. Add stress tests proving a burst is queued/rejected within a fixed concurrency budget and that old records are pruned.
+
+
+### F-42: Public renderer accepts arbitrary video URLs and makes Chromium fetch them — high SSRF / internal-network reachability risk
+
+Evidence:
+- render-service/src/server.ts accepts POST /render without authentication and validates props.videoUrl only as a string; it does not require a local /output path, HTTPS host allowlist or signed media capability.
+- render-service/src/render-worker.ts passes that URL to Remotion's ShortVideo composition, whose @remotion/media Video component loads it in Chromium during render.
+- The renderer container is attached to the same Compose network as the backend and other services. The public render endpoint therefore lets a caller ask a browser process inside the trusted service network to request arbitrary URLs.
+- The backend's security_utils.py SSRF checks do not protect direct requests to the renderer service.
+- The same renderer exposes rendered output through unauthenticated /output static serving (F-03), so any successful internal-media fetch can potentially be reflected into an output file that the caller can retrieve.
+
+Impact: a reachable unauthenticated caller may use the renderer as an internal-network request primitive, potentially reading internal media or probing services reachable from the container. Exact data exfiltration depends on what internal endpoints expose and what Chromium can decode as video, so the reachability is confirmed but exploitability against specific internal services needs a controlled proof of concept.
+
+Fix direction: authenticate renderer requests with a service-to-service credential; accept only server-generated relative paths under an authorized job directory or short-lived signed media URLs; reject arbitrary schemes/hosts; disable Chromium access to metadata/link-local/private networks at the container network layer; and avoid publishing the renderer port to the public host. Add tests for localhost, RFC1918, link-local, file:, data:, redirects to private addresses and an approved local media URL.
+
+### Phase 5: Renderer and Remotion checkpoint
+- Read all seven render-service source/config/test files and all ten Remotion source/config files.
+- Confirmed renderer's process-local renderJobs Map loses status on restart; jobs have no persistence, durable queue, cancellation API, retry policy or recovery path.
+- Confirmed no concurrency semaphore, render queue limit, per-user quota or execution timeout around executeRender/renderMedia. Combined with the public unauthenticated endpoint this creates a straightforward CPU/RAM/disk exhaustion surface (F-03/F-42).
+- Renderer request schema validates only shallow numeric/string types. Nested subtitles/hook/effects are z.any at the HTTP boundary; the Remotion composition schema defines stricter shapes, but does not impose practical maximums for caption count/text length, effect segment count, hook text or overall render duration.
+- The output path uses jobId directly in path.join(outputDir, jobId, ...); main has no safe containment helper (F-16). The migration branch adds a containment helper, but still needs strict server-side job ownership.
+- Remotion metadata has a calculateMetadata contract test, but the test is not run by the main CI workflow. No tests cover subtitle timing/rendering, RTL layout, hook styling, effect interpolation, media fetch restrictions, concurrent renders, process restart, or output cleanup.
+- The hook Zod schema omits the optional style field present in HookConfig and consumed by HookOverlay. The HTTP schema accepts hook as z.any. This is a schema/UI-contract drift; confirm whether the Remotion player or any schema-driven editor strips unknown fields before classifying it as a visible rendering defect.
+- The subtitle grouping helper assumes captions arrive in chronological order; no sorting or validation enforces that assumption. Pipeline output currently appears to be chronological, but a malformed or third-party transcript can create out-of-order blocks. Add a sort/validation contract test at the API boundary.
+- Phase 5 source reading is complete for the current render-service/Remotion files, but runtime tests and end-to-end integration verification remain outstanding.
