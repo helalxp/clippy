@@ -1850,3 +1850,17 @@ Evidence:
 Impact: an object-level permission error, legal hold, malformed key or provider-side partial failure can leave some user videos/thumbnails in R2 while the account is reported as deleted. The deletion audit count can falsely claim those objects were removed. Because DB ownership rows are then deleted, the remaining objects may become permanently orphaned and harder to locate for erasure requests.
 
 Fix direction: inspect every DeleteObjects response, collect and retry transient per-key failures, and raise if any key remains undeleted. Only erase the DB rows after every listed object is confirmed absent. Persist a deletion-pending record/prefix so failed erasures can be retried and audited. Add tests for partial success, retry success, permanent per-key failure and a complete delete; assert account rows remain until the bucket is empty.
+
+
+### F-65: Local account-erasure purge suppresses filesystem deletion failures and reports success — high privacy/erasure reliability gap
+
+Evidence:
+- cloud/account.py calls the registered local purge callback before deleting the user row, but treats any normal return as success and continues to erase the account.
+- app.py _purge_local_jobs_for_user delegates directory deletion to _rm_under.
+- _rm_under calls shutil.rmtree(target, ignore_errors=True) for directories and catches/ignores OSError for files. It returns no success/failure result, so locked files, permission errors, partial deletion and filesystem failures are silently swallowed.
+- _purge_local_jobs_for_user increments its removed counter after invoking _rm_under without checking whether the path still exists. It therefore can report a successful purge count even when data remains on disk.
+- cloud/account.py's AccountDeletion record stores r2_objects_deleted but no local purge outcome, and there is no durable retry queue for failed local deletions.
+
+Impact: a user can receive a successful account-deletion response and confirmation while some local clips, uploads or thumbnail files remain on disk. The files may remain reachable through the public /videos or /thumbnails mounts until normal retention cleanup, and no durable erasure task is left to retry the failed deletion.
+
+Fix direction: make _rm_under return a verified result (removed, already absent, or failed) and propagate failures to the account-erasure coordinator. Persist a local-erasure tombstone/retry task before deleting the user row, and keep retrying until all user-owned paths are confirmed absent. If immediate erasure cannot complete, report the partial state accurately rather than returning deleted=true. Add tests that simulate PermissionError/locked files and verify the deletion record retains a retryable pending state until cleanup succeeds.
