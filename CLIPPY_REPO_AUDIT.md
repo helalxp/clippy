@@ -1178,3 +1178,17 @@ Fix direction: add delete with safe ID validation and directory containment; tra
 - reference_templates.manifest_path validates strict ref_<32 lowercase hex> IDs before reading/writing manifests.
 - The new feature currently stores/analyzes a reference and exposes its poster/video URLs; it does not yet apply the stored overrides to the main clipping pipeline or connect them to layout_picker.pick_and_apply. Treat it as a local library/prototype, not a completed "apply template to generated clip" workflow.
 - tests/test_reference_templates.py covers create/persist, ID traversal rejection and pacing detection, but not API upload failure cleanup, storage quota, delete, missing reference media, or frontend response handling.
+
+
+### F-35: Metered whole-source duration cap fails open when OpenCV cannot read duration — medium quota-enforcement gap
+
+Evidence:
+- app.py sets SOURCE_CAP_MINUTES for URL jobs from the reserved/probed minutes.
+- main.py around lines 750-790: cap_source_duration reads duration only through cv2.VideoCapture. When safety=True and OpenCV returns no usable duration, it returns the original input without applying the FFmpeg -t cut.
+- main.py around lines 2433-2445: the whole-source metering path calls cap_source_duration(..., safety=True) before the rest of the pipeline reads the file.
+- The earlier metering probe uses ffprobe, so there are media/container combinations where the server can determine a duration for reservation but OpenCV cannot determine the same duration for the safety cut.
+- The YouTube downloader's ranged-download optimization is only applied to unknown or very long sources; it does not guarantee that every download is already limited to the exact reserved duration.
+
+Impact: for a metered URL job whose duration is known to the reservation probe but unreadable to OpenCV, the safety cap silently skips the cut and the pipeline can process the entire downloaded source rather than the reserved minutes. This can exceed the user's plan allowance and increase compute/bandwidth cost. The partial-plan MAX_SOURCE_MINUTES path does not have the same fail-open because it still attempts the FFmpeg -t cut when duration is unknown.
+
+Fix direction: use the same ffprobe-based duration probe as metering, or enforce the reserved -t cut regardless of whether OpenCV can report duration. Treat an unreadable duration as a reason to fail safely or perform the bounded cut, not as permission to process the entire source. Add tests where ffprobe returns a valid duration but cv2 reports zero, and assert the resulting media is capped.
