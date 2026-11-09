@@ -1038,7 +1038,7 @@ Evidence:
 - dashboard/src/App.jsx lines 291 and 732: the Gemini key is stored in plaintext under gemini_key.
 - dashboard/src/lib/api.js stores the cloud session bearer token in localStorage as well.
 
-Impact: any same-origin script execution (including a future XSS, compromised dependency or malicious browser extension) can read the cloud session token and all BYOK/provider keys. The XOR key is shipped in the JavaScript bundle and is recoverable by anyone with the application source/bundle, so the stored values are not encrypted at rest. This is not a remote exploit by itself; it is an inaccurate protection boundary and increases the impact of client-side compromise.
+Impact: any same-origin script execution (including a future XSS, compromised dependency or malicious browser extension) can read the cloud session token and all BYOK/provider keys. The XOR key is shipped in the JavaScript bundle and is recoverable by anyone with the application source/bundle, so the stored values are not encrypted at rest. This is not a remote exploit by itself; it is an inaccurate protection boundary and increases the impact of client-side compromise. The keys also use generic, non-user-scoped localStorage names. AuthContext.logout clears only the session token; it does not clear gemini_key, uploadPostKey_v3, uploadUserId, elevenLabsKey_v1 or falKey_v1. A second person signing into the same browser profile can inherit the previous user's provider credentials and profile selection, and those credentials may then be sent with the second user's requests.
 
 Fix direction: remove the "encrypted" claim and do not treat XOR/base64 as protection. For the native Windows app, move secrets into Windows Credential Manager/DPAPI through a narrow Tauri command and keep them out of WebView localStorage. For browser/self-host use, explain that persisted BYOK keys are accessible to same-origin scripts; offer session-only storage or require re-entry. Keep managed cloud credentials server-side. Add tests that ensure secrets are not written to localStorage in the desktop build once secure storage is wired.
 
@@ -2192,3 +2192,27 @@ Fix direction: introduce a first real Alembic baseline revision matching the cur
 ### Latest CI state after audit-document updates
 - Run 42669230833 for current main HEAD 04d049485590 is in progress as of the latest check. The latest completed run 42669112538 failed; because all 82 commits after source snapshot 1710a1d change only CLIPPY_REPO_AUDIT.md, the application code under test is unchanged.
 - The latest fully inspected completed test result remains 1,226 passed, 30 skipped, 2 failed: F-01 and F-02. See the CI evidence section for the run ID and failure details. Do not interpret audit-document commits as application fixes.
+
+
+### F-114: SaaSShorts analysis cache is shared across accounts in the same browser profile — medium local privacy leak
+
+Evidence:
+- dashboard/src/components/SaaShortsTab.jsx uses one fixed localStorage key, `saasshorts_cache`, for every signed-in user.
+- The cache stores the submitted website URL, analysis, web research and generated scripts for 24 hours.
+- AuthContext.logout clears only the bearer token and does not clear saasshorts_cache. The next account in the same browser profile loads the cache in the component's initial state and starts at the Analysis step.
+- The cache has no user ID, tenant key or logout invalidation.
+
+Impact: on a shared browser profile, a second Clippy account can see the previous account's business website, research, brand details and generated marketing scripts. This is a local/shared-device privacy issue, not a server-side cross-tenant API leak.
+
+Fix direction: namespace the cache by authenticated user ID and clear it on logout/account switch; alternatively keep the cache in component memory only. Add a two-account browser test proving user B never loads user A's cached analysis.
+
+### F-115: SaaSShorts actor-image preview object URLs are never revoked — low browser-memory leak
+
+Evidence:
+- dashboard/src/components/SaaShortsTab.jsx creates a blob URL with URL.createObjectURL(file) when an actor image is selected.
+- A full-file scan of the component found no matching URL.revokeObjectURL call or cleanup effect for that preview URL.
+- The preview can be replaced/reset repeatedly during a long-lived wizard session.
+
+Impact: each replaced actor-image preview can retain a Blob URL and its underlying image data until the page is closed. This is a small client-side memory leak, most visible when users iterate through many large actor images.
+
+Fix direction: keep the current object URL in state/ref and revoke the previous URL on replacement and component unmount. Add a component test that verifies the prior URL is revoked when a new image is selected and on unmount.
