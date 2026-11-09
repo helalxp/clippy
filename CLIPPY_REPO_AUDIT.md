@@ -2243,11 +2243,11 @@ Fix direction: define a per-operation FFmpeg timeout policy based on source dura
 - Branch comparisons are against application-code snapshot 1710a1d4, not the later audit-document-only main HEAD: codex/new-ui 0 ahead / 30 behind; codex/reference-templates 1 ahead / 29 behind; windows-native-migration 14 ahead / 29 behind.
 - Latest completed CI run inspected: 42667586873. Frontend production build passed. Backend suite: 1,226 passed, 30 skipped, 2 failed. Failures remain F-01 (duration override unexpectedly capped at 25 seconds instead of requested 30) and F-02 (recut passes backdrop_type/backdrop_color to apply_watermark, whose real signature accepts only video_path/output_path; the test fake also rejects the extra keywords). No code fixes have been applied.
 - Latest run for current audit-only HEAD 2e4b3a8 was queued when checked; the previous completed run is the authoritative test result recorded above.
-- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 107 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation. One later FFmpeg-timeout entry was assigned F-109 to avoid a repeated F-75.
+- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 108 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation. Later duplicate entries have been reassigned through F-110.
 - Source reading has materially expanded across cloud auth/billing/storage, MCP/OAuth, SaaSShorts, Thumbnail Studio, upload slots, job lifecycle/cleanup, renderer/Remotion, Docker/CI configuration and the Windows-native branch. The audit is still **IN PROGRESS**; not every tracked source file has been read line by line, and no local runtime, Windows WebView, Docker image, or integration build has been executed.
 
 
-### F-76: Early-audio optimization transcribes the full source before the metered source cap is applied — high metering/compute bypass
+### F-110: Early-audio optimization transcribes the full source before the metered source cap is applied — high metering/compute bypass (formerly F-76)
 
 Evidence:
 - main.py enables use_early when EARLY_AUDIO is on and MAX_SOURCE_MINUTES is empty. The guard does not check SOURCE_CAP_MINUTES, which is the variable used for whole-video managed metering.
