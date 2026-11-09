@@ -1595,3 +1595,44 @@ Evidence:
 Impact: PAID_PROXY_DAILY_MB does not stop new processing jobs from using the paid proxy. A deployment can continue incurring per-GB charges after the advertised daily ceiling is reached. The stale 60-second cache further increases overshoot around the threshold.
 
 Fix direction: call budget_exceeded() in /api/process immediately before constructing the child environment and remove PROXY_URL when the cap is reached. Make the cap an atomic reservation rather than a read-only sum if concurrent downloads must stay within a hard ceiling; reserve expected bytes before dispatch and settle actual bytes afterward. Invalidate/update the cache when record_download persists new usage. Add tests proving a fresh job and a resumed job both lose PROXY_URL after the cap, including concurrent submissions that cross the threshold.
+
+
+### F-43: Thumbnail image uploads have no byte cap and are copied wholly into RAM — high resource-exhaustion risk
+
+Evidence:
+- app.py::thumbnail_generate accepts optional face/background UploadFile values.
+- Both are copied using await face.read() / await background.read() and then written to disk, with no maximum byte count, content-type allowlist, decoded-pixel limit or image-dimension limit.
+- thumbnail.py defines THUMB_MAX_BYTES=2 MiB for the generated output; that limit is not applied to these uploaded reference images.
+- The endpoint can be called repeatedly by entitled users or self-host/BYOK users, and each request can allocate the full upload contents in Python memory before Gemini/Pillow processes them.
+
+Impact: a very large face/background image or several concurrent requests can exhaust backend memory and crash the API container. A compressed image with extreme dimensions can also expand to a very large decoded bitmap.
+
+Fix direction: enforce a small streaming byte cap per image, validate actual image format by decoding, cap width/height/total pixels, reject unsupported formats, and avoid whole-file reads. Add tests for oversized streams, spoofed MIME types, malformed images and decompression-bomb dimensions.
+
+### F-44: Thumbnail publish buffers the entire source video and thumbnail in memory before upload — high availability risk for large videos
+
+Evidence:
+- app.py::thumbnail_publish::do_upload opens the source video and thumbnail, then builds multipart file values with vf.read() and tf.read().
+- This creates full in-memory byte copies before httpx sends the request. The source upload limit elsewhere is up to MAX_FILE_SIZE_MB (2 GB), and Thumbnail Studio has no smaller source cap.
+- The endpoint uses a 600-second timeout but does not stream the video file object through the multipart encoder.
+
+Impact: publishing a large source video can allocate gigabytes of RAM per request; concurrent publishes can OOM-kill the backend. The source is already on disk, so this memory duplication is unnecessary.
+
+Fix direction: pass open file objects to httpx's multipart encoder (or use a streaming multipart implementation), retain bounded chunking, and ensure files remain open until the request completes. Add a memory-bounded integration test with a large sparse fixture and a mocked upload server.
+
+### F-45: Failed thumbnail quota reservation leaves the already-uploaded source file behind — medium disk leak
+
+Evidence:
+- app.py::thumbnail_upload saves the complete uploaded source into UPLOAD_DIR before calling reserve_managed_action.
+- If the reservation raises HTTP 402 or another exception, execution exits before thumbnail_sessions is created and before any cleanup is registered; the saved thumb_<session_id>_* file remains orphaned.
+- app.py::thumbnail_analyze follows the same ordering for its direct file-upload path: save the file, then reserve the managed analysis action.
+- The normal upload limit is per file, not a global cap for these orphaned thumbnail sources.
+
+Impact: a user whose quota is exhausted can repeatedly upload large files and have each request rejected after the bytes are written, gradually filling the API disk. These files are not associated with a thumbnail session and the session-based cleanup cannot find them.
+
+Fix direction: reserve before accepting/writing the upload when possible, or wrap the file write and reservation in a cleanup-safe try/finally. Persist a temporary-upload owner/expiry marker so startup cleanup can remove abandoned files after crashes. Add tests for quota rejection after upload and simulated exceptions during reservation.
+
+### Thumbnail Studio checkpoint
+- Read the complete thumbnail.py helper module and all thumbnail routes in app.py: upload/transcribe, analyze, title refinement, generation, frame extraction, description generation, publish and publish-status.
+- Positive controls: thumbnail uploads use chunked reads and a per-file size cap; session IDs are UUIDs for normal upload flow; thumbnail frames and publish status enforce session ownership in managed mode; thumbnail publishing uses a realpath containment helper to stop a path traversal from reading arbitrary server files.
+- Remaining risks: thumbnail session state and publish jobs are in-memory only; uploaded sources and generated thumbnails need durable owner metadata for restart-safe erasure/retention (F-22). The frontend's publish polling has no timeout/abort control. The static /thumbnails mount remains publicly accessible to anyone who has the URL. Phase 3/6 cross-links remain in progress.
