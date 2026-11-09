@@ -1500,3 +1500,32 @@ Fix direction: do not delete the Project row unless the full prefix listing and 
 - Read the key transactional paths in cloud/autopilot.py, cloud/billing.py, cloud/metering.py, cloud/videos.py, cloud/mcp_oauth.py and cloud/account.py, plus relevant model definitions and focused tests.
 - Positive controls: autopilot claims use a database uniqueness constraint on (user_id, video_id); usage reservations serialize on a per-user User row lock; account erasure has a schema-driven test that checks every FK child table is included in the deletion list; subscription upserts use a row lock and Stripe event timestamp ordering.
 - Remaining cloud audit work: inspect the rest of every cloud module, migrations/schema constraints, OAuth/API-key revocation and expiry semantics, lifecycle/email retry behavior, Upload-Post profile ownership and secret storage, storage key construction and presigned URL policy, and test concurrency with a real PostgreSQL service. Phase 6 remains partial.
+
+
+### F-40: Lifecycle and checkout-recovery email claims are permanent before delivery — medium delivery-loss defect
+
+Evidence:
+- cloud/lifecycle.py::claim inserts LifecycleEmail before attempting SMTP delivery; the unique (user_id, kind) constraint permanently prevents another attempt.
+- cloud/lifecycle.py::_send calls claim first, then performs eligibility checks and calls send_welcome_email/send_first_clip_email/send_winback_email. If SMTP returns False or raises, the claim row remains.
+- cloud/lifecycle.py::on_checkout_expired uses the same claim-before-send pattern for checkout_recovery.
+- LifecycleEmail has no delivery status, attempt counter, lease/claim expiry or sent_at field; run_once logs exceptions and proceeds, but the next tick excludes the user because _not_sent sees the claim row.
+- The unique claim is a good cross-instance dedupe primitive, but it currently conflates "claimed" with "successfully sent".
+
+Impact: a transient SMTP outage, timeout or provider rejection on the first attempt permanently suppresses that lifecycle/recovery email. This is particularly harmful for checkout recovery, where the user may never receive the recovery link, and for welcome/first-clip messages that explain promised free-plan benefits.
+
+Fix direction: model delivery as pending/sending/sent/failed with attempt count and next_attempt_at, or use a transactional outbox. Claim with a short lease, send outside the DB transaction, then mark sent; failures should release/expire the lease and retry with bounded backoff. Preserve a unique logical (user_id, kind) key so concurrent instances still cannot send duplicates. Add tests for SMTP false/exception, process crash after claim, and successful retry.
+
+### F-41: Magic-link rate limits are check-then-insert and can be exceeded by concurrent requests — medium abuse-control race
+
+Evidence:
+- cloud/auth.py magic-link request handler counts recent rows for the email and request IP, compares them to MAGIC_RATE_LIMIT / MAGIC_RATE_LIMIT_IP, and then inserts the new MagicLinkToken in the same transaction.
+- There is no row/advisory lock, atomic counter, serializable transaction or database constraint that serializes simultaneous requests for the same email/IP.
+- Two or more requests arriving concurrently can all read the same pre-insert counts and all pass the threshold before their inserts commit.
+- Existing tests/test_email_policy.py cover disposable-domain checks and normalization, not concurrent magic-link rate limiting.
+
+Impact: a burst of parallel requests can exceed the intended per-email and per-IP limits, increasing SMTP cost and enabling targeted email flooding. The per-email cap still constrains sequential requests, but it is not a hard concurrency-safe limit.
+
+Fix direction: use atomic time-bucket counters keyed by normalized email and trusted client IP, or PostgreSQL advisory locks around the count/insert for both keys. A Redis limiter is also viable if its availability/failure policy is explicit. Add a concurrent database-backed test that launches more than the limit and proves no more than the configured number of rows/tokens are issued.
+
+### Additional cloud authentication note
+- Dockerfile starts Uvicorn with --forwarded-allow-ips "*", and cloud/auth.py uses request.client.host as the IP rate-limit key. The source comment acknowledges that forwarded headers are trusted and can be forged. Confirm the actual Traefik ingress behavior and whether port 8000 is externally published in each deployment before treating this as an exploitable public IP-spoofing issue. Prefer a narrowly trusted proxy network and derive client IP only from headers inserted/overwritten by that proxy.
