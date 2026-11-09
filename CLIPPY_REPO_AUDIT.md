@@ -1669,3 +1669,17 @@ Fix direction: enforce a small bounded range in the Pydantic model and helper (f
 - Positive controls: scrape_website disables automatic redirects and validates each redirect target; actor-upload reads at most 25 MiB; retry paths use _safe_under against directory traversal; job status/post check in-memory owner records; generation uses a shared concurrency semaphore.
 - Major gap: SaaasShorts has no dedicated automated test module. There is no end-to-end test for owner isolation, retry recovery, provider failures, storage cleanup, memory-bounded downloads, scheduled publishing or public gallery consent.
 - Additional resource concerns to investigate: website scraping reads complete HTTP response bodies without a response-byte cap; selected_actor_url and fal.ai output downloads also buffer complete response bodies; actor upload checks declared MIME but does not decode/verify the image; request fields (script, descriptions, num_scripts, num_options) need explicit practical bounds.
+
+
+### F-59: Per-plan simultaneous-job limit is checked only against in-memory jobs before an await — medium concurrency/rate-control race
+
+Evidence:
+- app.py reserve_process_minutes computes active by counting the current process's jobs dictionary for the user's queued/processing jobs, then compares it with PLAN_JOB_LIMIT.
+- The function awaits database calls for balance, duration probing and reservation after this count, but does not atomically claim a per-user active-job slot in the database.
+- process_endpoint does not insert the new job into jobs until after the metering/reservation and setup steps complete. Two concurrent requests can therefore both observe the same active count below the limit, yield at the first await, and both proceed.
+- The jobs dictionary is process-local, so separate backend instances cannot see each other's active jobs either. UsageLedger reservations serialize minute balance under a User row lock, but they do not enforce the per-plan simultaneous-job count.
+- Existing billing tests exercise balance reservations and state transitions, not concurrent admission at the plan job limit.
+
+Impact: a user can exceed the intended Starter/Creator/Pro simultaneous-job cap by submitting requests concurrently. This can multiply GPU/CPU work beyond the plan's admission policy and contribute to resource contention even though minute balance accounting remains atomic.
+
+Fix direction: create an atomic database-backed active-job lease/slot per user and plan, claimed before the long duration probe and released on completion/failure. Enforce the limit in the same transaction as admission, with a unique/conditional claim so concurrent requests cannot both take the final slot. Add an async test that launches more simultaneous requests than the plan limit and asserts exactly the configured number are admitted, including when two API instances share the database.
