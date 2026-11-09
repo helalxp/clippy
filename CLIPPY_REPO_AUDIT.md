@@ -1714,3 +1714,18 @@ Fix direction: stream responses in bounded chunks, enforce Content-Length and cu
 - Positive controls: transcript URLs are reduced to a strict 11-character YouTube video ID before yt-dlp; playlist/other-host input is rejected; caption tracks exclude machine translations; transcript fetch concurrency and timeouts are bounded; metadata brief/keyword/audience text is truncated and output is normalized.
 - Remaining concerns: the limiter/cache are process-local; timed-out asyncio.to_thread calls continue running in their worker threads until the underlying blocking call returns; the metadata generator has no explicit semaphore; rate-limit and cache behavior across multiple replicas is untested.
 - SaaSShorts route validation is mostly in-memory; no dedicated test module exists. The retry ownership takeover (F-46) is the priority security regression.
+
+
+### F-60: Metering sweeper refunds any reservation older than three hours without checking whether its job is still active — medium billing-integrity defect
+
+Evidence:
+- cloud/metering.py sets STUCK_RESERVATION_HOURS=3. _sweep_once selects every UsageLedger row whose status is reserved and created_at is older than that cutoff, then calls release_reservation.
+- The sweeper does not check the associated job's in-memory status, resume manifest heartbeat, process PID or any durable active-job lease before refunding.
+- app.py writes and refreshes a resume manifest heartbeat while a job is running, but cloud/metering.py does not consult it.
+- A legitimate long-running job can therefore remain active after its reservation is released. When it later calls commit_reservation, that function only changes rows still in reserved status, so the already-released usage is not charged.
+- commit_reservation reads the ledger row without SELECT FOR UPDATE; release_reservation also reads it before locking the user and does not re-check its status after acquiring that lock. A completion and sweeper refund racing near the three-hour boundary can therefore both act on the same reserved row.
+- Existing metering tests cover reserve/commit/release arithmetic and orphan cleanup, but no test holds a live job beyond STUCK_RESERVATION_HOURS or races commit against the sweeper.
+
+Impact: a slow but successful job that runs longer than three hours can receive a quota refund even though it consumed the full processing resources. A boundary race can also produce a committed/released status inconsistent with the top-up refund. This weakens the minute ledger's guarantee that usage is consumed at reservation and only refunded for failed or abandoned work.
+
+Fix direction: replace a fixed-age refund with a liveness-aware lease. Extend/heartbeat the reservation while the job manifest is active; only release when the job is terminal, the manifest heartbeat is stale beyond a conservative grace period, and no other instance owns the lease. Serialize commit/release on the UsageLedger row (and keep a consistent lock order with User) with an atomic status transition. Add tests for an active job older than three hours, a stale abandoned job, and concurrent commit/refund.
