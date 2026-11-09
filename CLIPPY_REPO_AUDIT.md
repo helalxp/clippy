@@ -1864,3 +1864,17 @@ Evidence:
 Impact: a user can receive a successful account-deletion response and confirmation while some local clips, uploads or thumbnail files remain on disk. The files may remain reachable through the public /videos or /thumbnails mounts until normal retention cleanup, and no durable erasure task is left to retry the failed deletion.
 
 Fix direction: make _rm_under return a verified result (removed, already absent, or failed) and propagate failures to the account-erasure coordinator. Persist a local-erasure tombstone/retry task before deleting the user row, and keep retrying until all user-owned paths are confirmed absent. If immediate erasure cannot complete, report the partial state accurately rather than returning deleted=true. Add tests that simulate PermissionError/locked files and verify the deletion record retains a retryable pending state until cleanup succeeds.
+
+
+### F-56: Free retention can leave a Project row pointing at clips already deleted by per-video expiry — medium broken-project/data consistency defect
+
+Evidence:
+- cloud/videos.py::purge_free_expired selects UserVideo rows by UserVideo.created_at < cutoff and Project rows independently by Project.updated_at < cutoff.
+- It deletes every expired UserVideo.r2_key regardless of whether the corresponding Project was recently updated.
+- It deletes the full R2 job prefix and Project row only for projects whose updated_at is also older than cutoff.
+- cloud/videos.py::save_project_state updates Project.state and therefore Project.updated_at when a user saves browser-side edit layers. archive_clip_edit can also update the Project row.
+- Project.state.server_file and the archived metadata identify the current file that _restore_job_files expects to download. Deleting the UserVideo.r2_key can remove that current server_file while leaving a recently updated Project and its metadata in place.
+
+Impact: a free user can edit/save a project near the end of the 7-day retention window, causing the Project row to remain, while its older UserVideo object is deleted. The library can then show a project that cannot be restored completely or whose clip URLs point to missing files. The job-prefix cleanup is skipped because the Project is considered recently updated.
+
+Fix direction: define one consistent expiry timestamp for the project and every object required to restore it. Either expire the whole project prefix based on Project.updated_at and retain all referenced clip objects until then, or expire the entire project regardless of recent edit-state updates. Do not delete a UserVideo object while any retained Project.state references its filename. Add a test with an old UserVideo and recently updated Project, then assert either the whole project is removed or every referenced object remains restorable.
