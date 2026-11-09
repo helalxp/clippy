@@ -35,7 +35,7 @@ Repository metadata observed through GitHub:
 - Public repository: `helalxp/clippy`
 - Repository ID: `1430643349`
 - Default branch: `main`
-- Main HEAD at inspection: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
+- Main source snapshot: `ff879df772fc0051ffb3eb75f1e5e02987c95789`
 - Reported repository size: 79,360 KB (GitHub repository size metadata; not a local checkout measurement).
 - Main recursive tree: 460 entries, 410 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
 
@@ -43,7 +43,7 @@ Repository metadata observed through GitHub:
 
 | Branch | HEAD at inspection | GitHub comparison against main | Interpretation |
 |---|---|---|---|
-| `main` | `3b398f02b83f` | Default branch | Docker-oriented OpenShorts-derived application, workspace UI and existing feature patches. |
+| `main` | `ff879df772fc` | Default branch | Docker-oriented Clippy application, current dashboard and backend source. |
 | `codex/new-ui` | `c260c6bf8319` | 0 ahead / 27 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
 | `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 26 behind; status `diverged` | Contains a unique reference-template feature commit. |
 | `windows-native-migration` | `653e3bc380dc` | 14 ahead / 26 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
@@ -52,7 +52,7 @@ Branch tips are moving references. Re-run comparisons before cherry-picks, merge
 
 ### Main tree composition
 
-Main contains 421 tracked files across these extensions:
+Main contains 410 tracked files across these extensions:
 
 | Extension | Count |
 |---|---:|
@@ -234,7 +234,7 @@ Do not create a second auth path or duplicate business logic for MCP. Existing a
 Observed documentation:
 - Root `CLIPPY_MASTER.md` was consolidated into this file and removed from main. The native migration branch still has its own branch-specific copy.
 - `CLAUDE.md` (main) and `AGENTS.md` (Windows migration): short agent startup rules.
-- `README.md`: public OpenShorts product README; still contains OpenShorts branding, upstream `mutonby/openshorts` badges/links, Docker-first setup and public product claims.
+- `README.md`: current Clippy project overview. It distinguishes the Docker-oriented main development stack from the unfinished Windows-native migration branch.
 - `docs/architecture/*.md`: subsystem architecture notes.
 - Historical root reports (`STATUS.md`, `CHANGES_COMPLETE.md`, `FINAL_SUMMARY.md`, `IMPLEMENTATION_PLAN.md`, `QUALITY_ISSUES_ANALYSIS.md`) were read, superseded, and removed from main after their durable context was migrated into this audit.
 
@@ -244,20 +244,20 @@ Observed documentation:
 
 These are evidence-based review observations, not a final security certification.
 
-### R-01: Main README/product identity is stale — medium, confirmed
-Main `README.md` still identifies the project as OpenShorts, links badges/commit history to `mutonby/openshorts`, and documents Docker as the expected self-host workflow. The internal product guide says Clippy is Windows-first and migration work is on a separate branch. This creates onboarding and product-truth confusion. Decide whether the public README should remain upstream-oriented or become Clippy-specific; do not silently rewrite upstream attribution/license notices.
+### R-01: Main README/product identity was stale — resolved
+The legacy OpenShorts README was replaced with a Clippy-specific overview in commit `1f4e2e02e95c2429f7e6a1364525d2126c6d0569`. The new README accurately states that main remains Docker-oriented and the Windows-native branch is still a scaffold. Upstream attribution and the repository's `LICENSE` / `NOTICE` were retained.
 
 ### R-02: Windows-native implementation is branch-only — high, confirmed
-Main does not contain `desktop/`, `platform_compat.py`, `runtime-manifest.json`, or the native local-model settings present in `windows-native-migration`. The migration branch diverges from main (14 ahead / 5 behind at inspection). Do not implement native-only fixes on main assuming they will be present in the desktop app. Establish an explicit integration strategy.
+Main does not contain `desktop/`, `platform_compat.py`, `runtime-manifest.json`, or the native local-model settings present in `windows-native-migration`. The migration branch diverges from main (14 ahead / 26 behind at the `ff879df` source snapshot). Do not implement native-only fixes on main assuming they will be present in the desktop app. Establish an explicit integration strategy.
 
 ### R-03: Main includes a large tracked GIF — medium, confirmed
 `churchil_queen_vertical.gif` is 65,384,963 bytes (~62.4 MiB), above GitHub's recommended 50 MB warning threshold. Consider Git LFS or an external asset if the file is needed, but first check references and preserve attribution/licensing. Do not remove it blindly.
 
-### R-04: Patch artifacts are committed alongside source — medium, confirmed
-The temporary root patch artifacts were deleted from main after confirming they are not runtime inputs. Do not recreate or reapply them as a substitute for source-level changes.
+### R-04: Temporary patch artifacts were committed alongside source — resolved by cleanup
+The five temporary root patch artifacts were removed from main after confirming they are not runtime inputs. Do not recreate or reapply them as a substitute for source-level changes.
 
-### R-05: Renderer durability and access need a focused review — high, needs verification
-The main renderer stores render jobs in a process-local `Map`, so job status disappears on process restart. Compose publishes renderer host port 13100. The inspected Express source mounts the output directory as static content and accepts render requests. Complete a full route-level auth/network review, verify whether only the backend can reach it in production, and test renderer restart during queued and active renders. Consider persistent job state, authenticated internal access, and bounded/allowlisted output paths if not already enforced elsewhere.
+### R-05: Renderer durability and access require hardening — high, confirmed exposure surface
+The main renderer stores job status in a process-local `Map`, losing status on restart. More importantly, `render-service/src/server.ts:50,58,124` serves the shared output directory and exposes render submission/status routes without authentication or ownership checks. `docker-compose.yml:32-33` publishes host port 13100 without a loopback-only bind. See F-03 for the verified exposure path and fix direction.
 
 ### R-06: Large, tightly coupled modules raise regression risk — medium, confirmed
 `app.py` is ~338 KB; `main.py` and `dashboard/src/App.jsx` are also central orchestration surfaces. Keep changes narrow, trace all callers, and add focused tests. Avoid unrelated refactors in feature-fix patches.
@@ -398,7 +398,7 @@ Do not erase historical findings. Mark them superseded with the commit/test evid
 
 ---
 
-**End of initial audit baseline.** Update the inspection date, branch SHAs, tree counts, and coverage ledger whenever the repository changes materially.
+**End of initial structural survey.** The expanded findings and coverage ledger below supersede this baseline where they differ.
 
 
 ---
@@ -408,12 +408,12 @@ Do not erase historical findings. Mark them superseded with the commit/test evid
 ## Current repository state (re-verified)
 
 - Default branch: `main`
-- Current main HEAD: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
+- Source snapshot HEAD: `ff879df772fc0051ffb3eb75f1e5e02987c95789`
 - Recursive Git tree: 460 entries, 410 tracked files, 50 directories.
-- Branch comparisons against current main:
-  - `codex/new-ui`: 0 ahead / 8 behind; no unique commits.
-  - `codex/reference-templates`: 1 ahead / 7 behind; diverged.
-  - `windows-native-migration`: 14 ahead / 7 behind; diverged.
+- Branch comparisons against source snapshot:
+  - `codex/new-ui`: 0 ahead / 27 behind; no unique commits.
+  - `codex/reference-templates`: 1 ahead / 26 behind; diverged.
+  - `windows-native-migration`: 14 ahead / 26 behind; diverged.
 - The prior audit's main SHA, branch behind counts, and file count are superseded by this snapshot.
 
 ## CI verification on current main HEAD
