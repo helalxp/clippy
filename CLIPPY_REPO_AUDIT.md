@@ -969,3 +969,24 @@ Fix direction: implement an inbox/event-processing state machine with a unique e
 - Billing webhook signatures, top-up duplicate checks, subscription event ordering, row locks in metering/subscription updates, PKCE S256, registered redirect URI checks and user-scoped history were verified as positive controls.
 - Still open: detailed billing cancellation/retention paths, email deliverability and unsubscribe security, lifecycle scheduling/idempotency, alert/admin access, marketing/onboarding, proxy ledger accounting, autopilot crash/retry semantics, MCP protocol authorization on every tool, and database migration tests.
 - No live Stripe, PostgreSQL, Upload-Post, OAuth-client, R2, or concurrency integration test was run.
+
+
+### Cloud module coverage update (continued)
+Additional full-module/selected-path reads:
+- cloud/emails.py: transactional vs commercial email separation, SMTP delivery, unsubscribe footer/header, welcome/first-clip/winback/recovery templates.
+- cloud/lifecycle.py: unique (user_id, kind) claim, candidate selection, periodic loop, checkout-expired recovery.
+- cloud/alerts.py: Telegram/admin email delivery, job outcome aggregation, proxy health monitoring.
+- cloud/proxy_ledger.py: proxy usage persistence, daily paid-byte budget, alert aggregation and probe queue.
+- cloud/analytics.py: OpenPanel event/revenue transport and profile attribution.
+- cloud/digest.py: daily digest queries, scheduled UTC delivery and retry loop.
+- cloud/marketing.py: HMAC unsubscribe URL, GET confirmation and RFC 8058 one-click POST.
+- cloud/onboarding.py: authenticated survey endpoint, answer validation and upsert.
+- cloud/social_profiles.py: per-user managed Upload-Post profile creation and profile-scoped connection token generation.
+- cloud/autopilot.py: per-user source discovery, unique video claims, normal pipeline submission, scheduled publish, completion settlement and user routes.
+- cloud/cancellation.py: Stripe cancellation, retention coupon, resume, and user-scoped subscription lookup.
+
+### Additional cloud reliability notes
+- Lifecycle email claims are inserted before attempting SMTP. If the send raises, the claim remains and the candidate is excluded from future ticks. This is a deliberate at-most-once guard against duplicate sends across containers, but it also means a transient SMTP outage can permanently suppress a welcome/first-clip/winback message. Consider adding claim states (claimed/sent/failed), lease expiry and retry/backoff rather than treating any claim as proof of delivery.
+- Autopilot uses a unique (user_id, video_id) claim to prevent duplicate processing. Its publish fan-out runs in an in-memory background task and updates posted_count after the full loop; a process crash mid-publish can leave the persisted run without per-clip delivery state. Review if this workflow is expected to resume or be reconciled after deployment/restart.
+- The social tenant-isolation tests explicitly assert that cloud mode ignores a caller-supplied Upload-Post profile and filters scheduled posts by the server-resolved profile. These are useful regression controls.
+- OAuth tests currently exercise helper and input-validation behavior; the code comment says DB-backed register/authorize/token tests are performed manually after deploy. Add local database-backed tests, especially for the single-use race in F-21.
