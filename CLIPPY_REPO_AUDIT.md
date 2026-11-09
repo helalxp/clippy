@@ -699,3 +699,29 @@ The production watermark implementation was inspected at main.py around lines 14
 - Review generated intermediate files, sidecars and media delivery rules together; the /thumbnails static-mount finding F-11 is especially relevant to generated face-reference images.
 
 Phase 3 remains partial. No media fixture, FFmpeg render, GPU path, or Windows-native media execution was run in this remote source inspection.
+
+
+### F-12: Image upload byte limits are checked after unbounded reads — medium, confirmed resource-control defect
+
+Evidence:
+- app.py around lines 4863-4900: clip watermark upload calls await logo.read() with no size argument, then checks whether the returned byte string exceeds 10 MB.
+- app.py around lines 6534-6600: thumbnail generation reads optional face and background uploads fully with await face.read() / await background.read(), with no corresponding byte limit in the route.
+- app.py SaaS actor upload uses the safer bounded pattern, reading MAX_BYTES + 1 and rejecting before storing more data.
+
+Impact: the configured 10 MB watermark limit does not bound memory consumption because the entire upload is already loaded before the check. The thumbnail face/background upload paths have no visible size cap. A permitted caller can cause large memory allocations and potentially exhaust worker memory with oversized multipart uploads. Cloud entitlement gates reduce who can reach some paths but are not a resource limit.
+
+Fix direction: read at most max_bytes + 1, reject immediately when the cap is exceeded, and validate actual image content/dimensions before expensive processing. Apply consistent limits to watermark, thumbnail face/background, actor image, and other upload paths. Add tests for exactly-at-limit and over-limit streams.
+
+### F-13: Thumbnail generation accepts an unchecked session_id as a filesystem path — medium, confirmed path-validation defect
+
+Evidence:
+- app.py around lines 6534-6600: /api/thumbnail/generate accepts session_id from a multipart form. It only performs _assert_job_owner if that session_id happens to exist in thumbnail_sessions; a missing session is not rejected.
+- The route computes a basename-safe thumb_upload_dir for uploaded references, but passes the original unsanitized session_id to generate_thumbnail.
+- thumbnail.py around line 664 constructs output_dir with os.path.join("output", "thumbnails", session_id) and calls os.makedirs(output_dir, exist_ok=True). It later writes generated JPEGs into that directory.
+
+Impact: a caller can supply traversal components or an absolute path as session_id when no in-memory session exists. The thumbnail generator then creates directories and writes generated image files outside the intended thumbnails/session directory. The generated file content is model-produced rather than attacker-controlled, and filenames include a random batch token, so this is not by itself arbitrary code execution; it is still an unintended filesystem write/path traversal surface and may enable disk/resource abuse.
+
+Fix direction: require an existing, owner-verified session when session_id is supplied, or generate a server-owned session ID for sessionless/manual mode. Validate IDs against a strict UUID format at the API boundary and independently resolve/check the final output path under the configured thumbnail root in thumbnail.py. Add traversal, absolute-path, missing-session, and cross-user tests.
+
+### Phase 2/3 follow-up: upload and thumbnail paths
+The public thumbnail mount finding F-11 is compounded by the fact that the thumbnail generator writes generated thumbnails and person_reference.jpg under the same output tree. The upload-read limits and unchecked session path are separate defects and should be fixed independently.
