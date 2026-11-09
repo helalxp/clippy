@@ -746,3 +746,56 @@ The public thumbnail mount finding F-11 is compounded by the fact that the thumb
 | security_utils.py | Full small module read; DNS resolution and IP classification inspected | Complete for this small module |
 | media_auth.py | Main helpers and intended token model inspected; full test/caller matrix remains | Partial |
 | FFmpeg/GPU | Selected command construction and watermark GPU wrapper inspected | Partial; no real media/GPU execution |
+
+
+## Phase 4 checkpoint: cloud identity, metering, account erasure and durable storage
+
+### Modules reviewed in this batch
+- cloud/auth.py: current-user resolution, JWT/API-key authentication, magic-link request and verification flow, reviewer login and attribution route inventory.
+- cloud/api_keys.py: key generation/hash, last-used refresh, create/list/revoke endpoints and session-only key management.
+- cloud/database.py: engine startup, create_all, additive schema statements and session helpers.
+- cloud/models.py: model inventory and user-owned foreign-key/unique-constraint map.
+- cloud/metering.py: reservation/commit/release and per-user row locking.
+- cloud/account.py: account erasure flow and user-owned row deletion.
+- cloud/storage.py: user/job R2 key layout, presigned links and prefix deletion.
+- cloud/videos.py: archive, project restore, project-state persistence, history and retention entrypoints.
+- app.py: managed process reservation path and request-to-ledger flow.
+
+### Positive controls verified
+- API keys are generated with cryptographic randomness; only SHA-256 hashes are stored; raw keys are returned once. Key management rejects API-key authentication and requires a session JWT.
+- Magic-link verification locks the token row with SELECT FOR UPDATE, rejects used/expired tokens, and marks the token used in the same transaction as account lookup/creation.
+- Metering serializes reservations with a per-user SELECT FOR UPDATE lock, reserves before work, commits after success, and refunds exact top-up allocations on release.
+- Project restore checks the authenticated user's ownership against the Project row before downloading from the user's R2 prefix.
+- History queries are scoped by authenticated user_id and return time-limited presigned URLs.
+- Account erasure explicitly deletes user-owned rows, email-keyed magic-link tokens, storage prefixes and local working files, then writes a minimal deletion record.
+
+### F-14: Account deletion has a check-then-act race with new job reservations — high, needs concurrency reproduction
+
+Evidence:
+- cloud/account.py around lines 251-334: delete_account reads the User row and counts reserved UsageLedger rows, then releases the DB session before Stripe cancellation, R2 deletion, local purge and _erase_rows.
+- app.py around lines 368-500: reserve_process_minutes checks entitlement and later calls metering.reserve_minutes; it does not check an account-deletion state.
+- cloud/metering.py around lines 597-648: reserve_minutes locks the User row, but account deletion's initial in-flight check does not take/hold that same lock or mark the user as deleting.
+- _erase_rows deletes the User and user-owned rows only after the external side effects.
+
+A new process request can begin after the in-flight count returns zero but before account erasure completes. Its reservation/job may be created while deletion is cancelling services or purging storage. Depending on timing, a job can write local files after local purge or archive output to R2 after the prefix deletion. The later User deletion may also race with the reservation transaction. This can violate the promised account-erasure result.
+
+Fix direction: add an explicit account-deletion state/lock. Mark the user as deleting in a short committed transaction before checking in-flight work; make authentication/entitlement and reservation paths reject new work for deleting users; then wait/reject if existing reservations remain and perform the idempotent cleanup. Add a concurrency test that interleaves process reservation with account deletion and verifies no local/R2 object can be created after the final purge.
+
+### F-15: Project-state request size cap trusts Content-Length only — medium, confirmed request-boundary weakness
+
+Evidence:
+- cloud/videos.py around lines 405-444: save_project_state rejects when the Content-Length header exceeds 262,144 bytes, then calls request.json() without a bounded stream read.
+- If Content-Length is absent (for example, a chunked request) or is not a reliable representation of the body length, the JSON body is not bounded by this check.
+
+Impact: an authenticated client can submit an arbitrarily large project-state JSON body and force it to be buffered/parsed. The normal dashboard is unlikely to do this, but the endpoint's advertised 256 KiB cap is not enforced for all request framing.
+
+Fix direction: read a bounded request stream (limit + 1) or use a server-level body-size limit that applies regardless of Content-Length, then parse JSON. Add tests for oversized bodies with and without Content-Length.
+
+### Cloud review notes requiring more inspection
+- cloud/database.py catches and logs additive schema-step failures, then continues startup. Determine which columns/indexes are required by current queries and whether a partial schema can safely serve traffic. A missing required additive column should fail startup or be surfaced as a readiness failure rather than silently deferring the error to a later request.
+- Cloud account deletion checks reserved work only once and allows unmetered post-processing routes (e.g. free subtitle operations) to continue racing with deletion; F-14 should cover all job/session writes, not just process reservations.
+- cloud/videos.py persists metadata JSON (including transcript and rights attestation) in the user's private R2 prefix. This is intentional for project restoration but must be covered by deletion, retention and data-export tests.
+- cloud/videos.py project-state size check needs a transport-independent cap; server-side validation of active_layers structure and maximum clip count should also be reviewed.
+- Auth, API key and metering controls are promising but not a complete cloud audit. Billing, OAuth, MCP OAuth, social profile, autopilot, cancellation, lifecycle/email, proxy ledger, onboarding, alerts and digest modules remain to be reviewed.
+
+Phase 4 remains partial; no PostgreSQL, Stripe, R2, OAuth, concurrency, or account-erasure integration test was executed during this remote source inspection.
