@@ -1804,3 +1804,16 @@ Fix direction: store a durable owner/session marker for thumbnail uploads and ma
 - Positive controls: main clip jobs have a .owner sidecar, resume manifests with bounded attempts, heartbeats for deploy handover, shared-GPU admission, bounded job concurrency, upload/output size caps, and retention skips for queued/running jobs; terminal managed jobs settle reservations and archive before notifying webhooks.
 - Remaining cleanup gaps: SaaSShorts and Thumbnail Studio are outside the main job active-state registry; thumbnail directory is intentionally skipped by age cleanup and excluded from size-cap deletion candidates, so generated thumbnails can accumulate indefinitely and can keep OUTPUT_DIR above its configured cap. Pending upload slots and Thumbnail Studio session/publish state are process-local and are not recovered after restart.
 - No cancellation endpoint exists for main processing jobs in the inspected route inventory; deploy drain and process termination are implemented, but user-initiated job cancellation is not. Confirm whether this is an intentional product decision or a missing user workflow.
+
+
+### F-64: Setting R2_PUBLIC_BASE silently turns user-library URLs into permanent public links — medium conditional privacy/configuration risk
+
+Evidence:
+- cloud/storage.py presigned_get documents that when settings.r2_public_base is set it returns a plain custom-domain URL and bypasses generate_presigned_url entirely; the expires argument is ignored in this branch.
+- cloud/videos.py history returns storage.presigned_get URLs as each user's view_url and download_url. The R2 object keys are namespaced by user UUID, but those IDs are not an authorization mechanism.
+- cloud/storage.py's module-level documentation still describes these links as private, time-limited presigned URLs, while the custom-domain branch is neither signed nor time-limited.
+- cloud/config.py reads R2_PUBLIC_BASE, but .env.example does not document the security/privacy consequence of setting it.
+
+Impact: if an operator sets R2_PUBLIC_BASE to a public R2 custom domain, every history link becomes a permanent bearer URL. Anyone who obtains a user's clip URL can fetch the object until it is deleted by retention or account erasure; the configured expires value has no effect. This is a deliberate public-domain deployment mode, not an unconditional exposure when the setting is empty, but it changes the product's privacy boundary materially.
+
+Fix direction: either remove the public-base shortcut for user-owned media and keep signed URLs, or clearly separate public gallery assets from private user-library objects. If the public domain is retained, require an explicit opt-in setting with a warning, document the permanent bearer-link behavior in operator and user privacy documentation, and add tests proving which URL mode is returned for user clips.
