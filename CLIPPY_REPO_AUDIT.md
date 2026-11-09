@@ -1581,3 +1581,17 @@ Fix direction: authenticate renderer requests with a service-to-service credenti
 - The hook Zod schema omits the optional style field present in HookConfig and consumed by HookOverlay. The HTTP schema accepts hook as z.any. This is a schema/UI-contract drift; confirm whether the Remotion player or any schema-driven editor strips unknown fields before classifying it as a visible rendering defect.
 - The subtitle grouping helper assumes captions arrive in chronological order; no sorting or validation enforces that assumption. Pipeline output currently appears to be chronological, but a malformed or third-party transcript can create out-of-order blocks. Add a sort/validation contract test at the API boundary.
 - Phase 5 source reading is complete for the current render-service/Remotion files, but runtime tests and end-to-end integration verification remain outstanding.
+
+
+### F-57: Paid-proxy daily budget is not enforced for newly submitted processing jobs — high cost-control defect
+
+Evidence:
+- app.py /api/process initializes local paid_allowed=True. A full-file search shows no later assignment to that variable in the route; it is never changed by a budget check before child_env() is built.
+- The route copies the deployment environment into the worker with child_env(), which retains PROXY_URL, and only removes PROXY_URL when paid_allowed is false. For every newly submitted job, that condition is therefore false and the paid per-GB proxy remains enabled even after the daily budget is exceeded.
+- The actual budget_exceeded() check at app.py around line 426 is in the separate source-duration probe helper and only controls the probe_url_minutes call. It does not communicate its result to /api/process.
+- The only other process-job check found is in the resume scan, where budget_exceeded_sync() removes PROXY_URL for resumed jobs. Fresh jobs do not receive that protection.
+- proxy_ledger.paid_bytes_today caches the database sum for 60 seconds, and record_download does not invalidate the cache after persisting a completed download. Even the probe/resume checks can therefore observe stale usage during that window.
+
+Impact: PAID_PROXY_DAILY_MB does not stop new processing jobs from using the paid proxy. A deployment can continue incurring per-GB charges after the advertised daily ceiling is reached. The stale 60-second cache further increases overshoot around the threshold.
+
+Fix direction: call budget_exceeded() in /api/process immediately before constructing the child environment and remove PROXY_URL when the cap is reached. Make the cap an atomic reservation rather than a read-only sum if concurrent downloads must stay within a hard ceiling; reserve expected bytes before dispatch and settle actual bytes afterward. Invalidate/update the cache when record_download persists new usage. Add tests proving a fresh job and a resumed job both lose PROXY_URL after the cap, including concurrent submissions that cross the threshold.
