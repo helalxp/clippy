@@ -1314,3 +1314,29 @@ Fix direction: persist publish jobs and per-clip states before acknowledging com
 - Marketing unsubscribe tokens are HMACs bound to the user ID; however GET still performs the unsubscribe state change (F-27).
 - Email HTML escaping is inconsistent: Autopilot titles are escaped but clips-ready titles are not (F-29). Other templates and every dynamic URL still need a systematic sink-by-sink review.
 - Cloud social, Autopilot, billing, account and OAuth route ownership checks were traced at the inspected entry points. Full call-graph tracing from all dashboard actions and all webhook event types remains outstanding.
+
+
+### F-41: Output retention and size-cap sweeps do not recognize active SaaSShorts jobs — medium, confirmed source-level cleanup gap
+
+Evidence:
+- app.py _job_is_active returns true only for IDs in _running_jobs, entries in the main jobs dictionary with queued/processing status, or a recent resume manifest.
+- SaaSShorts generation stores active jobs only in saas_jobs and names the output directory saas_<uuid>; it does not add that ID to _running_jobs, jobs, or a resume manifest.
+- _sweep_expired_job_dirs and _enforce_output_size_cap both rely on _job_is_active to protect live output directories.
+- tests/test_cleanup_live_jobs.py covers main jobs and resume manifests but has no active SaaSShorts case.
+
+Impact: if a SaaSShorts generation takes longer than JOB_RETENTION_SECONDS without writing a new file, or the output-size cap is reached while it is processing, the cleanup sweep can delete its working directory under the generator. The task can then fail or return missing output. This is more likely in cloud mode where JOB_RETENTION_SECONDS defaults to one hour and generation waits on multiple external media providers.
+
+Fix direction: teach _job_is_active to recognize saas_jobs entries with queued/processing status and/or give SaaSShorts jobs their own durable activity marker/manifest. Ensure the output-size-cap sweep uses the same protection. Add tests for an old active saas_<id> directory and a size-cap sweep while a SaaSShorts task is running.
+
+### F-42: SaaSShorts local output ownership is lost after restart, weakening immediate account erasure — medium privacy/retention gap
+
+Evidence:
+- _purge_local_jobs_for_user can delete SaaSShorts output only by iterating saas_jobs in memory and checking its user_id.
+- SaaSShorts output directories are named saas_<uuid> and do not receive the .owner sidecar used by ordinary managed clip jobs.
+- The account purge docstring explicitly says a restart loses the SaaSShorts ownership link and those files age out on the normal sweep.
+- The output directory is under OUTPUT_DIR and is reachable through the public /videos static mount (F-25).
+- The normal retention sweep may remove the directory after JOB_RETENTION_SECONDS, but that is delayed retention, not immediate account erasure.
+
+Impact: after a backend restart, deleting an account cannot identify that user's SaaSShorts scripts, generated videos, voiceover, actor image and intermediate assets. Those files can remain locally accessible through /videos until the retention sweep removes them. The public URL exposure increases the privacy impact during that window.
+
+Fix direction: write a durable owner marker for each SaaSShorts output directory, include those markers in startup recovery and account purge, and ensure public media delivery applies the same owner/capability rules as ordinary clips. Add a test that creates a SaaSShorts job, clears saas_jobs to simulate restart, runs account deletion purge, and verifies the directory is removed.
