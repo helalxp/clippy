@@ -4,13 +4,13 @@
 > **Repository:** https://github.com/helalxp/clippy  
 > **Default branch:** `main`  
 > **Purpose:** Shared technical orientation and audit ledger for Claude Code, Codex, Gemini CLI, Hermes, and other engineering agents.  
-> **Status:** Initial repository-wide structural audit and targeted source inspection. This is **not yet a certified line-by-line audit of every source file**, nor a runtime certification. See the coverage ledger and verification limits below.
+> **Status:** Expanded repository audit in progress. This document is the canonical agent handover and audit ledger. It is **not yet a certified line-by-line audit of every tracked source file or every branch**, and no local runtime/build was executed in this inspection. Verified CI results and targeted findings are recorded below; the coverage ledger must remain explicit.
 
 ---
 
 ## 0. Mandatory instructions for agents
 
-1. Read this file before engineering work, then read the branch's `CLIPPY_MASTER.md` and `AGENTS.md`/ `CLAUDE.md` if present.
+1. Read this file before engineering work, then read this file first, then any branch-specific `AGENTS.md` / `CLAUDE.md`; read a branch-specific `CLIPPY_MASTER.md` only where that branch still contains one.
 2. Confirm the actual checkout: `git status --short`, `git branch --show-current`, `git branch -avv`, `git remote -v`, `git log --oneline --decorate -12`.
 3. Never assume the current checkout is `main`. The native Windows migration is on `windows-native-migration`, not in main.
 4. Source, tests, configuration, and Git history outrank this document. If this document conflicts with checked-out code, trust the code and update this document.
@@ -35,18 +35,18 @@ Repository metadata observed through GitHub:
 - Public repository: `helalxp/clippy`
 - Repository ID: `1430643349`
 - Default branch: `main`
-- Main HEAD at inspection: `3b398f02b83fe99ec6b1ffd029c7bd0eff3e551d`
+- Main HEAD at inspection: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
 - Reported repository size: 79,360 KB (GitHub repository size metadata; not a local checkout measurement).
-- Main recursive tree: 471 entries, 421 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
+- Main recursive tree: 472 entries, 422 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
 
 ### Branch inventory
 
 | Branch | HEAD at inspection | GitHub comparison against main | Interpretation |
 |---|---|---|---|
 | `main` | `3b398f02b83f` | Default branch | Docker-oriented OpenShorts-derived application, workspace UI and existing feature patches. |
-| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 6 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
-| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 5 behind; status `diverged` | Contains a unique reference-template feature commit. |
-| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 5 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
+| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 8 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
+| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 7 behind; status `diverged` | Contains a unique reference-template feature commit. |
+| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 7 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
 
 Branch tips are moving references. Re-run comparisons before cherry-picks, merges, or release decisions.
 
@@ -399,3 +399,138 @@ Do not erase historical findings. Mark them superseded with the commit/test evid
 ---
 
 **End of initial audit baseline.** Update the inspection date, branch SHAs, tree counts, and coverage ledger whenever the repository changes materially.
+
+
+---
+
+# Deep audit update — 2026-11-09
+
+## Current repository state (re-verified)
+
+- Default branch: `main`
+- Current main HEAD: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
+- Recursive Git tree: 472 entries, 422 tracked files, 50 directories.
+- Branch comparisons against current main:
+  - `codex/new-ui`: 0 ahead / 8 behind; no unique commits.
+  - `codex/reference-templates`: 1 ahead / 7 behind; diverged.
+  - `windows-native-migration`: 14 ahead / 7 behind; diverged.
+- The prior audit's main SHA, branch behind counts, and file count are superseded by this snapshot.
+
+## CI verification on current main HEAD
+
+GitHub Actions run: [CI run for ec3092e](https://github.com/helalxp/clippy/actions/runs/42646257926)
+
+- Backend test job: **failed**.
+- Frontend build job: **passed**.
+- Backend result: **1,226 passed, 30 skipped, 2 failed**.
+- Failed tests:
+  1. `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`
+  2. `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`
+
+### F-01 — Clip duration override is incorrectly narrowed — medium, confirmed
+
+Evidence:
+- `clip_selection.py:186-187`
+- `tests/test_generation_controls.py:25-28`
+
+The function widens any range narrower than 15 seconds, but the assignment uses `lo + 5.0`. For `CLIP_MIN_SECONDS=20` and `CLIP_MAX_SECONDS=30`, the condition is true and the result becomes `(20.0, 25.0)`, contradicting the test and the caller's explicit max. The existing logic also makes the comment and implementation disagree.
+
+Fix direction: preserve a valid user-supplied range. Only repair an inverted/degenerate range according to a documented policy; do not silently narrow a valid 20–30 second request. Add boundary tests for 5, 10, 15, 20, 30, 60, 175, and 180 second limits.
+
+### F-02 — Recut watermark test double no longer matches the call contract — low, confirmed CI failure
+
+Evidence:
+- `recut.py:326-328`
+- `tests/test_recut.py:278-284`
+
+The production call passes `backdrop_type` and `backdrop_color` keyword arguments. The test injects `watermarker=lambda path: ...`, which rejects those keywords. The CI failure is confirmed; whether the production behavior is correct still depends on the real `watermarked.apply_watermark` signature and end-to-end render verification.
+
+Fix direction: update the injected fake to accept and assert keyword arguments, or define and test a stable watermarker protocol. Do not weaken production behavior merely to satisfy a stale fake.
+
+## High-priority security findings
+
+### F-03 — Renderer bypasses backend media authorization — high, confirmed exposure surface
+
+Evidence:
+- `render-service/src/server.ts:50`: `express.static(OUTPUT_DIR)` exposes the shared output tree under `/output`.
+- `render-service/src/server.ts:58`: `POST /render` has no authentication middleware.
+- `render-service/src/server.ts:124`: render status lookup has no authentication or ownership check.
+- `docker-compose.yml:32-33`: host port `13100` is published to container port `3100` without a loopback-only bind.
+- `render-service/src/server.ts`: server calls `app.listen(PORT)` without a host argument on main.
+
+Impact: direct renderer access can expose output files outside FastAPI's `media_auth.py` checks and can submit resource-intensive render requests without a user identity or ownership boundary. Docker's port publication is normally reachable on host interfaces, subject to host firewall/network policy.
+
+Required fix direction: make renderer an internal-only service in cloud/container deployments, or add strong service authentication and per-job ownership authorization. Bind local desktop renderer to loopback. Do not serve the whole output directory publicly; use scoped, authorized media delivery. Add tests proving anonymous clients cannot read private outputs or submit/poll another user's renders.
+
+### F-04 — SSRF validation is vulnerable to DNS time-of-check/time-of-use changes — medium, needs exploit verification
+
+Evidence:
+- `security_utils.py:89-105`
+- `main.py:933` also sets yt-dlp's `nocheckcertificate=True`.
+
+The guard resolves a hostname, checks the returned addresses, then returns the original URL. The downstream HTTP client/yt-dlp performs its own resolution and follows redirects. The validation result is therefore not cryptographically or transport-bound to the address that is ultimately contacted. DNS rebinding and redirect behavior need explicit tests. Disabling certificate verification further weakens transport protection.
+
+Fix direction: enforce safe destination validation at every redirect and connection, or use a fetch layer that pins the validated address while preserving the correct TLS hostname/certificate verification. Review every caller, not just the initial URL parser. Do not mark this finding fixed based only on another preflight DNS lookup.
+
+## Windows-native migration branch findings (branch-only)
+
+These findings apply to `windows-native-migration`, not main.
+
+### F-05 — Desktop runtime manifest path is hard-coded to a developer checkout — high functional blocker
+
+Evidence:
+- `desktop/src-tauri/src/lib.rs:34`
+
+The `check_runtime` Tauri command constructs `manifest_path` as `D:\openshorts\runtime-manifest.json`. This will not resolve on a normal user's machine or an install path other than that developer directory. The current `Bootstrap` implementation also does not read the manifest when producing status; `get_status` checks executable presence and versions only.
+
+Fix direction: resolve the manifest relative to the installed application payload or a documented managed app root, pass the path through the bootstrap configuration, and test paths containing spaces and non-default install roots on Windows.
+
+### F-06 — Runtime manifest contains placeholder integrity values — high release blocker if used
+
+Evidence:
+- `runtime-manifest.json:10`, `:17`, `:24`, and `:37`
+
+The checked-in manifest contains obviously placeholder-looking SHA-256 values and `manifest_hash_placeholder`. At least the FFmpeg release URL also appears to be a sample/non-release identifier. These values cannot establish artifact integrity. The branch's own desktop documentation explicitly says the signed/checksummed manifest flow is not implemented yet.
+
+Fix direction: do not ship or execute this manifest. Populate verified upstream artifacts, real SHA-256 values, platform/architecture metadata, and a verifiable signed manifest before wiring downloads into first-run setup.
+
+### F-07 — ZIP extraction helper constructs output paths from archive entry names — medium, reachability unverified
+
+Evidence:
+- `desktop/src-tauri/src/downloader.rs:132-145`
+
+The helper joins `dest` with `entry.name()` and writes to that path without an explicit canonical containment check. If this helper is ever used with an untrusted archive, entries containing traversal components may write outside the destination. The separate `Bootstrap::install_from_archive` uses the ZIP library's `extract` helper, but the call graph for `Downloader::extract` was not fully established in this pass.
+
+Fix direction: canonicalize/validate every entry path, reject absolute paths, drive prefixes, parent components, symlinks and other unsafe entry types, and add ZIP-slip regression tests before using this method.
+
+### Native branch readiness
+
+The branch's own `desktop/README.md` describes Stage 3A as a scaffold. The downloader, manifest verification, resumable setup UI, payload updater and production installer are not complete. Do not present this branch as an end-user-ready Windows installer.
+
+## Documentation consolidation and deletion policy
+
+This audit file is now the intended canonical project/architecture/branch/audit handover. The former root `CLIPPY_MASTER.md` material has been consolidated into this document's architecture map, branch notes, workflow, GPU guidance, security rules, and verification discipline. `CLAUDE.md` remains a short entrypoint to this file.
+
+Historical root status/change reports and saved patch artifacts are not runtime dependencies. They are being removed after the verified findings and durable instructions are preserved here. Focused subsystem docs under `docs/architecture/`, compliance/legal docs, CLI docs, desktop migration contracts, agent skill files, and operational runbooks are retained because they serve active technical, legal, packaging, or user-workflow purposes.
+
+The legacy root README is being replaced with a Clippy-specific, branch-accurate README. Demo media and screenshot assets are preserved until their full reference/use scan is complete; this pass did not establish that every such asset is unused.
+
+## Coverage ledger — expanded but not complete
+
+| Area | Inspection performed | Status |
+|---|---|---|
+| Repository tree | Current recursive main tree and branch heads | Complete for current snapshot |
+| Branch divergence | GitHub compare for all four listed branches | Complete for current snapshot |
+| Agent/project guides | Read root CLAUDE, root CLIPPY_MASTER, audit; read native branch AGENTS and desktop contracts | Targeted, migrated into this file |
+| Root historical docs | Read STATUS, CHANGES_COMPLETE, FINAL_SUMMARY, IMPLEMENTATION_PLAN, QUALITY_ISSUES_ANALYSIS | Complete for listed files |
+| CI | Read current main workflow definition, latest run and failing job logs | Complete for latest run inspected |
+| Core backend | Targeted sections of app.py, main.py, clip_selection.py, recut.py, security_utils.py, media_auth.py | Partial; full line-by-line review remains |
+| Cloud services | Targeted sections of auth.py, metering.py, account.py, models.py | Partial; remaining modules and complete files remain |
+| Renderer | Full server.ts and render-worker.ts inspected on main; native path module targeted | Targeted; full integration and auth review remains |
+| Frontend | API client/AuthContext targeted; main shell and components not yet reviewed end-to-end | Partial |
+| Native desktop | Supervisor, bootstrap, downloader, lib, platform compatibility, model manager and runtime manifest targeted | Partial; Windows build/install/runtime tests not run |
+| Tests | Latest CI outcome and two failure sources inspected; test inventory/tree inspected | Partial; individual test coverage and untested paths remain |
+| Assets | Tree and README asset references inspected | Not fully audited |
+| Runtime verification | No local checkout, Docker, Windows machine, GPU, or media fixtures available to execute in this inspection | Not performed |
+
+**Completion rule:** Do not relabel this audit as “full line-by-line complete” until every tracked text/source/config/test/script file on each in-scope branch has been read or explicitly classified as generated/vendor/opaque binary, references have been checked, and required builds/tests have been executed in a suitable environment. A source read is not a runtime certification.
