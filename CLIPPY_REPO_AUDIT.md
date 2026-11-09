@@ -1352,3 +1352,40 @@ Evidence:
 Impact: a long-running Thumbnail Studio transcription can lose its source file when the normal age sweep or uploads size cap runs. The background task then fails while reading the file, even though the user is still actively waiting for the feature to finish. A large upload may also be selected for size-cap deletion while in use.
 
 Fix direction: give thumbnail uploads a durable/session-aware ownership and activity marker, and teach both upload sweeps to protect a source while its thumbnail session is transcribing or analyzing. Add tests that age an active thumb_ upload beyond retention and trigger the size cap while its session is active; both must leave the file intact.
+
+
+### F-46: Dubbed-video subtitle transcription bypasses the host-wide ASR lock — high GPU-concurrency defect
+
+Evidence:
+- main.py transcribe_video wraps transcribe_backends.transcribe_media in transcribe_backends.host_asr_slot(), the cross-process file lock intended to cap GPU transcription across all job processes and the API container.
+- subtitles.py transcribe_audio calls transcribe_backends.transcribe_media directly without host_asr_slot().
+- app.py /api/subtitle invokes generate_srt_from_video for translated/dubbed clips; that helper calls transcribe_audio. The route runs it in the API thread pool and releases the models afterward, but it never acquires the host-wide slot.
+- transcribe_backends._ASR_GATE is only a threading.Semaphore inside one Python process. It cannot coordinate the API container with the separate main.py worker processes, which is exactly why host_asr_slot exists.
+- tests/test_platform_compat.py tests the lock helper's platform behavior, but there is no test proving every ASR entry point acquires the host-wide lock.
+
+Impact: a dubbed subtitle request can start a GPU transcription while one or more main.py jobs already hold the configured host ASR slots. On memory-constrained GPUs this can exceed the intended concurrency budget and trigger CUDA/ONNX OOMs in transcription, NVENC or TransNetV2. The API process is an uncoordinated GPU tenant.
+
+Fix direction: move the host slot into a shared transcribe_media entrypoint or wrap subtitles.transcribe_audio in host_asr_slot just like main.transcribe_video. Ensure the slot is released even on model errors. Add a cross-process lock test covering the main pipeline, Thumbnail Studio and dubbed subtitle route.
+
+### F-47: AI Editor leaves uploaded user videos in Gemini Files for up to 48 hours — high privacy/retention mismatch
+
+Evidence:
+- editor.py VideoEditor.upload_video uploads a full copy of the user's clip to the Gemini Files API.
+- editor.py defines delete_uploaded() and its docstring explicitly says every caller must call it in a finally block immediately after the effects pass; otherwise Google retains the file for up to 48 hours.
+- app.py /api/edit creates a VideoEditor, calls editor.upload_video(), then editor.get_ffmpeg_filter(), but never calls editor.delete_uploaded() in any success or failure path. The finally block only removes the local safe_input_path.
+- The edit route is the only VideoEditor caller found in the main application source.
+
+Impact: each AI edit leaves another full copy of the user's video in the provider's Files API for up to 48 hours, including when filter generation or FFmpeg fails. This contradicts the editor's own retention contract and any product/privacy statement implying that temporary provider uploads are deleted after use.
+
+Fix direction: retain the returned file handle and call editor.delete_uploaded(vid_file) from a finally block covering the entire edit operation, including failures during model processing. Add a test asserting delete is attempted exactly once after success, model failure, and FFmpeg failure. Also reconcile the public privacy policy with the provider's maximum retention window.
+
+### F-48: AI Editor accepts invalid clip indexes when input_filename is supplied — low functional/API validation defect
+
+Evidence:
+- app.py /api/edit validates job ownership and that the job has clips, but does not validate req.clip_index is within [0, len(clips)-1] before the edit when req.input_filename is supplied.
+- The fallback path indexes clips directly and would raise on an invalid value, but the explicit input_filename path skips that indexing.
+- The final metadata update checks only req.clip_index < len(clips), not req.clip_index >= 0; a negative index therefore updates from the end of the Python list, while an out-of-range positive index can spend the full model/FFmpeg cost without updating a clip.
+
+Impact: malformed API or MCP-adjacent callers can run an edit against a job file without selecting a valid clip; negative indexes can silently overwrite the last clip's video_url metadata with an unrelated edit result.
+
+Fix direction: validate clip_index >= 0 and clip_index < len(clips) before reserving quota or starting the upload/model call, regardless of input_filename. Verify the supplied filename belongs to the selected clip's known edit chain, not merely to the job directory. Add negative and too-large index tests.
