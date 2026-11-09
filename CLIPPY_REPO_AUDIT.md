@@ -1729,3 +1729,34 @@ Evidence:
 Impact: a slow but successful job that runs longer than three hours can receive a quota refund even though it consumed the full processing resources. A boundary race can also produce a committed/released status inconsistent with the top-up refund. This weakens the minute ledger's guarantee that usage is consumed at reservation and only refunded for failed or abandoned work.
 
 Fix direction: replace a fixed-age refund with a liveness-aware lease. Extend/heartbeat the reservation while the job manifest is active; only release when the job is terminal, the manifest heartbeat is stale beyond a conservative grace period, and no other instance owns the lease. Serialize commit/release on the UsageLedger row (and keep a consistent lock order with User) with an atomic status transition. Add tests for an active job older than three hours, a stale abandoned job, and concurrent commit/refund.
+
+
+### F-50: Agent upload PUT endpoint does not verify the upload slot owner — high cross-tenant upload integrity gap
+
+Evidence:
+- POST /api/uploads stamps each pending_uploads record with the authenticated managed user_id.
+- DELETE /api/uploads/{upload_id} checks that the caller owns the slot, and _take_pending_upload checks the owner again before /api/process consumes it.
+- PUT /api/uploads/{upload_id} looks up the UUID and checks only that the slot exists and has not expired. It does not call _owner_id or compare slot.user_id to the caller.
+- tests/test_agent_uploads.py covers create, PUT, process, expiry and delete in a single test identity; it has no second-user attempt.
+
+Impact: if an upload_id or upload_url is disclosed (for example, copied into another agent's logs or shared by mistake), another authenticated user can overwrite the pending file and mark the slot complete. The original owner may then process different bytes than they uploaded. The upload ID is random, so this is a capability-leak issue rather than an enumerable unauthenticated route, but the other two endpoints already establish that ownership is intended to be enforced.
+
+Fix direction: compare the authenticated caller's user ID to slot.user_id before opening/truncating the file, returning 404 for a mismatch. Preserve self-host behavior when BILLING_ENABLED is false. Add a two-user test proving B cannot PUT or overwrite A's slot, while A can PUT, process and delete it.
+
+### F-51: Source-video endpoint fails open when the job record is missing — medium residual private-source exposure
+
+Evidence:
+- app.py::get_source_video validates a signed capability when one is supplied.
+- For unsigned requests in managed mode it calls _job_record(job_id), then runs _assert_job_owner only when a record is found.
+- If the job record/manifest/metadata cannot be recovered, it does not reject the request; it proceeds to _locate_source(job_id), which searches uploads/<job_id>_* and the output directory and returns a FileResponse if a source file exists.
+- The intended contract in the endpoint docstring is that managed sources require either a signed URL or the owner's bearer token.
+
+Impact: any orphaned source file whose job record is missing can be fetched by someone who knows its job ID, without a signature or authenticated owner. The UUID makes discovery difficult, but this is still a fail-open authorization branch and can become relevant after partial failures, cleanup races or corrupted manifests.
+
+Fix direction: in managed mode, reject unsigned requests when _job_record returns None; only serve after a valid signature or a positive owner check. Add tests for missing record + existing source file, missing signature, wrong owner, expired signature and valid signed URL.
+
+### Agent upload and source access checkpoint
+- Read all four upload slot endpoints, their helper functions, and tests/test_agent_uploads.py.
+- Read job creation's ownership sidecar/resume-manifest writes, status recovery, source URL minting/streaming, download-all, project restore and the ownership-aware restore path.
+- Positive controls: upload slots have UUID IDs, per-file streaming byte caps, TTL cleanup, ownership checks on DELETE and process consumption, and completed video validation; source URL signatures are short-lived HMAC capabilities; cloud project restore verifies Project.user_id and writes an owner sidecar.
+- Gaps: PUT is the only upload-slot route missing the owner comparison; source streaming fails open on an unresolvable job record; pending_uploads and their files are in-memory/ephemeral across process restarts; no tests cover cross-user PUT or source-record-missing behavior.
