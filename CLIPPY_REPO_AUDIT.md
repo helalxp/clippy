@@ -1968,3 +1968,63 @@ Evidence:
 Impact: the frontend build/dev container, renderer container and planned Windows runtime all rely on unsupported Node major versions. Newly disclosed Node runtime vulnerabilities will not be patched on those release lines, and dependency ecosystems may increasingly drop compatibility. This is a production security and maintenance concern, not only a version-number cleanup.
 
 Fix direction: move all Node build/runtime images and the managed Windows runtime to a supported LTS line (Node 22 or 24 after Remotion/Tauri/Vite compatibility testing). Pin a current patch release or digest, update the runtime manifest and lockfiles, and add CI that fails when a configured Node major is EOL. Do not use the placeholder manifest as a production source until its version, URL, size and checksum are real and verified.
+
+
+### F-61: A failed replacement PUT can leave a truncated upload marked complete — medium upload-integrity defect
+
+Evidence:
+- PUT /api/uploads/{upload_id} explicitly allows a second PUT to replace the first upload.
+- It opens slot.path with `wb`, truncating the previously completed file, but does not set slot.complete=False before consuming the new request body.
+- If the client disconnects or the request stream raises after some chunks, the handler exits before the final duration validation and slot.update(... complete=True). The prior complete=True value remains in the in-memory slot while the path now contains only the partial replacement bytes.
+- _take_pending_upload checks only complete and file existence, so a later process request can accept the truncated file as a completed upload.
+
+Impact: a flaky network during a replacement upload can destroy the previously valid upload and leave the slot in a state that falsely claims the new file is complete. The user then submits a corrupt/partial video and loses the original upload.
+
+Fix direction: set complete=False and bytes=0 before accepting a replacement, stream into a unique temporary file, validate size and ffprobe duration, then atomically replace slot.path and set complete=True only after validation. On every exception/cancellation, delete the temporary file and leave the previous completed file intact. Add a test that completes an initial upload, aborts the second PUT mid-stream, and verifies the first upload remains usable.
+
+### F-62: Main process upload is moved to its final path before quota reservation, but rejected reservations do not clean it up — medium disk leak and lost-upload defect
+
+Evidence:
+- app.py::process_video moves a completed pending upload from pending_<id>_* to <job_id>_<filename> and removes its pending_uploads slot before calling reserve_process_minutes.
+- The direct multipart upload path likewise writes the full file before reserve_process_minutes.
+- If reserve_process_minutes raises for insufficient balance, plan/job limit, or another entitlement failure, there is no surrounding cleanup that removes input_path and job_output_dir. _drop_unstarted_job is only used by later quality-gate failure paths after a reservation exists.
+- The agent upload slot has already been consumed, so the caller cannot reuse the uploaded bytes by retrying with the same upload_id.
+
+Impact: a rejected managed process request can leave a large source video and empty job directory on disk for the retention window. With a 2 GB per-file limit, repeated rejected submissions can consume substantial disk. Agent callers also have to upload the same file again after adding minutes.
+
+Fix direction: wrap the post-upload submission in cleanup-safe handling. On reservation failure, either restore the original pending slot and file (best UX for agent uploads) or delete the moved source and job directory. Add tests for 402, per-plan job-limit rejection and DB errors after file move, asserting no orphan bytes remain and the slot's retry contract is explicit.
+
+### F-63: Source-video ffprobe runs synchronously inside the async process endpoint — medium API responsiveness defect
+
+Evidence:
+- app.py::process_video calls _media_duration_seconds directly for both pending-upload and Thumbnail Studio source paths, and for direct multipart uploads.
+- _media_duration_seconds uses subprocess.run synchronously with a timeout of up to 30 seconds.
+- These calls execute before the request handler yields to an executor/async subprocess API. The upload slot PUT route correctly runs the same probe through run_in_executor, but process_video does not.
+
+Impact: while a source is being probed, the FastAPI event loop is blocked. Health checks, auth, status polling, other uploads and unrelated users' requests can stall for up to 30 seconds per probe. Concurrent process submissions can make the service appear hung.
+
+Fix direction: run _media_duration_seconds through asyncio.to_thread/run_in_executor (or convert it to an async subprocess helper) everywhere it is called from an async route. Add a responsiveness test with a delayed fake ffprobe and assert /health/ready plus an unrelated request remain responsive.
+
+### F-64: Resume manifest is deleted before billing, R2 archive and webhook side effects finish — high crash-consistency gap
+
+Evidence:
+- run_job_wrapper clears .resume.json immediately after the pipeline reaches a terminal state.
+- Only after clearing it does the wrapper settle the minute reservation, archive the managed job to R2, run autopilot bookkeeping, send the caller webhook, record analytics/alerts and send clips-ready notifications.
+- _recover_jobs_from_disk reconstructs a completed job from metadata after restart, but it does not replay any of those post-processing actions.
+- setup_async releases orphaned reservations unless their IDs are in the set returned by _resume_interrupted_jobs; a terminal job whose manifest was already cleared is not retained in that set.
+
+Impact: if the backend/container crashes after .resume.json is removed but before the remaining side effects finish, startup recovers the clip as completed but never archives it, commits its reservation or delivers the webhook/email. The orphaned reservation may be refunded even though the clip was rendered. The local output is then subject to normal retention and may disappear without ever reaching the durable library.
+
+Fix direction: separate pipeline completion from post-processing completion. Persist a terminal manifest/outbox row until reservation settlement, R2 archive and required callbacks are durably acknowledged. Make each action idempotent and retryable after restart; only then clear the manifest. Add crash-injection tests at every boundary between render completion, reservation settlement, archive, webhook and notification.
+
+### F-65: Managed R2 archiving is best-effort with no durable retry, despite being the only durable copy — high data-retention/reliability defect
+
+Evidence:
+- app.py::_archive_managed_job catches archive_job exceptions, logs them and returns; run_job_wrapper continues to webhooks and notifications as if the job is complete.
+- cloud/videos.py::archive_job catches individual metadata/clip/twin upload failures, logs them and continues. If no clip upload succeeds it returns without creating a Project/UserVideo record; if only some clips succeed it creates a partial history/project state.
+- No archive-pending state, retry queue, durable outbox or startup sweep reconciles completed local jobs that lack their expected Project/UserVideo rows.
+- Local output retention is one hour by default in cloud mode, so a transient R2 outage can outlive the only local copy.
+
+Impact: an R2 outage or per-object upload failure can produce a successful completed job that is not durably archived. The dashboard/email may tell the user the clips are ready, but after local retention expires the videos are gone. Partial uploads can also leave a project that appears complete but is missing some clips.
+
+Fix direction: make archive completion a required durable job phase. Record expected clip/object count and per-object state; retry failed uploads with bounded backoff; only mark the managed job fully delivered after all required objects and metadata are verified. Keep local output pinned while archive is pending. Add tests for metadata upload failure, one-of-many clip failure, R2 outage and recovery after process restart.
