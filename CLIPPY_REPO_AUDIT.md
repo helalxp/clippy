@@ -1529,3 +1529,30 @@ Fix direction: use atomic time-bucket counters keyed by normalized email and tru
 
 ### Additional cloud authentication note
 - Dockerfile starts Uvicorn with --forwarded-allow-ips "*", and cloud/auth.py uses request.client.host as the IP rate-limit key. The source comment acknowledges that forwarded headers are trusted and can be forged. Confirm the actual Traefik ingress behavior and whether port 8000 is externally published in each deployment before treating this as an exploitable public IP-spoofing issue. Prefer a narrowly trusted proxy network and derive client IP only from headers inserted/overwritten by that proxy.
+
+
+### F-55: Renderer accepts arbitrary video URLs and loads them in its headless browser — high SSRF/network-boundary risk
+
+Evidence:
+- render-service/src/server.ts validates props.videoUrl only as a string. It rewrites URLs matching /videos/<job>/<path> to its own /output static mount, but leaves every other URL unchanged.
+- render-service/src/render-worker.ts passes the unvalidated URL into Remotion selectComposition/renderMedia as inputProps.
+- remotion/src/compositions/ShortVideo.tsx passes videoUrl directly to the @remotion/media Video src property. The renderer's Chromium process therefore makes the network request.
+- The renderer runs on the Docker network and can reach internal services by service name/port; its own server also exposes /output. There is no URL scheme/host allowlist, no private-IP block, and no redirect-hop validation at this boundary.
+- /render is unauthenticated and published by docker-compose.yml, so the caller does not need a backend job or authenticated Clippy session to submit the URL.
+
+Impact: an unauthenticated caller who can reach the renderer can make its browser request arbitrary HTTP(S) destinations reachable from the renderer container, including internal Docker services and loopback endpoints. The returned render and the renderer's public output mount can expose content when the target serves browser-decodable media. Even where content cannot be rendered, the endpoint provides an internal network request primitive and can probe internal services through render outcomes/timing.
+
+Fix direction: do not accept arbitrary videoUrl values. Require a server-issued job/clip reference and resolve it to a canonical path beneath OUTPUT_DIR after ownership authorization. If remote sources are a product requirement, validate every redirect and pin the resolved public address at the actual transport layer; reject loopback, private, link-local, multicast, reserved and metadata-service ranges. Add tests for localhost, Docker service names, RFC1918, IPv6 local/link-local, file/data schemes and redirect-to-private targets.
+
+### F-56: Renderer has no render admission limit or render-job retention — high availability/resource-exhaustion risk
+
+Evidence:
+- render-service/src/server.ts calls executeRender immediately for every valid POST /render; there is no queue, semaphore, global concurrency ceiling or per-user budget.
+- The Zod schema requires only positive durationInFrames, fps, width and height. It has no upper bounds for duration, dimensions, pixel count, frame rate or total output frames.
+- Each render uses Remotion/Chromium and encodes a video, so concurrent requests multiply browser, memory, CPU/GPU and disk usage.
+- renderJobs is a process-local Map. No code removes completed/error entries, imposes a maximum size, or expires old records.
+- The route is unauthenticated and the renderer port is published by Docker Compose (F-03).
+
+Impact: an unauthenticated caller can enqueue many concurrent high-resolution/long-duration renders and exhaust the renderer container's CPU, RAM, browser processes or output disk. Even ordinary completed renders accumulate permanently in renderJobs, causing process memory usage to grow over time.
+
+Fix direction: authenticate renderer requests with a backend-only service credential and authorize job ownership; put renders behind a bounded queue and semaphore; validate maximum durationInFrames, width, height, fps and total pixel-frames; enforce execution timeout/cancellation; and expire terminal job records after a defined TTL. Add stress tests proving a burst is queued/rejected within a fixed concurrency budget and that old records are pruned.
