@@ -1379,13 +1379,26 @@ Impact: each AI edit leaves another full copy of the user's video in the provide
 
 Fix direction: retain the returned file handle and call editor.delete_uploaded(vid_file) from a finally block covering the entire edit operation, including failures during model processing. Add a test asserting delete is attempted exactly once after success, model failure, and FFmpeg failure. Also reconcile the public privacy policy with the provider's maximum retention window.
 
-### F-48: AI Editor accepts invalid clip indexes when input_filename is supplied — low functional/API validation defect
+### F-48: Several clip-edit and publishing routes accept negative clip indexes — low functional/API validation defect
 
 Evidence:
-- app.py /api/edit validates job ownership and that the job has clips, but does not validate req.clip_index is within [0, len(clips)-1] before the edit when req.input_filename is supplied.
-- The fallback path indexes clips directly and would raise on an invalid value, but the explicit input_filename path skips that indexing.
-- The final metadata update checks only req.clip_index < len(clips), not req.clip_index >= 0; a negative index therefore updates from the end of the Python list, while an out-of-range positive index can spend the full model/FFmpeg cost without updating a clip.
+- app.py /api/edit validates job ownership and that the job has clips, but does not validate req.clip_index is within [0, len(clips)-1] before the edit when req.input_filename is supplied. The explicit input_filename path skips the list access that would otherwise raise for an invalid positive index.
+- /api/translate checks only req.clip_index >= len(clips), so a negative value selects the last clip. /api/social/post directly indexes clips[req.clip_index], which also accepts negative indexes.
+- Several final metadata updates check only req.clip_index < len(clips), not req.clip_index >= 0; a negative index therefore updates from the end of the Python list, while an out-of-range positive index can spend the full model/FFmpeg cost without updating a clip.
 
 Impact: malformed API or MCP-adjacent callers can run an edit against a job file without selecting a valid clip; negative indexes can silently overwrite the last clip's video_url metadata with an unrelated edit result.
 
-Fix direction: validate clip_index >= 0 and clip_index < len(clips) before reserving quota or starting the upload/model call, regardless of input_filename. Verify the supplied filename belongs to the selected clip's known edit chain, not merely to the job directory. Add negative and too-large index tests.
+Fix direction: validate clip_index >= 0 and clip_index < len(clips) before reserving quota or starting upload/model/vendor calls on /api/edit, /api/translate and /api/social/post. Verify supplied filenames belong to the selected clip's known edit chain, not merely to the job directory. Add negative and too-large index tests for every route.
+
+
+### F-49: Social publishing buffers the entire video in RAM with no per-user concurrency bound — high availability/resource-control risk
+
+Evidence:
+- app.py _post_video_blocking opens the clip and calls f.read(), then stores the complete video bytes in the multipart files dictionary before making the Upload-Post request.
+- /api/social/post dispatches this function through asyncio.to_thread, so the event loop stays responsive, but there is no semaphore or per-user/global concurrency limit around the upload worker.
+- Multiple simultaneous requests each allocate a full in-memory copy of the clip. The endpoint accepts parallel requests and the main job concurrency semaphore does not govern social uploads.
+- The frontend and API support multi-platform posting, and clips may be large enough that a single byte buffer is material; concurrent requests multiply that memory use.
+
+Impact: a signed-in user or API client can submit several concurrent publish requests for large clips and drive backend memory usage sharply upward. The process can OOM or become unavailable to unrelated users even though each individual request is valid and the event loop itself is not blocked.
+
+Fix direction: stream the file handle through httpx multipart rather than f.read(); add a bounded global upload semaphore and a per-user rate/concurrency limit; cap file size and request duration; and return a clear 429/503 when the queue is full. Add a concurrency test proving memory use is bounded and that a second upload waits or is rejected rather than allocating another full clip buffer.
