@@ -449,18 +449,18 @@ Fix direction: choose one stable watermarker contract. Either extend main.apply_
 
 ## High-priority security findings
 
-### F-03 — Renderer bypasses backend media authorization — high, confirmed exposure surface
+### F-03 — Renderer publicly serves the entire shared output directory and accepts unauthenticated render requests — high, confirmed exposure surface
 
 Evidence:
-- `render-service/src/server.ts:50`: `express.static(OUTPUT_DIR)` exposes the shared output tree under `/output`.
-- `render-service/src/server.ts:58`: `POST /render` has no authentication middleware.
-- `render-service/src/server.ts:124`: render status lookup has no authentication or ownership check.
-- `docker-compose.yml:32-33`: host port `13100` is published to container port `3100` without a loopback-only bind.
-- `render-service/src/server.ts`: server calls `app.listen(PORT)` without a host argument on main.
+- `render-service/src/server.ts`: `express.static(OUTPUT_DIR)` exposes the entire shared output tree under `/output`, with no authentication or media allowlist. This includes non-dotfile metadata JSON and other files beyond deliverable media.
+- The same server accepts `POST /render` and `GET /render/:renderId` without authentication or ownership checks.
+- `docker-compose.yml` publishes host port 13100 to container port 3100 without a loopback-only host bind; the main-branch renderer calls `app.listen(PORT)` without a host argument and therefore binds all interfaces.
+- `RestoringStaticFiles` on the backend has an extension/path allowlist but no per-user or signed capability check; its own docstring explicitly says clips and source video remain public to anyone who has the job ID (see F-25).
+- media_auth.py implements capability and user-token helpers, but app.py and mcp_server.py do not call sign_media_url, mint_user_token, or token-verification helpers; app.py only calls media_auth.is_servable. There is no /api/media-token route and dashboard/src/config.js does not append a media token.
 
-Impact: direct renderer access can expose output files outside FastAPI's `media_auth.py` checks and can submit resource-intensive render requests without a user identity or ownership boundary. Docker's port publication is normally reachable on host interfaces, subject to host firewall/network policy.
+Impact: anyone who can reach the renderer port can enumerate/fetch known output paths, including non-deliverable metadata, and can submit/poll render jobs without a user identity. The backend's /videos path is also bearer-by-job-ID rather than user-authenticated; the renderer is worse because it serves the full output directory, not just allowed media extensions. Docker's published port is normally reachable on host interfaces, subject to firewall/network policy.
 
-Required fix direction: make renderer an internal-only service in cloud/container deployments, or add strong service authentication and per-job ownership authorization. Bind local desktop renderer to loopback. Do not serve the whole output directory publicly; use scoped, authorized media delivery. Add tests proving anonymous clients cannot read private outputs or submit/poll another user's renders.
+Required fix direction: make renderer an internal-only service in cloud/container deployments, or add strong service authentication and per-job ownership authorization. Bind local desktop renderer to loopback. Do not serve the whole output directory publicly; use scoped, authorized media delivery. Wire media capability/user tokens through both backend media handlers and dashboard URLs before claiming media is private. Add tests proving anonymous clients cannot read private outputs or submit/poll another user's renders.
 
 ### F-04 — SSRF validation is vulnerable to DNS time-of-check/time-of-use changes — medium, needs exploit verification
 
@@ -811,7 +811,7 @@ Phase 4 remains partial; no PostgreSQL, Stripe, R2, OAuth, concurrency, or accou
 - app.py /api/render and /api/render/{render_id} proxy routes
 - renderer package scripts and TypeScript configuration were inspected in Phase 1.
 
-### F-16: Render job ID is used as an unchecked filesystem path — high, confirmed path traversal
+### F-16: Main-branch render job ID is used as an unchecked filesystem path — high, confirmed on main; fixed in the Windows migration branch
 
 Evidence:
 - render-service/src/server.ts accepts jobId as any non-empty string (Zod min(1)); it does not enforce a UUID or safe path segment.
@@ -820,7 +820,7 @@ Evidence:
 
 Impact: a caller who can reach the renderer can supply traversal components in jobId so the worker creates directories and writes generated media outside OUTPUT_DIR. The generated filename is timestamped and not an arbitrary overwrite primitive, but the directory escape can write files outside the intended media root and consume disk in other writable locations. The direct renderer route is unauthenticated (F-03); the backend proxy also lacks a job ownership/path check.
 
-Fix direction: treat jobId as a strict UUID (or server-issued opaque identifier) at both API boundaries; derive output paths only from a validated server-side job record; resolve the final path and assert it remains beneath OUTPUT_DIR before mkdir/write. Add traversal, absolute-path, Windows drive-prefix and separator tests.
+Branch comparison: windows-native-migration adds render-service/src/paths.ts::resolveJobOutputDirectory, which validates safe characters and confirms containment beneath OUTPUT_DIR; render-worker.ts uses that helper. This closes the specific worker path-escape in that branch, but the API still needs server-side ownership checks and tests. Main does not contain the helper and remains vulnerable. Fix direction: treat jobId as a strict UUID (or server-issued opaque identifier) at both API boundaries; derive output paths only from a validated server-side job record; resolve the final path and assert it remains beneath OUTPUT_DIR before mkdir/write. Add traversal, absolute-path, Windows drive-prefix and separator tests.
 
 ### F-17: Render proxy accepts untrusted video URL and unbounded render parameters — high, confirmed missing validation
 
@@ -990,3 +990,24 @@ Additional full-module/selected-path reads:
 - Autopilot uses a unique (user_id, video_id) claim to prevent duplicate processing. Its publish fan-out runs in an in-memory background task and updates posted_count after the full loop; a process crash mid-publish can leave the persisted run without per-clip delivery state. Review if this workflow is expected to resume or be reconciled after deployment/restart.
 - The social tenant-isolation tests explicitly assert that cloud mode ignores a caller-supplied Upload-Post profile and filters scheduled posts by the server-resolved profile. These are useful regression controls.
 - OAuth tests currently exercise helper and input-validation behavior; the code comment says DB-backed register/authorize/token tests are performed manually after deploy. Add local database-backed tests, especially for the single-use race in F-21.
+
+
+### F-25: Backend video URLs are public bearer-by-job-ID, and media capability helpers are not wired — high privacy/design gap, explicitly documented in source
+
+Evidence:
+- restoring_static.py class documentation explicitly states that clips and the untouched source video remain public to anyone who has the job ID; closing this requires capability tokens, a /api/media-token endpoint and dashboard URL integration.
+- app.py mounts /videos with RestoringStaticFiles and _media_guard. _media_guard only checks media_auth.is_servable (extension/path allowlist) and the free-plan clean-twin rule; it does not authenticate the requester or verify job ownership.
+- media_auth.py implements path signatures and per-user media tokens, but a full app.py/mcp_server.py search finds no calls to sign_media_url, mint_user_token or verification helpers. app.py only calls is_servable.
+- No /api/media-token endpoint exists, and dashboard/src/config.js getApiUrl simply prefixes API_BASE_URL; it does not append a user media token.
+- /videos URLs are used directly as <video> sources and downloads, so the URL itself is the access capability.
+
+Impact: anyone who obtains a /videos/<job_id>/<filename> URL can fetch that media until the local file expires or the URL is otherwise unavailable. The source video in the same job directory is also within the public media mount if its filename is known and its extension is allowlisted. This is not the same as the renderer's broader output-tree exposure in F-03: the backend mount does at least restrict paths/extensions, but it does not enforce user ownership.
+
+Fix direction: implement the media-auth contract end-to-end: mint short-lived per-user media tokens from the authenticated API; validate tokens or signed path capabilities in the /videos and /thumbnails handlers; append tokens in the dashboard's media URL builder without exposing the 30-day session JWT; provide explicit signed links for webhooks/MCP/R2 consumers; and add tests for anonymous, wrong-user, expired-token, path-capability and source-file requests. Until then, product/privacy docs must describe video URLs as public to anyone who has them, not as private authenticated media.
+
+### Phase 4 frontend checkpoint
+- Main dashboard source inventory: 69 files (50 JSX, 7 JS, 4 TSX, 3 TS, 4 CSS and 1 SVG).
+- Full-file structural/endpoint inventory performed for App.jsx, AuthContext.jsx, lib/api.js, ResultCard.jsx, ClipEditor.jsx, RemotionPreview.jsx, MediaInput.jsx, HistoryTab.jsx, ThumbnailStudio.jsx, and the remaining component batches listed in the audit notes. High-impact paths read include initial auth/hash handling, process submission/file-vs-URL/multipart branching, advanced watermark/hook/caption fields, clip background/watermark handlers, clip editor EDL/rerender, thumbnail upload/analyze/generate/frames/publish, account deletion, OAuth consent, API key management, billing/cancel, autopilot, and social analytics.
+- Most managed dashboard API calls use apiFetch/apiJson, which attaches the bearer token. Static media URLs do not receive the short-lived media token described by media_auth.py because that integration is absent (F-25).
+- ResultCard's watermark preview creates URL.createObjectURL(watermarkLogo) directly during JSX rendering without revoking the URL. ThumbnailStudio's DragDropZone similarly creates object URLs inline for image previews; repeated rerenders/file changes can leak blob URLs until the page is closed. This is a low-severity client memory leak; use a memoized URL and revoke it in effect cleanup.
+- Further frontend work remains: read all 69 files in full, trace all props and event contracts into App.jsx/backend routes, review all polling/cleanup behavior, validate localStorage secret handling and consent, check accessibility/responsive states, and run ESLint plus production and desktop builds. Phase 4 remains partial.
