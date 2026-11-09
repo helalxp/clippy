@@ -1074,3 +1074,37 @@ Fix direction: html.escape the title before HTML interpolation, keep the subject
 - The hosted frontend, landing page, SEO metadata, static assets and legal hub remain OpenShorts-branded and reference openshorts.app, while the GitHub repository and engineering docs are Clippy-branded. This may be intentional because the repo is a fork or because the hosted service still uses the OpenShorts identity, but it is not a complete product rebrand. Do not bulk-replace legal/operator identity, domains, support addresses or license attribution without an explicit product/legal decision.
 - dashboard/src/App.css is generic Vite starter CSS and is not imported by App.jsx or main.jsx in the inspected source. It appears to be an orphaned starter file; retain until the full import/build scan is complete.
 - Landing.jsx demo video references are live page content, so those assets are not eligible for deletion merely because they are demo media.
+
+
+## Phase 8 checkpoint: test inventory and regression coverage
+
+### Test inventory
+- Main tree contains 98 test files: 97 Python test/support files under tests/ plus one TypeScript renderer test.
+- Latest completed CI result for the current code snapshot (1710a1d4e98c) remains 1,226 passed, 30 skipped, 2 failed. The subsequent commits in this audit sequence change only CLIPPY_REPO_AUDIT.md; no application code has been modified.
+- CI workflow runs the Python pytest suite and dashboard production build. It does not run dashboard ESLint, renderer tests, Remotion TypeScript build/typecheck, a real renderer integration test, Docker Compose validation, or a Windows/Tauri build.
+- No native Windows Rust tests or Windows integration tests are present in the inspected branch tree.
+
+### Focused tests read and coverage conclusions
+- tests/test_generation_controls.py explicitly expects CLIP_MIN_SECONDS=20 and CLIP_MAX_SECONDS=30 to return (20, 30); this is the direct regression test for F-01.
+- tests/test_recut.py injects a one-argument watermarker fake; the actual main.apply_watermark signature mismatch proves the failure is not only a fake issue (F-02).
+- tests/test_media_path_guard.py tests the extension/path allowlist and explicitly documents that media remains unauthenticated by job ID. It does not test path capabilities or per-user media tokens.
+- tests/test_restoring_static.py tests static serving, restoration and job-ID shape. It does not test authentication or ownership for a valid job ID.
+- tests/test_thumbnail_studio.py covers pure image/text/frame helpers; it does not exercise thumbnail API ownership, session path containment, upload size limits, static privacy or restart cleanup.
+- tests/test_account_local_purge.py covers thumbnail cleanup only while thumbnail_sessions contains the owner in memory. It does not simulate a backend restart before account deletion, leaving the F-22 case uncovered.
+- tests/test_ssrf_guard.py covers IP classification and initial DNS resolution, including one bad DNS answer. It does not test DNS changes between validation and connection, redirect hops in urllib/yt-dlp, or transport-level IP pinning.
+- tests/test_mcp_oauth.py tests PKCE/input helpers but lacks database-backed concurrent code redemption; its own comments say the DB exchange is checked manually after deploy (F-21).
+- tests/test_social_tenant_isolation.py provides useful cloud profile isolation and scheduled-post filtering coverage.
+- tests/test_agent_uploads.py covers upload slot creation, PUT, process handoff and expiry, but does not test a leaked upload capability being overwritten by a different user.
+- tests/test_email_policy.py covers commercial email/unsubscribe headers and opt-out filtering, but there is no dedicated test file for marketing GET vs POST semantics or HTML escaping of user-controlled email content (F-27/F-29).
+- tests/test_billing_states.py, tests/test_invoice_subscription_status.py, tests/test_cancellation.py and tests/test_metering_free_plan.py cover important billing state transitions, but do not exercise duplicate concurrent Stripe webhook delivery or account deletion racing with a new reservation (F-14/F-23).
+- render-service/src/composition-metadata.test.ts is the only renderer test file and is not run in CI. It does not cover server authorization, path traversal, SSRF, resource bounds or process restart.
+
+### Test/CI remediation plan
+1. Restore green backend CI by fixing F-01 and the real F-02 call contract, then rerun the complete suite.
+2. Add the missing security regressions first: media privacy, thumbnail restart erasure, thumbnail session path traversal, SaaS retry tenant ownership, renderer path/url/limits, forwarded-header spoofing, and account-deletion concurrency.
+3. Add database-backed OAuth and Stripe duplicate-delivery concurrency tests.
+4. Add consent/marketing endpoint tests for first-load analytics behavior, Reject all, GET unsubscribe and POST one-click unsubscribe.
+5. Add CI jobs for dashboard lint, renderer tests, Remotion typecheck/build, Compose config validation and a Windows Tauri compile/package smoke test.
+6. Add media fixture integration tests for background, watermark, recut, subtitles, FFmpeg fallback and output metadata; current pipeline tests largely use injected fakes and do not prove real encoded outputs.
+
+Phase 8 remains partial. The full test suite has not been rerun in this audit session, and no new application code has been committed.
