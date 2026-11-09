@@ -1,6 +1,6 @@
 # Clippy agent instructions
 
-The canonical project, architecture, branch, development, and safety guide is **[CLIPPY_MASTER.md](./CLIPPY_MASTER.md)**.
+The canonical project, architecture, branch, development, and safety guide is **[CLIPPY_MASTER.md](./CLIPPY_MASTER.md)**. The repository-wide audit, branch inventory, known risks, and coverage ledger are in **[CLIPPY_REPO_AUDIT.md](./CLIPPY_REPO_AUDIT.md)**.
 
 ## Required startup
 1. Read `CLIPPY_MASTER.md` before engineering work.
