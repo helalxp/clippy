@@ -1209,3 +1209,15 @@ Fix direction: add explicit ffmpeg and ffprobe fields to RuntimePaths; validate 
 
 ### Windows migration positive control
 - The native branch wires platform_compat.resolve_cookies_write_path into main.py, so the main-branch hard-coded /app/cookies.txt issue is fixed for Windows in that branch. Windows uses the script directory; Docker uses /app when present. Keep this helper in the migration.
+
+
+### GPU-mode expectation note: GPU image does not imply GPU transcription or encoding
+
+Evidence:
+- docker-compose.override.yml selects the GPU Docker build and reserves NVIDIA devices, but does not set WHISPER_DEVICE, TRANSCRIBE_BACKEND or FFMPEG_ENCODER.
+- subtitles.get_whisper_config defaults to device=cpu and compute_type=int8.
+- transcribe_backends defaults TRANSCRIBE_BACKEND to whisper; the Parakeet GPU backend is opt-in and supports only its documented 25 European languages.
+- ffmpeg_utils.video_encode_args defaults FFMPEG_ENCODER to x264. The .env.example documents x264 as the default; NVENC requires FFMPEG_ENCODER=nvenc or auto.
+- gpu_decode.py does default GPU decode on, but only for H.264/HEVC yuv420p with a detectable NVIDIA card and at least GPU_DECODE_MIN_FREE_MB (default 2,500 MB) free VRAM; other codecs/low free memory fall back to CPU.
+
+This is not necessarily a defect: the defaults prioritize broad compatibility and avoid forcing a GPU on every host. It is an important product/configuration expectation, however. A user can build with GPU=1 and reserve the NVIDIA device yet still run Whisper transcription and all FFmpeg video encodes on CPU. Document a tested GPU profile separately from the CPU-safe defaults, and expose the active decoder, ASR device/backend and encoder in startup diagnostics so users can verify which parts actually use the GPU.
