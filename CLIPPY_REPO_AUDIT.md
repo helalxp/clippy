@@ -38,8 +38,8 @@ Clippy is a Windows-first desktop product evolving from the OpenShorts codebase.
 Repository metadata refreshed through GitHub on 2026-11-09:
 - Public repository: `helalxp/clippy`
 - Default branch: `main`
-- Current main HEAD: `2bc5f12f135a284e64ee19894a67e95e267083bc`
-- Application-code snapshot audited: `1710a1d4e98cd5579d27e6c97c959557034799e0`. A GitHub comparison confirms the 79 commits after that snapshot modify only `CLIPPY_REPO_AUDIT.md`; no application source, tests, configs, assets or workflows changed during this audit sequence.
+- Current main HEAD: `04d049485590e839e15704d9fa6c51570d254751`
+- Application-code snapshot audited: `1710a1d4e98cd5579d27e6c97c959557034799e0`. A GitHub comparison confirms the 82 commits after that snapshot modify only `CLIPPY_REPO_AUDIT.md`; no application source, tests, configs, assets or workflows changed during this audit sequence.
 - Main recursive tree: 460 entries, 410 files, 50 directories; the tree response was not truncated.
 - Tracked blob size was previously estimated at ~86.38 MB; this is a Git tree estimate, not a working-copy or Docker image size.
 
@@ -2120,14 +2120,14 @@ Impact: a stuck/corrupt media decoder or encoder can hold an API worker thread o
 Fix direction: define a per-operation FFmpeg timeout policy based on source duration and stage, apply it consistently to every subprocess.run/Popen path, and ensure Popen readers are closed and processes killed/reaped on timeout or cancellation. Add tests with a fake FFmpeg process that never exits and assert each route/job fails within its configured deadline and releases its reservation/slot.
 
 
-## 2026-11-09 audit continuation checkpoint (current HEAD 2e4b3a8)
+## 2026-11-09 audit continuation checkpoint (current HEAD 04d0494)
 
 - Application source snapshot audited: 1710a1d4e98c. All subsequent main commits through 2e4b3a8 change CLIPPY_REPO_AUDIT.md only; no application code was edited in this audit continuation.
 - Current main tree: 460 entries, 410 files, 50 directories. Windows migration tree: 508 entries, 451 files, 57 directories.
 - Branch comparisons are against application-code snapshot 1710a1d4, not the later audit-document-only main HEAD: codex/new-ui 0 ahead / 30 behind; codex/reference-templates 1 ahead / 29 behind; windows-native-migration 14 ahead / 29 behind.
 - Latest completed CI run inspected: 42667586873. Frontend production build passed. Backend suite: 1,226 passed, 30 skipped, 2 failed. Failures remain F-01 (duration override unexpectedly capped at 25 seconds instead of requested 30) and F-02 (recut passes backdrop_type/backdrop_color to apply_watermark, whose real signature accepts only video_path/output_path; the test fake also rejects the extra keywords). No code fixes have been applied.
 - Latest run for current audit-only HEAD 2e4b3a8 was queued when checked; the previous completed run is the authoritative test result recorded above.
-- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 108 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation. Later duplicate entries have been reassigned through F-110.
+- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 100 unique numbered findings (IDs through F-113, with gaps where duplicate entries were consolidated) plus three non-finding refinements/addenda. Duplicate headings have been consolidated or assigned unique IDs.
 - Source reading has materially expanded across cloud auth/billing/storage, MCP/OAuth, SaaSShorts, Thumbnail Studio, upload slots, job lifecycle/cleanup, renderer/Remotion, Docker/CI configuration and the Windows-native branch. The audit is still **IN PROGRESS**; not every tracked source file has been read line by line, and no local runtime, Windows WebView, Docker image, or integration build has been executed.
 
 
@@ -2187,3 +2187,8 @@ Evidence:
 Impact: future schema changes that rename/drop/change columns, add non-null constraints with backfills, or alter indexes can leave deployed databases incompatible with the new application. Rolling deployments may run code against partially upgraded schemas, and there is no deterministic way to identify which schema version a customer database is on.
 
 Fix direction: introduce a first real Alembic baseline revision matching the current production schema, then add one reviewed revision per schema change. Stop relying on create_all as the production migration mechanism; keep startup checks read-only and fail clearly if the DB revision is behind. Add CI that upgrades an old fixture database to head and tests rollback where supported.
+
+
+### Latest CI state after audit-document updates
+- Run 42669230833 for current main HEAD 04d049485590 is in progress as of the latest check. The latest completed run 42669112538 failed; because all 82 commits after source snapshot 1710a1d change only CLIPPY_REPO_AUDIT.md, the application code under test is unchanged.
+- The latest fully inspected completed test result remains 1,226 passed, 30 skipped, 2 failed: F-01 and F-02. See the CI evidence section for the run ID and failure details. Do not interpret audit-document commits as application fixes.
