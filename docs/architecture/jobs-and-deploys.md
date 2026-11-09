@@ -3,7 +3,8 @@
 ## Concurrency model
 
 Async job queue with semaphore-based concurrency control, sized by
-`MAX_CONCURRENT_JOBS` (default 5). Jobs auto-clean after 1 hour.
+`MAX_CONCURRENT_JOBS` (default 5). The default job retention is 1 hour in cloud
+mode and 24 hours in self-host mode (`JOB_RETENTION_SECONDS` overrides either).
 
 The real limit on a GPU host is VRAM, not CPU: each `main.py` job holds Parakeet
 (onnxruntime CUDA), TransNetV2 (torch, ~2 GB at peak) and an NVENC session. When
