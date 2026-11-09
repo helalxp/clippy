@@ -1134,3 +1134,47 @@ Evidence:
 Impact: while a watermark is being rendered, the only Uvicorn event loop is blocked. Health checks, status polling, authentication, uploads and unrelated users' API requests cannot be serviced until the synchronous FFmpeg process returns. A large or slow clip can make the entire backend appear hung for up to ten minutes. The endpoint also blocks during both ffprobe calls.
 
 Fix direction: move all watermark ffprobe/FFmpeg work into asyncio.to_thread/run_in_executor or use asyncio.create_subprocess_exec with asynchronous waiting and cancellation. Apply the same pattern to every subprocess call reachable from async routes. Add an async responsiveness test that runs a deliberately slow fake renderer while /health/ready and an unrelated request continue to return promptly.
+
+
+## Branch audit: codex/reference-templates (1 commit ahead of main)
+
+This branch has one unique commit and is 46 commits behind the current main snapshot. Its only substantive feature addition is a local reference-template library; the remaining diff deletes historical patch files that have already been removed from main. The branch is not merged.
+
+### Files inspected
+- reference_templates.py (full)
+- tests/test_reference_templates.py (full)
+- dashboard/src/components/ReferenceTemplateLibrary.jsx (full)
+- reference_templates/ref_10ed2bb978ca493f8fc2c9df44d65baf/manifest.json
+- app.py route/mount additions and App.jsx nav integration
+- layout_picker.py changed lines
+- .dockerignore, Dockerfile and docker-compose.yml
+- poster.jpg metadata; the referenced reference.mp4 file is absent from the branch tree.
+
+### F-32: Reference template upload reads the same Fetch response body twice — medium functional bug, confirmed
+
+Evidence:
+- dashboard/src/components/ReferenceTemplateLibrary.jsx around lines 47-53 calls response.json() into payload, then on success calls response.json() a second time to obtain created.
+- A Fetch Response body is a one-shot stream; the second read rejects with "body stream already read".
+- The backend upload can therefore succeed and persist the template, but the UI's success path throws before adding it to local state and reports an error. The user may retry and create duplicate reference templates.
+
+Fix direction: use the already-parsed payload as the created manifest after the response.ok check. Add a component/API integration test that uploads once and verifies the returned template is displayed without a second request.
+
+### F-33: Reference-template library has no delete or total-storage limit — medium retention/resource gap in this branch
+
+Evidence:
+- reference_templates.create stores the uploaded source video permanently under reference_templates/<id>/reference.mp4.
+- The upload route permits up to MAX_FILE_SIZE_MB (2,048 MB) per video and streams it safely, but there is no library-wide byte cap, item-count cap, retention sweep or delete endpoint.
+- ReferenceTemplateLibrary exposes upload and refresh/list only; there is no delete action.
+- OUTPUT_MAX_GB and UPLOADS_MAX_GB do not cover the separate REFERENCE_TEMPLATES_DIR.
+- The sample manifest refers to reference.mp4, but the branch tree contains only manifest.json and poster.jpg for that template ID. The sample's reference_url therefore points to a missing file.
+
+Impact: repeated uploads can fill the host disk outside the existing output/upload caps, and users cannot remove a stored reference through the UI/API. The sample template returns a broken reference-video URL. This branch is self-host-only by design (_reference_templates_local_only rejects managed/cloud mode), so it is an instance-level storage concern, not a cloud cross-tenant issue.
+
+Fix direction: add delete with safe ID validation and directory containment; track total library bytes and enforce a configurable quota; document retention; add a consistency check that removes or reports manifests whose reference file is missing. Either include the sample reference.mp4 or remove the stale sample reference entry.
+
+### Reference-template feature scope
+- app.py explicitly disables the API in managed/cloud mode until account-scoped cloud storage exists. This is a positive tenant-boundary guard.
+- Upload streaming enforces a per-file 2 GB cap, uses a random staging filename, and moves the staged file into a generated ref_<uuid> directory.
+- reference_templates.manifest_path validates strict ref_<32 lowercase hex> IDs before reading/writing manifests.
+- The new feature currently stores/analyzes a reference and exposes its poster/video URLs; it does not yet apply the stored overrides to the main clipping pipeline or connect them to layout_picker.pick_and_apply. Treat it as a local library/prototype, not a completed "apply template to generated clip" workflow.
+- tests/test_reference_templates.py covers create/persist, ID traversal rejection and pacing detection, but not API upload failure cleanup, storage quota, delete, missing reference media, or frontend response handling.
