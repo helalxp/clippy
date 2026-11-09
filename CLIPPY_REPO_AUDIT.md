@@ -1893,3 +1893,16 @@ Evidence:
 Impact: a user who upgrades or reactivates at the same time the retention sweeper runs can lose clips and projects permanently. The database rows are also deleted after the R2 objects, so the missing library cannot be reconstructed from the normal history index.
 
 Fix direction: introduce a durable per-user retention state/lease and make the eligibility transition atomic with subscription updates. At minimum, lock the relevant User/Subscription rows, re-check the plan and last_event_at immediately before committing a purge claim, and have subscription activation cancel any unstarted claim. Do not hold a long DB transaction across all object I/O without a deliberate design; a two-phase claim with a short lease and cancellation check before each delete batch is safer. Add concurrency tests for free-to-paid upgrade and canceled-to-active reactivation during a purge.
+
+
+### F-68: Third-party social-profile deletion is best-effort with no durable retry — medium privacy/erasure gap
+
+Evidence:
+- cloud/account.py _delete_upload_post_profile sends a DELETE request to Upload-Post for the user's profile, which contains the connected social-account authorizations.
+- Any non-200/204/404 response is only printed; all network exceptions are caught and printed. The function returns normally and delete_account proceeds to erase the local UploadPostProfile row and the user row.
+- No durable pending-deletion record or retry worker is created when the provider deletion fails. The local profile mapping is deleted, so the system no longer has a direct lookup to retry from (although the deterministic profile name could be reconstructed from the former user UUID in AccountDeletion).
+- The module comment explicitly calls this best-effort, but the account-erasure confirmation and privacy documentation should not imply that the remote social connection was removed if the provider rejected the request.
+
+Impact: after a transient Upload-Post outage or provider error, the Clippy account is deleted while the remote Upload-Post profile and connected social-account tokens may remain active at the provider. The user loses the ability to manage or disconnect that profile from Clippy, and the third-party data may outlive the account without a retry path.
+
+Fix direction: persist a third-party-erasure task before deleting the local profile mapping, including provider, deterministic profile username, attempt state and last error. Retry until the provider confirms deletion or a documented terminal/manual state is reached. Do not tell the user the social connections were deleted until confirmed; expose a clear partial-erasure state if the provider is unavailable. Add tests for 500, timeout and 404 provider responses.
