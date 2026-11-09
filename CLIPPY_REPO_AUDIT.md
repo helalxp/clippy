@@ -1121,3 +1121,16 @@ Evidence:
 Impact: in cloud mode, the watermarked MP4 exists only in the local working directory while the R2 project/history archive remains on the previous unwatermarked file. Once local job files are swept or the project is restored after a deploy, the user can receive the old unwatermarked clip, despite the dashboard having shown the watermark operation as successful. This is a direct persistence bug in the new post-generation watermark feature.
 
 Fix direction: call _archive_clip_edit_bg(job_id, clip_index, served_name) after the metadata and in-memory state are successfully updated, matching the background/reframe/hook/subtitle/edit routes. Add a cloud test that mocks archive_clip_edit and asserts it receives the new watermarked filename; add a restore-after-local-cleanup test proving the watermarked bytes and metadata are restored.
+
+
+### F-31: Watermark rendering runs synchronous FFmpeg/ffprobe inside an async API handler — high availability defect
+
+Evidence:
+- app.py /api/clip/watermark is declared async.
+- It calls subprocess.run directly for ffprobe (up to 15 seconds) and again for FFmpeg (up to 600 seconds), without asyncio.to_thread, run_in_executor or an async subprocess API.
+- The same file's /api/clip/background route correctly runs the FFmpeg subprocess in run_in_executor with a 600-second timeout.
+- The backend Dockerfile starts a single Uvicorn worker; there is no multi-worker isolation to keep other requests responsive while this coroutine blocks.
+
+Impact: while a watermark is being rendered, the only Uvicorn event loop is blocked. Health checks, status polling, authentication, uploads and unrelated users' API requests cannot be serviced until the synchronous FFmpeg process returns. A large or slow clip can make the entire backend appear hung for up to ten minutes. The endpoint also blocks during both ffprobe calls.
+
+Fix direction: move all watermark ffprobe/FFmpeg work into asyncio.to_thread/run_in_executor or use asyncio.create_subprocess_exec with asynchronous waiting and cancellation. Apply the same pattern to every subprocess call reachable from async routes. Add an async responsiveness test that runs a deliberately slow fake renderer while /health/ready and an unrelated request continue to return promptly.
