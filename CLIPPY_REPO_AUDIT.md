@@ -717,9 +717,10 @@ Fix direction: read at most max_bytes + 1, reject immediately when the cap is ex
 Evidence:
 - app.py around lines 6534-6600: /api/thumbnail/generate accepts session_id from a multipart form. It only performs _assert_job_owner if that session_id happens to exist in thumbnail_sessions; a missing session is not rejected.
 - The route computes a basename-safe thumb_upload_dir for uploaded references, but passes the original unsanitized session_id to generate_thumbnail.
+- /api/thumbnail/titles manual-title mode also accepts a caller-supplied session_id and inserts it into thumbnail_sessions with the caller as owner when that key does not exist. Therefore an attacker can first create an owned in-memory session with a traversal/absolute-path ID, then pass the same ID to /api/thumbnail/generate and satisfy the conditional owner check.
 - thumbnail.py around line 664 constructs output_dir with os.path.join("output", "thumbnails", session_id) and calls os.makedirs(output_dir, exist_ok=True). It later writes generated JPEGs into that directory.
 
-Impact: a caller can supply traversal components or an absolute path as session_id when no in-memory session exists. The thumbnail generator then creates directories and writes generated image files outside the intended thumbnails/session directory. The generated file content is model-produced rather than attacker-controlled, and filenames include a random batch token, so this is not by itself arbitrary code execution; it is still an unintended filesystem write/path traversal surface and may enable disk/resource abuse.
+Impact: a caller can create an owned manual-title session with traversal components or an absolute path, then make the thumbnail generator create directories and write generated image files outside the intended thumbnails/session directory. The generated file content is model-produced rather than attacker-controlled, and filenames include a random batch token, so this is not by itself arbitrary code execution; it is still a reachable filesystem write/path traversal surface and may enable disk/resource abuse.
 
 Fix direction: require an existing, owner-verified session when session_id is supplied, or generate a server-owned session ID for sessionless/manual mode. Validate IDs against a strict UUID format at the API boundary and independently resolve/check the final output path under the configured thumbnail root in thumbnail.py. Add traversal, absolute-path, missing-session, and cross-user tests.
 
@@ -1416,3 +1417,16 @@ Evidence:
 Impact: two edits to different clips in the same job can both read the same old metadata snapshot, then each write a version containing only its own change. The last writer silently discards the earlier clip's new video_url, caption style, crop overrides, recipe or watermark/background settings. The output file may exist on disk, but the dashboard/history points back to the old file. Same-clip concurrent operations can also race on output filenames and current-version selection.
 
 Fix direction: centralize clip metadata mutation in a per-job helper. Render outside the lock, then acquire the job lock, reload the latest metadata from disk, update only the target clip's fields, write atomically (temporary file + replace), update in-memory state, and release. Use the same helper from background, watermark, reframe, rerender, subtitle, edit and translate routes. Add a concurrency test that edits two different clips simultaneously and verifies both changes survive in metadata and in-memory results.
+
+
+### F-52: Thumbnail frame and image outputs ignore configured OUTPUT_DIR — medium cross-platform/runtime path bug
+
+Evidence:
+- app.py derives THUMBNAILS_DIR from the configured OUTPUT_DIR and mounts that directory at /thumbnails.
+- app.py account-erasure and cleanup code also uses THUMBNAILS_DIR, so its filesystem root follows OUTPUT_DIR.
+- thumbnail.py extract_face_frames and generate_thumbnail instead hard-code os.path.join("output", "thumbnails", session_id) rather than using OUTPUT_DIR or receiving an explicit output root.
+- The Windows-native supervisor sets OUTPUT_DIR to the managed runtime's data/output directory, which is not guaranteed to be the process working-directory-relative ./output path.
+
+Impact: when OUTPUT_DIR is customized (notably in the Windows-native runtime), generated face frames and thumbnail JPEGs are written under a different directory from the one served by /thumbnails and cleaned up by account erasure. The dashboard receives URLs that point at files the static mount cannot find, and generated face/reference images may be left behind outside the configured data directory.
+
+Fix direction: pass the configured THUMBNAILS_DIR into thumbnail helpers or have them resolve the same OUTPUT_DIR environment variable used by app.py. Avoid independent hard-coded output roots. Add tests with OUTPUT_DIR set to a temporary absolute directory and assert frame extraction, thumbnail generation, static delivery and account purge all use that exact directory.
