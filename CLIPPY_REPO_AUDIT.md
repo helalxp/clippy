@@ -1108,3 +1108,16 @@ Fix direction: html.escape the title before HTML interpolation, keep the subject
 6. Add media fixture integration tests for background, watermark, recut, subtitles, FFmpeg fallback and output metadata; current pipeline tests largely use injected fakes and do not prove real encoded outputs.
 
 Phase 8 remains partial. The full test suite has not been rerun in this audit session, and no new application code has been committed.
+
+
+### F-30: Post-generation watermark edits are not archived to durable cloud storage — high, confirmed persistence defect
+
+Evidence:
+- app.py /api/clip/background updates metadata and in-memory job result, then calls _archive_clip_edit_bg(job_id, clip_index, served_name).
+- The immediately following /api/clip/watermark route performs the same local output/metadata/in-memory update but returns without calling _archive_clip_edit_bg.
+- The shared _archive_clip_edit_bg helper invokes cloud.videos.archive_clip_edit for managed jobs and keeps the durable project/history copy in sync.
+- dashboard/src/components/ResultCard.jsx clears durableSrc after a successful watermark and comments that the new archive is pending; however, the backend route does not schedule that archive.
+
+Impact: in cloud mode, the watermarked MP4 exists only in the local working directory while the R2 project/history archive remains on the previous unwatermarked file. Once local job files are swept or the project is restored after a deploy, the user can receive the old unwatermarked clip, despite the dashboard having shown the watermark operation as successful. This is a direct persistence bug in the new post-generation watermark feature.
+
+Fix direction: call _archive_clip_edit_bg(job_id, clip_index, served_name) after the metadata and in-memory state are successfully updated, matching the background/reframe/hook/subtitle/edit routes. Add a cloud test that mocks archive_clip_edit and asserts it receives the new watermarked filename; add a restore-after-local-cleanup test proving the watermarked bytes and metadata are restored.
