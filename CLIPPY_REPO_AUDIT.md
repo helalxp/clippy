@@ -2084,3 +2084,16 @@ Evidence:
 Impact: an anonymous caller can create an unbounded number of OAuthClient rows and large redirect_uri JSON values, consuming database storage and making client lookup/operations noisier. This is an abuse-control issue rather than an authentication bypass; DCR needs to remain available to legitimate public MCP clients.
 
 Fix direction: cap request-body and individual URI/name lengths, apply a conservative per-IP registration rate limit at the trusted edge or in a shared limiter, and expire/delete clients that have never completed authorization or have been inactive for a defined period. Add burst tests and metrics for registrations per IP/day.
+
+
+### F-69: Google sign-in links an existing account by email without checking email_verified or Google's email authority — high account-takeover risk, exploitability depends on provider email
+
+Evidence:
+- cloud/oauth.py::google_callback reads userinfo.email and userinfo.sub, but never checks userinfo.email_verified or hd.
+- If no User row exists for google_sub, the callback searches for an existing User by normalized email and directly attaches google_sub to that account. It issues a JWT for the matched user immediately.
+- The app's magic-link flow treats mailbox possession as the account proof, so merging a Google identity to an existing magic-link account must preserve that proof.
+- Google OpenID Connect documentation defines email_verified and warns that email is not a stable unique identifier. Google's backend-auth guidance says Google is authoritative for Gmail addresses and for Workspace addresses when email_verified is true and hd is set; for non-Google-hosted addresses it recommends an additional challenge because the address may have changed since initial verification. References: https://developers.google.com/identity/openid-connect/reference and https://developers.google.com/identity/sign-in/web/backend-auth.
+
+Impact: a Google identity with an unverified or non-authoritative third-party email can be linked to an existing Clippy account solely because the email string matches. If an attacker can obtain a Google identity whose asserted email matches a victim's magic-link account but whose current mailbox ownership has not been proven, the callback issues a JWT for the victim account. The exact exploitability depends on what Google permits for the identity's email and whether the email is authoritative; the missing verification/authority check is confirmed.
+
+Fix direction: always require email_verified=true. For @gmail.com, Google's authority is established by the Gmail domain; for Workspace, require verified email plus a validated hd claim. For other domains, do not auto-link by email: require the user to complete the existing magic-link challenge to that address or explicitly link Google from an already-authenticated session. Add tests for unverified email, verified third-party email without hd, verified Gmail, verified Workspace and an existing magic-link account collision.
