@@ -665,6 +665,8 @@ Impact: after a process restart (when saas_jobs is empty), a cloud user who know
 
 Fix direction: persist an owner record at job creation and verify it before disk retry; fail closed when an existing directory has no owner record in cloud mode. Add a restart simulation test: create as user A, clear process memory, attempt retry as user B, expect 404; retry as user A should succeed.
 
+Additional verification: the normal SaaSShorts output URL itself contains the job UUID under /videos/saas_<id>/..., and those media URLs are bearer-by-URL in the current deployment. Possession of the ID is not an ownership check. The retry fallback can reassign the directory to the current caller and later cause account erasure to remove the wrong user's files.
+
 ### F-11: Thumbnail media directory is mounted publicly despite the media-auth contract — high privacy exposure, confirmed
 
 Evidence:
@@ -718,6 +720,8 @@ Evidence:
 Impact: the configured 10 MB watermark limit does not bound memory consumption because the entire upload is already loaded before the check. The thumbnail face/background upload paths have no visible size cap. A permitted caller can cause large memory allocations and potentially exhaust worker memory with oversized multipart uploads. Cloud entitlement gates reduce who can reach some paths but are not a resource limit.
 
 Fix direction: read at most max_bytes + 1, reject immediately when the cap is exceeded, and validate actual image content/dimensions before expensive processing. Apply consistent limits to watermark, thumbnail face/background, actor image, and other upload paths. Add tests for exactly-at-limit and over-limit streams.
+
+Additional verification: the same unbounded-read pattern affects both the clip watermark logo and Thumbnail Studio's optional face/background references. The SaaS actor-upload path is a useful safe pattern because it reads at most MAX_BYTES + 1 before rejecting.
 
 ### F-13: Thumbnail generation accepts an unchecked session_id as a filesystem path — medium, confirmed path-validation defect
 
@@ -947,6 +951,8 @@ Two concurrent token requests using the same valid code and verifier can both re
 
 Fix direction: lock the OAuthCode row with SELECT FOR UPDATE inside an explicit transaction, or atomically update used_at with a WHERE used_at IS NULL and require rowcount == 1 before minting the API key. Add a concurrent redemption test proving exactly one request succeeds and exactly one ApiKey row is created.
 
+Additional verification: the token route creates an ordinary ApiKey row after the non-atomic used_at check. The latest review found no database-backed concurrency test; tests/test_mcp_oauth.py explicitly leaves the real token exchange to manual post-deploy verification.
+
 ### F-22: Account erasure cannot find thumbnail files after a backend restart — high privacy/erasure defect
 
 Evidence:
@@ -972,6 +978,8 @@ Evidence:
 Impact: duplicate or concurrent webhook delivery can produce duplicate payment alerts and duplicate revenue/refund analytics even when the subscription/top-up database state is protected. A failure after external side effects but before StripeEvent insertion can also cause the side effects to repeat on Stripe retry.
 
 Fix direction: implement an inbox/event-processing state machine with a unique event claim before side effects, retryable processing state, and idempotency keys for outbound analytics/alerts. Keep state changes and event claim coordinated; do not simply mark processed before work and lose events on crashes. Add concurrent duplicate-delivery and failure-after-side-effect tests.
+
+Additional verification: the latest source review confirmed that invoice.paid and charge.refunded emit admin/analytics side effects without event-specific deduplication, while subscription last_event_at and top-up session checks protect only selected database state. The webhook test suite has no concurrent duplicate-delivery test.
 
 ### Phase 4/6 cloud coverage update
 - Authentication, API-key management, magic-link issuance/verification, core quota reservation, account erasure, R2 storage, project restore/history, Stripe checkout/webhook, MCP OAuth, social profiles and autopilot were inspected at the function/route level with selected implementation sections read.
@@ -1300,6 +1308,8 @@ Impact: if a SaaSShorts generation takes longer than JOB_RETENTION_SECONDS witho
 
 Fix direction: teach _job_is_active to recognize saas_jobs entries with queued/processing status and/or give SaaSShorts jobs their own durable activity marker/manifest. Ensure the output-size-cap sweep uses the same protection. Add tests for an old active saas_<id> directory and a size-cap sweep while a SaaSShorts task is running.
 
+Additional verification: the cleanup code evaluates the directory name `saas_<uuid>` against _job_is_active, but saas_jobs is keyed by the bare UUID. It therefore never recognizes an active SaaSShorts task as live. Both age retention and size-cap deletion are affected.
+
 ### F-42: SaaSShorts local output ownership is lost after restart, weakening immediate account erasure — medium privacy/retention gap
 
 Evidence:
@@ -1349,6 +1359,8 @@ Impact: an entitled user can submit very long videos to Thumbnail Studio and con
 
 Fix direction: probe source duration before starting expensive work; apply a hard source-duration cap consistent with the reservation; reserve based on the actual bounded duration and action; and perform the reservation before download/upload persistence where possible, releasing it on all failures. Make /api/thumbnail/analyze reuse the same metered transcription flow as /api/thumbnail/upload rather than silently doing an unmetered transcription. Add tests for a multi-hour URL, a large file, an insufficient-balance request, and direct analyze without a pre-existing session.
 
+Additional verification: the upload path is also not bounded by the source-duration metering used by /api/process. A direct /api/thumbnail/analyze request can transcribe a full source while reserving only the fixed analysis charge.
+
 ### F-45: Thumbnail source uploads are invisible to active-job retention and disk-cap protection — medium reliability/resource-control defect
 
 Evidence:
@@ -1362,6 +1374,8 @@ Impact: a long-running Thumbnail Studio transcription can lose its source file w
 
 Fix direction: give thumbnail uploads a durable/session-aware ownership and activity marker, and teach both upload sweeps to protect a source while its thumbnail session is transcribing or analyzing. Add tests that age an active thumb_ upload beyond retention and trigger the size cap while its session is active; both must leave the file intact.
 
+
+Additional verification: thumbnail source filenames are reduced to the constant active-job key `thumb`, so neither the age sweep nor the uploads size-cap sweep recognizes a live thumbnail session.
 
 ### F-46: Dubbed-video subtitle transcription bypasses the host-wide ASR lock — high GPU-concurrency defect
 
@@ -1454,6 +1468,8 @@ Impact: launching the packaged Tauri application opens the WebView but does not 
 Fix direction: choose one explicit lifecycle owner. Prefer a Tauri setup/on-run hook that calls the supervisor and emits structured startup progress, or add a dashboard startup bridge that calls check_runtime, starts services and polls status. Ensure stop is called on app exit and startup failures are visible. Add a Windows integration test that launches the built app, verifies backend and renderer PIDs/health, processes a tiny fixture, closes the app, and verifies the complete process tree exits.
 
 
+Additional verification: alembic.ini explicitly documents that production boot currently relies on create_all and that Alembic is reserved for future controlled migrations. There is no schema revision identifier, upgrade/downgrade path or old-schema migration test. This is a separate long-term migration risk in addition to the immediate silent-DDL-failure behavior.
+
 ### F-53: Native runtime downloader does not enforce the manifest's declared size — high disk-exhaustion risk when activated
 
 Evidence:
@@ -1466,31 +1482,6 @@ Impact: once the downloader is connected to first-run setup, a compromised URL o
 
 Fix direction: abort the stream immediately if total_bytes exceeds the declared size or a separately configured hard maximum; validate the final byte count equals size_bytes; validate Content-Range starts at the requested offset before appending; delete corrupt partials after checksum/length mismatch; and add tests for oversized, truncated, wrong-range and server-ignores-Range responses.
 
-
-### F-37: Stripe webhook idempotency is not atomic with event dispatch — high duplicate-side-effect risk
-
-Evidence:
-- cloud/billing.py::stripe_webhook verifies the Stripe signature, checks whether StripeEvent exists, calls handle_event(event), and only afterwards inserts the event ID into stripe_events.
-- There is no transaction, row lock, advisory lock or in-progress claim spanning the check and dispatch.
-- Two concurrent deliveries of the same Stripe event can both observe no StripeEvent row and both run handle_event before either inserts the dedupe row.
-- handle_event includes non-transactional side effects such as invoice-paid notifications/revenue tracking and lifecycle recovery emails. Some database writes have their own idempotency guards, but those do not make the whole event dispatch atomic.
-- tests/test_billing_states.py covers entitlement-state helpers, not concurrent webhook delivery or duplicate side effects.
-
-Impact: Stripe retries or concurrent deliveries can trigger duplicate invoice-paid notifications/revenue signals and other external side effects. Relying on the final unique event insert only prevents a duplicate event record, not duplicate work already performed.
-
-Fix direction: claim the event ID before dispatch using an atomic INSERT ... ON CONFLICT DO NOTHING RETURNING, with explicit processing/completed/failed status and safe retry semantics. For DB-only effects, commit state and event completion in one transaction where possible. For external effects, use an outbox or their own idempotency keys. Add a database-backed concurrent delivery test asserting one dispatch and one external notification.
-
-### F-80: OAuth authorization-code redemption can mint multiple API keys under concurrent requests — high security/idempotency gap (formerly F-38)
-
-Evidence:
-- cloud/mcp_oauth.py::token selects OAuthCode by code_hash and checks used_at is None, then sets used_at and inserts a new ApiKey in the same transaction.
-- The select does not use SELECT FOR UPDATE and there is no conditional UPDATE ... WHERE used_at IS NULL ... RETURNING claim.
-- Two concurrent token requests can both read the unused code before either transaction commits, both pass PKCE/client/redirect checks, and both insert distinct API keys.
-- tests/test_mcp_oauth.py explicitly says the database-backed register/authorize/token pieces are exercised manually after deploy; its tests cover only pure helpers and discovery/validation.
-
-Impact: a one-time authorization code is not reliably one-time under concurrency. A client or network retry racing the original request can create multiple long-lived API keys for the same consent event. The API keys are independently revocable, but this violates the one-use code guarantee and creates extra credentials.
-
-Fix direction: atomically claim the code with UPDATE ... SET used_at=now WHERE code_hash=? AND used_at IS NULL AND expires_at>now RETURNING user_id, client_id, redirect_uri, code_challenge, scope; only the winner may insert the ApiKey. Alternatively SELECT FOR UPDATE and keep the row lock until the ApiKey and used_at commit. Add a PostgreSQL-backed concurrent redemption test that proves exactly one success and one ApiKey.
 
 ### F-39: Free-plan retention deletes project database rows even when object listing fails — medium data-orphaning/retention defect
 
@@ -1552,6 +1543,8 @@ Impact: an unauthenticated caller who can reach the renderer can make its browse
 
 Fix direction: do not accept arbitrary videoUrl values. Require a server-issued job/clip reference and resolve it to a canonical path beneath OUTPUT_DIR after ownership authorization. If remote sources are a product requirement, validate every redirect and pin the resolved public address at the actual transport layer; reject loopback, private, link-local, multicast, reserved and metadata-service ranges. Add tests for localhost, Docker service names, RFC1918, IPv6 local/link-local, file/data schemes and redirect-to-private targets.
 
+Additional verification: the request is not constrained to the backend's /videos URL shape; nonmatching external URLs pass through unchanged. The backend security_utils.py checks do not run when callers hit the renderer directly. The migration branch fixes job-directory containment but does not add URL allowlisting or renderer authentication.
+
 ### F-56: Renderer has no render admission limit or render-job retention — high availability/resource-exhaustion risk
 
 Evidence:
@@ -1565,19 +1558,6 @@ Impact: an unauthenticated caller can enqueue many concurrent high-resolution/lo
 
 Fix direction: authenticate renderer requests with a backend-only service credential and authorize job ownership; put renders behind a bounded queue and semaphore; validate maximum durationInFrames, width, height, fps and total pixel-frames; enforce execution timeout/cancellation; and expire terminal job records after a defined TTL. Add stress tests proving a burst is queued/rejected within a fixed concurrency budget and that old records are pruned.
 
-
-### F-83: Public renderer accepts arbitrary video URLs and makes Chromium fetch them — high SSRF / internal-network reachability risk (formerly F-42)
-
-Evidence:
-- render-service/src/server.ts accepts POST /render without authentication and validates props.videoUrl only as a string; it does not require a local /output path, HTTPS host allowlist or signed media capability.
-- render-service/src/render-worker.ts passes that URL to Remotion's ShortVideo composition, whose @remotion/media Video component loads it in Chromium during render.
-- The renderer container is attached to the same Compose network as the backend and other services. The public render endpoint therefore lets a caller ask a browser process inside the trusted service network to request arbitrary URLs.
-- The backend's security_utils.py SSRF checks do not protect direct requests to the renderer service.
-- The same renderer exposes rendered output through unauthenticated /output static serving (F-03), so any successful internal-media fetch can potentially be reflected into an output file that the caller can retrieve.
-
-Impact: a reachable unauthenticated caller may use the renderer as an internal-network request primitive, potentially reading internal media or probing services reachable from the container. Exact data exfiltration depends on what internal endpoints expose and what Chromium can decode as video, so the reachability is confirmed but exploitability against specific internal services needs a controlled proof of concept.
-
-Fix direction: authenticate renderer requests with a service-to-service credential; accept only server-generated relative paths under an authorized job directory or short-lived signed media URLs; reject arbitrary schemes/hosts; disable Chromium access to metadata/link-local/private networks at the container network layer; and avoid publishing the renderer port to the public host. Add tests for localhost, RFC1918, link-local, file:, data:, redirects to private addresses and an approved local media URL.
 
 ### Phase 5: Renderer and Remotion checkpoint
 - Read all seven render-service source/config/test files and all ten Remotion source/config files.
@@ -1605,29 +1585,6 @@ Impact: PAID_PROXY_DAILY_MB does not stop new processing jobs from using the pai
 Fix direction: call budget_exceeded() in /api/process immediately before constructing the child environment and remove PROXY_URL when the cap is reached. Make the cap an atomic reservation rather than a read-only sum if concurrent downloads must stay within a hard ceiling; reserve expected bytes before dispatch and settle actual bytes afterward. Invalidate/update the cache when record_download persists new usage. Add tests proving a fresh job and a resumed job both lose PROXY_URL after the cap, including concurrent submissions that cross the threshold.
 
 
-### F-84: Thumbnail image uploads have no byte cap and are copied wholly into RAM — high resource-exhaustion risk (formerly F-43)
-
-Evidence:
-- app.py::thumbnail_generate accepts optional face/background UploadFile values.
-- Both are copied using await face.read() / await background.read() and then written to disk, with no maximum byte count, content-type allowlist, decoded-pixel limit or image-dimension limit.
-- thumbnail.py defines THUMB_MAX_BYTES=2 MiB for the generated output; that limit is not applied to these uploaded reference images.
-- The endpoint can be called repeatedly by entitled users or self-host/BYOK users, and each request can allocate the full upload contents in Python memory before Gemini/Pillow processes them.
-
-Impact: a very large face/background image or several concurrent requests can exhaust backend memory and crash the API container. A compressed image with extreme dimensions can also expand to a very large decoded bitmap.
-
-Fix direction: enforce a small streaming byte cap per image, validate actual image format by decoding, cap width/height/total pixels, reject unsupported formats, and avoid whole-file reads. Add tests for oversized streams, spoofed MIME types, malformed images and decompression-bomb dimensions.
-
-### F-85: Thumbnail publish buffers the entire source video and thumbnail in memory before upload — high availability risk for large videos (formerly F-44)
-
-Evidence:
-- app.py::thumbnail_publish::do_upload opens the source video and thumbnail, then builds multipart file values with vf.read() and tf.read().
-- This creates full in-memory byte copies before httpx sends the request. The source upload limit elsewhere is up to MAX_FILE_SIZE_MB (2 GB), and Thumbnail Studio has no smaller source cap.
-- The endpoint uses a 600-second timeout but does not stream the video file object through the multipart encoder.
-
-Impact: publishing a large source video can allocate gigabytes of RAM per request; concurrent publishes can OOM-kill the backend. The source is already on disk, so this memory duplication is unnecessary.
-
-Fix direction: pass open file objects to httpx's multipart encoder (or use a streaming multipart implementation), retain bounded chunking, and ensure files remain open until the request completes. Add a memory-bounded integration test with a large sparse fixture and a mocked upload server.
-
 ### F-86: Failed thumbnail quota reservation leaves the already-uploaded source file behind — medium disk leak (formerly F-45)
 
 Evidence:
@@ -1645,19 +1602,6 @@ Fix direction: reserve before accepting/writing the upload when possible, or wra
 - Positive controls: thumbnail uploads use chunked reads and a per-file size cap; session IDs are UUIDs for normal upload flow; thumbnail frames and publish status enforce session ownership in managed mode; thumbnail publishing uses a realpath containment helper to stop a path traversal from reading arbitrary server files.
 - Remaining risks: thumbnail session state and publish jobs are in-memory only; uploaded sources and generated thumbnails need durable owner metadata for restart-safe erasure/retention (F-22). The frontend's publish polling has no timeout/abort control. The static /thumbnails mount remains publicly accessible to anyone who has the URL. Phase 3/6 cross-links remain in progress.
 
-
-### F-87: SaaSShorts retry can adopt another user's on-disk job after a backend restart — critical cross-tenant ownership failure (formerly F-46)
-
-Evidence:
-- app.py::saasshorts_generate checks an in-memory saas_jobs record and calls _assert_job_owner when one exists.
-- If the record is absent (including after a backend restart), it falls back to _safe_under(OUTPUT_DIR, f"saas_{retry_job_id}") and accepts any existing directory beneath OUTPUT_DIR.
-- The fallback does not read or verify an owner sidecar, manifest, database row or durable job record. It then creates saas_jobs[retry_job_id] with user_id set to the *current requester* and output_dir set to the pre-existing directory.
-- app.py::_purge_local_jobs_for_user explicitly documents that SaaSShorts jobs have no marker file and that a restart loses the link between the directory and its owner.
-- SaaSShorts output URLs include the job ID in /videos/saas_<job_id>/..., and public media URLs are bearer-by-URL in this deployment (F-03/F-25). A job ID can therefore be disclosed through a shared clip URL or other copied artifact.
-
-Impact: after a restart, an entitled user who knows another user's SaaSShorts job ID can submit it as retry_job_id. The server can reassign the old directory to the attacker, run a new generation into it, expose the old job under the attacker's account, and later erase it when the attacker's account is deleted. This crosses the tenant boundary and can overwrite or destroy another user's generated media.
-
-Fix direction: persist SaaSShorts job ownership durably at job creation (database row or signed .owner sidecar) and require it on disk recovery/retry. Never infer ownership from possession of a job ID or claim an orphan directory for the current caller. If a directory has no verifiable owner record, refuse retry and quarantine it for admin cleanup. Add a restart simulation test: create user A's job, clear saas_jobs, attempt retry as user B, and assert 404 with no file changes; then assert user A can retry.
 
 ### F-88: SaaSShorts actor-options accepts unbounded parallel generation count — medium resource/cost abuse (formerly F-47)
 
@@ -1783,30 +1727,6 @@ Impact: a user can potentially craft a source URL or media metadata that is refl
 Fix direction: HTML-escape body before placing it inside <pre>, and separately sanitize subject control characters. Keep Telegram plain text. Add a test using an error containing <img>, <a href> and ampersands and assert the delivered email contains escaped text rather than active markup.
 
 
-### F-92: Disk cleanup can delete active SaaSShorts job directories — high data-loss defect (formerly F-52)
-
-Evidence:
-- SaaSShorts stores job records in saas_jobs keyed by the bare UUID, but stores files under OUTPUT_DIR/saas_<uuid>.
-- The generic _job_is_active(job_id) helper checks _running_jobs, jobs[job_id], and the resume manifest at OUTPUT_DIR/<job_id>/.resume.json. It does not inspect saas_jobs and does not strip the saas_ prefix.
-- _sweep_expired_job_dirs and _enforce_output_size_cap both use _job_is_active on the directory name. An active SaaSShorts directory is therefore considered inactive.
-- SaaSShorts generation can take several minutes and uses its own asyncio task/semaphore, not the main processing queue's _running_jobs set or resume manifest.
-
-Impact: if a SaaSShorts directory is older than JOB_RETENTION_SECONDS (default 1 hour), or OUTPUT_DIR exceeds OUTPUT_MAX_GB, the generic cleanup can delete that directory while generate_full_video is still writing into it. The job can fail, lose cached assets needed for retry, or report a completed result whose file has vanished.
-
-Fix direction: give SaaSShorts jobs a durable active marker/manifest and teach both cleanup paths to resolve the directory name to the matching saas_jobs record. Better: centralize active-directory ownership in a registry shared by every pipeline. Add tests that advance the clock past retention and exceed the size cap while a SaaSShorts job is processing, asserting its directory survives; then assert completed/failed jobs become eligible after the retention window.
-
-### F-93: Generic upload cleanup does not recognize active Thumbnail Studio source files — medium data-loss defect (formerly F-53)
-
-Evidence:
-- Thumbnail Studio saves source videos under UPLOAD_DIR using names like thumb_<session_uuid>_<filename> and stores the session in thumbnail_sessions.
-- _sweep_expired_uploads derives an active job ID by taking the filename prefix before the first underscore. For a thumbnail source this returns the constant string "thumb", not the session UUID.
-- _job_is_active("thumb") never checks thumbnail_sessions, so a source file older than JOB_RETENTION_SECONDS can be deleted even while background transcription, frame extraction or a later thumbnail publish still depends on it.
-- Thumbnail Studio has no independent source-retention sweep or durable session manifest.
-
-Impact: long-running transcription or a long-lived Thumbnail Studio session can lose its source video after the generic one-hour upload retention, causing later analyze/frames/publish actions to fail with a missing source file. The cleanup can also leave an in-memory session pointing at a nonexistent path.
-
-Fix direction: store a durable owner/session marker for thumbnail uploads and make the upload sweeper recognize active thumbnail sessions; apply a separate documented TTL after the session becomes terminal. Add a test that advances the clock beyond JOB_RETENTION_SECONDS while a thumbnail session is active and asserts its source remains, then expires it after the session TTL.
-
 ### Cleanup/lifecycle checkpoint
 - Read job recovery, resume manifests, deploy handover, shared-GPU admission, queue dispatch, subprocess execution, auto-retry, reservation settlement, cloud archive, webhook delivery, upload/output retention, size caps, and account-local purge.
 - Positive controls: main clip jobs have a .owner sidecar, resume manifests with bounded attempts, heartbeats for deploy handover, shared-GPU admission, bounded job concurrency, upload/output size caps, and retention skips for queued/running jobs; terminal managed jobs settle reservations and archive before notifying webhooks.
@@ -1826,19 +1746,6 @@ Impact: if an operator sets R2_PUBLIC_BASE to a public R2 custom domain, every h
 
 Fix direction: either remove the public-base shortcut for user-owned media and keep signed URLs, or clearly separate public gallery assets from private user-library objects. If the public domain is retained, require an explicit opt-in setting with a warning, document the permanent bearer-link behavior in operator and user privacy documentation, and add tests proving which URL mode is returned for user clips.
 
-
-### F-94: Cloud schema bootstrap silently continues when additive database changes fail — high deployment consistency risk (formerly F-54)
-
-Evidence:
-- cloud/database.py::init_engine uses SQLAlchemy create_all, which creates missing tables but never alters existing tables.
-- Existing production databases therefore depend on the hand-maintained _ADDITIVE_COLUMNS tuple for new columns and indexes.
-- Each additive DDL statement is wrapped in a broad except that only prints a warning and continues startup. The API can become ready even when a required column/index was not added.
-- cloud/models.py documents multiple columns/indexes that rely on these hand-maintained statements. The repository has alembic.ini and alembic/env.py, but the current tree contains no alembic/versions migration scripts; `alembic upgrade head` therefore has no versioned schema changes to apply.
-- No deployment test creates an old-version database schema, starts the new application, and verifies every required column/index exists.
-
-Impact: a permission error, lock timeout or SQL typo during an additive change can leave the application running against a partially upgraded schema. The first affected request then fails at runtime, potentially impacting authentication, billing, account deletion or metering. The warning can be missed among startup logs.
-
-Fix direction: make required DDL failures fatal during startup, or move schema changes into reviewed, versioned Alembic migrations and fail deployment until `alembic upgrade head` succeeds. Keep create_all only for disposable development/test databases. Add a migration test from the previous production schema to current head and assert model/schema parity.
 
 ### Cloud schema and storage checkpoint
 - Read cloud/__init__.py, database.py, models.py, config.py, storage.py, requirements-billing.txt, alembic.ini and alembic/env.py.
@@ -2037,6 +1944,8 @@ Impact: an R2 outage or per-object upload failure can produce a successful compl
 Fix direction: make archive completion a required durable job phase. Record expected clip/object count and per-object state; retry failed uploads with bounded backoff; only mark the managed job fully delivered after all required objects and metadata are verified. Keep local output pinned while archive is pending. Add tests for metadata upload failure, one-of-many clip failure, R2 outage and recovery after process restart.
 
 
+Additional verification: app.py::_archive_clip_edit_bg also starts edited-clip archive work with an untracked asyncio.create_task. A process restart can discard that task, and exceptions are only logged. The one-hour local retention clock can then remove the only edited copy. The durable archive queue must cover both initial jobs and later clip edits.
+
 ### F-71: Renderer and backend container builds do not fully pin the dependencies they execute — medium reproducibility/supply-chain risk
 
 Evidence:
@@ -2045,12 +1954,14 @@ Evidence:
 - dashboard/Dockerfile copies package-lock.json but uses npm install rather than npm ci, allowing npm to reconcile/update the lock rather than enforcing the committed dependency graph.
 - The backend Dockerfile installs the latest pre-release yt-dlp (`pip install --upgrade --pre`) and the latest bgutil-ytdlp-pot-provider package without a pinned version; it also clones the provider's default Git branch at build time with `git clone --depth 1` and runs npm install without a committed provider lockfile.
 - The Deno binary is copied from the floating denoland/deno:bin tag. The Dockerfile does not pin the base images by digest.
-- The Windows Tauri binary project has no committed desktop/src-tauri/Cargo.lock, while Cargo.toml uses broad semver ranges for Tauri, Serde, ureq, sha2 and zip. A future cargo build can resolve different transitive Rust dependencies from the same source commit.
+- The Windows Tauri branch does have a committed desktop/src-tauri/Cargo.lock; the native dependency graph is therefore locked at the audited branch snapshot. Keep the lockfile committed and use `cargo build --locked` in CI.
 
 Impact: two builds from the same Git commit can contain different renderer, extractor, helper and runtime dependencies. A breaking upstream release can silently break YouTube ingest or Remotion rendering; a compromised upstream package/tag can enter a production image without a source diff. Reproducing a production incident or rolling back to a known-good image becomes harder.
 
 Fix direction: copy and enforce render-service/package-lock.json with npm ci; use npm ci in the dashboard stages; commit Cargo.lock for the Tauri binary; pin yt-dlp and bgutil to tested versions/commits (with a deliberate update cadence for extractor breakage); pin Deno and base-image digests; and add dependency/SBOM scanning to CI. Keep the update process explicit so the YouTube extractor can still be refreshed quickly when upstream changes require it.
 
+
+Additional verification: the tracked render-service/package-lock.json exists but render-service/Dockerfile does not copy it into the image, so it is ignored during npm install. remotion/ has no package-lock.json. CI does not build the backend CPU/GPU images, renderer image or Windows Tauri package, so those dependency graphs are not exercised before release.
 
 ### F-101: OAuth consent screen trusts an arbitrary client_name and hides the redirect domain — high consent-phishing risk (formerly F-66)
 
@@ -2195,35 +2106,6 @@ Evidence:
 Impact: operators who generate a strong random password containing common special characters can start Postgres successfully but leave the backend unable to connect. This is a confusing first-deploy failure and can encourage weakening the password to make the stack start.
 
 Fix direction: construct DATABASE_URL from a separately encoded password or use a supported SQLAlchemy URL assembly mechanism at application startup. Alternatively require a URL-safe generated password and validate/document that constraint explicitly. Add a compose/config test with `@:/?#%` in the password and verify the backend connects.
-
-### F-75: Production image builds resolve several critical dependencies from moving upstream heads — medium reproducibility and supply-chain risk
-
-Evidence:
-- Dockerfile clones bgutil-ytdlp-pot-provider with `--depth 1` from the default branch and builds it without a commit/tag pin.
-- The same Dockerfile runs `pip install --upgrade --pre yt-dlp[default]` and installs bgutil-ytdlp-pot-provider without a version pin, despite requirements.txt listing yt-dlp without a version.
-- render-service/Dockerfile and remotion dependencies use `npm install` with caret ranges and no committed package-lock.json files in those directories. Their dependency graph can change between builds without a source commit.
-- The dashboard does have package-lock.json and CI uses npm ci, but dashboard/Dockerfile uses npm install rather than npm ci.
-- CI does not build the backend Docker image, GPU image, renderer Docker image or native Windows package, so these moving dependencies are not exercised by the test workflow.
-
-Impact: two builds from the same Git commit can contain different yt-dlp, bgutil, Remotion, renderer or transitive dependency versions. This can introduce extraction/render regressions or a compromised upstream dependency without any repository diff, and makes production incidents difficult to reproduce.
-
-Fix direction: pin bgutil to a reviewed commit, pin yt-dlp to a tested release or controlled update channel, commit lockfiles for render-service and Remotion, use npm ci in production builds, and record image digests/build provenance. Keep a scheduled dependency-update PR if yt-dlp must move quickly. Add CI image builds and a small YouTube-extractor/Remotion smoke test before promotion.
-
-
-### F-108: Failed managed R2 archiving is logged and abandoned; local clips are later swept — high data-durability gap (formerly F-74)
-
-Evidence:
-- app.py run_job marks a successful processing job completed, then the queue wrapper commits the minute reservation and calls _archive_managed_job.
-- _archive_managed_job catches any R2 archive exception, prints a warning and returns. It does not retry, persist an archive-pending state, or mark the job/history as incomplete.
-- The cloud default JOB_RETENTION_SECONDS is one hour. Local output cleanup eventually removes the completed job directory after that retention period.
-- app.py _archive_clip_edit_bg also launches an untracked asyncio.create_task for edited-clip archival; errors are only logged, and a process restart can discard the task without a durable retry record.
-- The dashboard can show a completed job from local files even if the R2 archive failed. After local retention removes those files, the user's durable history may have no corresponding clip object.
-- No archive-retry queue/table or integration test for R2 outage followed by local cleanup was found.
-
-Impact: a transient R2 outage, timeout, permission error or process restart during archive can turn a successfully processed and paid job into permanent clip loss after the local retention window. The UI and billing ledger still say the job completed, so the user may discover the loss only when reopening history later.
-
-Fix direction: persist an archive-pending job record before marking the managed job fully durable; retry idempotently until every clip, clean twin and project state is confirmed in R2. Keep local files while archive state is pending, and only start the retention clock after durable archive confirmation. Track edit-archive tasks in the same durable queue instead of bare asyncio.create_task. Add tests for R2 500/timeouts, partial object upload, backend restart mid-archive and cleanup refusing to delete an archive-pending directory.
-
 
 ### F-109: Several FFmpeg subprocess paths have no execution timeout — medium stuck-job/API-thread risk (formerly F-75)
 
