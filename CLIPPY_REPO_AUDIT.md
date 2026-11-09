@@ -48,9 +48,9 @@ Repository metadata observed through GitHub:
 | Branch | HEAD at inspection | GitHub comparison against main | Interpretation |
 |---|---|---|---|
 | `main` | `ff879df772fc` | Default branch | Docker-oriented Clippy application, current dashboard and backend source. |
-| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 27 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
-| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 26 behind; status `diverged` | Contains a unique reference-template feature commit. |
-| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 26 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
+| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 30 behind the application-code snapshot; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
+| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 29 behind the application-code snapshot; status `diverged` | Contains a unique reference-template feature commit. |
+| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 29 behind the application-code snapshot; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
 
 Branch tips are moving references. Re-run comparisons before cherry-picks, merges, or release decisions.
 
@@ -77,7 +77,7 @@ Main contains 410 tracked files across these extensions:
 | TXT | 10 |
 | Other/config/patch/assets | Remaining |
 
-The Windows migration branch has 451 files, including six Rust source files, PowerShell launch/build scripts, Tauri configuration, native renderer path code, local model settings, and additional tests. It is not equivalent to main.
+The Windows migration branch currently has 451 files and 57 directories (508 tree entries), including six Rust source files, PowerShell launch/build scripts, Tauri configuration, native renderer path code, local model settings, and additional tests. It is not equivalent to main.
 
 ### Important branch-only feature map
 
@@ -2234,3 +2234,14 @@ Evidence:
 Impact: a stuck/corrupt media decoder or encoder can hold an API worker thread or main job process indefinitely. In the job pipeline this can consume a concurrency slot and reservation; in the subtitle API it can leave the request and executor thread occupied with no bounded recovery.
 
 Fix direction: define a per-operation FFmpeg timeout policy based on source duration and stage, apply it consistently to every subprocess.run/Popen path, and ensure Popen readers are closed and processes killed/reaped on timeout or cancellation. Add tests with a fake FFmpeg process that never exits and assert each route/job fails within its configured deadline and releases its reservation/slot.
+
+
+## 2026-11-09 audit continuation checkpoint (current HEAD 2e4b3a8)
+
+- Application source snapshot audited: 1710a1d4e98c. All subsequent main commits through 2e4b3a8 change CLIPPY_REPO_AUDIT.md only; no application code was edited in this audit continuation.
+- Current main tree: 460 entries, 410 files, 50 directories. Windows migration tree: 508 entries, 451 files, 57 directories.
+- Branch comparisons are against application-code snapshot 1710a1d4, not the later audit-document-only main HEAD: codex/new-ui 0 ahead / 30 behind; codex/reference-templates 1 ahead / 29 behind; windows-native-migration 14 ahead / 29 behind.
+- Latest completed CI run inspected: 42667586873. Frontend production build passed. Backend suite: 1,226 passed, 30 skipped, 2 failed. Failures remain F-01 (duration override unexpectedly capped at 25 seconds instead of requested 30) and F-02 (recut passes backdrop_type/backdrop_color to apply_watermark, whose real signature accepts only video_path/output_path; the test fake also rejects the extra keywords). No code fixes have been applied.
+- Latest run for current audit-only HEAD 2e4b3a8 was queued when checked; the previous completed run is the authoritative test result recorded above.
+- The repeated finding IDs discovered during append-only updates were normalized: later occurrences now use unique IDs F-76 through F-108, with their former IDs preserved in the heading. Existing references to the old ID point to the first occurrence. The audit currently has 108 unique finding IDs plus three non-finding refinements/addenda; some related findings still need consolidation.
+- Source reading has materially expanded across cloud auth/billing/storage, MCP/OAuth, SaaSShorts, Thumbnail Studio, upload slots, job lifecycle/cleanup, renderer/Remotion, Docker/CI configuration and the Windows-native branch. The audit is still **IN PROGRESS**; not every tracked source file has been read line by line, and no local runtime, Windows WebView, Docker image, or integration build has been executed.
