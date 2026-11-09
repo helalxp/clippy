@@ -61,8 +61,10 @@ Account → API keys and revoking it disconnects the app. The `/mcp` 401 carries
 ## Webhooks
 
 `POST /api/process` takes `webhook_url` + optional `webhook_secret`
-(HMAC-SHA256, `X-OpenShorts-Signature`). Validated with
-`security_utils.assert_public_url` at submit AND at delivery (DNS rebinding).
+(HMAC-SHA256, `X-OpenShorts-Signature`). Revalidated with `security_utils.assert_public_url` at submit and at delivery.
+This is a useful second check, but the current helper does not pin the validated
+DNS answer to the eventual connection or validate every redirect at the network
+layer. Do not treat the two checks alone as a complete DNS-rebinding defense.
 Fired once per job from `run_job_wrapper` after the R2 archive so the payload can
 carry durable download links; survives redeploys via the resume manifest.
 `PUBLIC_API_URL` sets the absolute-URL base when behind a proxy.
