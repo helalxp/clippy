@@ -1325,3 +1325,30 @@ Fix direction: remove nocheckcertificate=True and use normal certificate verific
 - Agent upload slots are created with an owner and _take_pending_upload checks that owner when /api/process consumes the upload. The raw PUT URL is a random UUID bearer capability and can be overwritten by anyone who obtains it; this is intentional capability-style upload behavior but means the upload_url must be treated as a secret and should have a single-use/ownership-aware PUT policy if the URL can be exposed in logs or client telemetry.
 - SaaSShorts generation stores job status and owner only in process memory. Disk retry after restart is not owner-verified (F-10), active jobs are not protected from retention/size-cap sweeps (F-41), and account deletion cannot identify old SaaSShorts output after restart (F-42).
 - This is a route-level checkpoint, not proof that all route bodies and helper call graphs have been fully audited. Remaining work includes complete request-model validation, every file-serving route, background task lifecycle, resource limits, and end-to-end tests.
+
+
+### F-44: Thumbnail Studio can download and transcribe an unbounded source for a fixed 1–2 minute reservation — high metering/resource-control gap
+
+Evidence:
+- cloud/config.py sets TRANSCRIBE_MINUTES=2 and MANAGED_ANALYSIS_MINUTES=1 as fixed action charges.
+- /api/thumbnail/upload reserves only TRANSCRIBE_MINUTES, then downloads the full URL source with main.download_youtube_video and transcribes the entire file with transcribe_video. It does not set MAX_SOURCE_MINUTES or SOURCE_CAP_MINUTES for that downloader call.
+- /api/thumbnail/analyze also accepts a URL or uploaded file directly. In that branch it downloads/writes the complete source before calling reserve_managed_action, then analyze_video_for_titles calls transcribe_video when pre_transcript is None. That route reserves only MANAGED_ANALYSIS_MINUTES and does not reserve TRANSCRIBE_MINUTES at all.
+- Neither route imposes a source-duration cap or a bounded transcription window. The upload byte cap limits direct files by bytes, not by media duration; URL downloads have no equivalent duration cap in these routes.
+- The fixed charge is committed on success regardless of the actual source duration or transcription work performed.
+
+Impact: an entitled user can submit very long videos to Thumbnail Studio and consume large amounts of download bandwidth, CPU/GPU time and model runtime for a fixed small charge. The direct /api/thumbnail/analyze path can perform a full transcription while reserving only the 1-minute analysis charge. It also downloads or writes the file before the reservation check, so a user with no remaining balance can still make the server fetch or store the source before receiving the quota error.
+
+Fix direction: probe source duration before starting expensive work; apply a hard source-duration cap consistent with the reservation; reserve based on the actual bounded duration and action; and perform the reservation before download/upload persistence where possible, releasing it on all failures. Make /api/thumbnail/analyze reuse the same metered transcription flow as /api/thumbnail/upload rather than silently doing an unmetered transcription. Add tests for a multi-hour URL, a large file, an insufficient-balance request, and direct analyze without a pre-existing session.
+
+### F-45: Thumbnail source uploads are invisible to active-job retention and disk-cap protection — medium reliability/resource-control defect
+
+Evidence:
+- Thumbnail uploads are named thumb_<session_id>_<filename> in UPLOAD_DIR.
+- app.py _upload_job_id(filename) returns filename.split("_", 1)[0], so every thumbnail upload is treated as job ID thumb.
+- _sweep_expired_uploads and _enforce_uploads_size_cap both protect source files only when _job_is_active(_upload_job_id(filename)) is true.
+- Thumbnail transcription activity is tracked in thumbnail_sessions and its background task, not in the main jobs dictionary, _running_jobs or a resume manifest. _job_is_active("thumb") is therefore always false for these uploads.
+- tests/test_cleanup_live_jobs.py covers ordinary job uploads but does not cover thumbnail uploads or an active thumbnail session.
+
+Impact: a long-running Thumbnail Studio transcription can lose its source file when the normal age sweep or uploads size cap runs. The background task then fails while reading the file, even though the user is still actively waiting for the feature to finish. A large upload may also be selected for size-cap deletion while in use.
+
+Fix direction: give thumbnail uploads a durable/session-aware ownership and activity marker, and teach both upload sweeps to protect a source while its thumbnail session is transcribing or analyzing. Add tests that age an active thumb_ upload beyond retention and trigger the size cap while its session is active; both must leave the file intact.
