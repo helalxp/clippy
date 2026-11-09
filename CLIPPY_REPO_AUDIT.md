@@ -1430,3 +1430,17 @@ Evidence:
 Impact: when OUTPUT_DIR is customized (notably in the Windows-native runtime), generated face frames and thumbnail JPEGs are written under a different directory from the one served by /thumbnails and cleaned up by account erasure. The dashboard receives URLs that point at files the static mount cannot find, and generated face/reference images may be left behind outside the configured data directory.
 
 Fix direction: pass the configured THUMBNAILS_DIR into thumbnail helpers or have them resolve the same OUTPUT_DIR environment variable used by app.py. Avoid independent hard-coded output roots. Add tests with OUTPUT_DIR set to a temporary absolute directory and assert frame extraction, thumbnail generation, static delivery and account purge all use that exact directory.
+
+
+### F-54: Tauri shell never starts its backend or renderer — critical desktop launch blocker
+
+Evidence:
+- desktop/src-tauri/src/lib.rs registers start_services, stop_services, service_status and check_runtime as Tauri commands, but run() only constructs the Supervisor and registers the invoke handlers; it never calls Supervisor::start during setup.
+- dashboard/src/main.jsx and dashboard/src/App.jsx contain no Tauri invoke call, no startup hook and no service-status polling. A repository code search for invoke( / start_services / service_status in the Windows branch found no frontend caller.
+- The only start_services call path is a frontend invoke that does not exist. No external launcher or NSIS hook is present in this branch to start the services instead.
+- Supervisor::start is the only code that spawns the FastAPI backend and Remotion renderer. It is not called by Tauri startup.
+- The dashboard production API base defaults to an empty string (F-19), so without a running service and the correct desktop API URL, its relative API requests cannot reach the loopback backend.
+
+Impact: launching the packaged Tauri application opens the WebView but does not start either local service. The app cannot process clips or render videos. The registered commands are inert until a UI integration or Tauri setup hook invokes them. The README's description of a local-process supervisor is therefore ahead of the actual startup wiring.
+
+Fix direction: choose one explicit lifecycle owner. Prefer a Tauri setup/on-run hook that calls the supervisor and emits structured startup progress, or add a dashboard startup bridge that calls check_runtime, starts services and polls status. Ensure stop is called on app exit and startup failures are visible. Add a Windows integration test that launches the built app, verifies backend and renderer PIDs/health, processes a tiny fixture, closes the app, and verifies the complete process tree exits.
