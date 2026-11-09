@@ -2044,3 +2044,43 @@ Evidence:
 Impact: two builds from the same Git commit can contain different renderer, extractor, helper and runtime dependencies. A breaking upstream release can silently break YouTube ingest or Remotion rendering; a compromised upstream package/tag can enter a production image without a source diff. Reproducing a production incident or rolling back to a known-good image becomes harder.
 
 Fix direction: copy and enforce render-service/package-lock.json with npm ci; use npm ci in the dashboard stages; commit Cargo.lock for the Tauri binary; pin yt-dlp and bgutil to tested versions/commits (with a deliberate update cadence for extractor breakage); pin Deno and base-image digests; and add dependency/SBOM scanning to CI. Keep the update process explicit so the YouTube extractor can still be refreshed quickly when upstream changes require it.
+
+
+### F-66: OAuth consent screen trusts an arbitrary client_name and hides the redirect domain — high consent-phishing risk
+
+Evidence:
+- cloud/mcp_oauth.py exposes unauthenticated dynamic client registration and accepts any client_name up to 80 characters plus any HTTPS redirect URI.
+- OAuthClient stores the supplied name and registered redirect URIs; there is no publisher verification or trusted-client registry.
+- dashboard/src/components/OAuthConsent.jsx fetches client_name and displays only "Connect <client_name> to OpenShorts". It does not show the registered redirect host/domain, the actual redirect URI, or whether the client is verified.
+- The consent copy says the client wants permission to process and publish videos, which makes a spoofed name such as "ChatGPT" or "Claude Desktop" plausible to a user expecting to connect that product.
+- tests/test_mcp_oauth.py validates redirect syntax and PKCE helpers, but has no test that the consent UI identifies an unverified client and displays its destination domain.
+
+Impact: an attacker can dynamically register a client with a trusted product's name and an attacker-controlled HTTPS callback, send a user an authorization link, and induce them to mint a permanent API key for the attacker's client. PKCE does not stop this because the attacker initiated the flow and controls the verifier. The API key then acts as the user's account credential (see F-67).
+
+Fix direction: show the exact redirect hostname prominently on the consent page and label every dynamically registered client as unverified. Do not render the name as a trusted identity. Consider a verified publisher/redirect allowlist for well-known clients and add a user-facing warning for arbitrary clients. Test a spoofed client_name with an attacker callback and assert the domain is unmissable before consent.
+
+### F-67: OAuth-issued API keys have full account-wide API permissions despite consent claiming no billing or account settings — critical scope mismatch
+
+Evidence:
+- cloud/mcp_oauth.py::token mints a normal ApiKey row after consent; it does not create a restricted token type or attach scopes/permissions.
+- cloud/models.py::ApiKey has no scope/permission fields. cloud/auth.py::get_current_user_optional resolves an osk_ key to the owner and get_current_user_required accepts it exactly like a session JWT.
+- dashboard/src/components/OAuthConsent.jsx tells users the client can process/publish videos but explicitly says "no billing, no account settings, no key management".
+- Billing routes /api/billing/checkout, /api/billing/end-trial, /api/billing/portal and /api/billing/invoices call get_current_user_required directly. Cancellation routes /api/billing/resume and /api/billing/cancel do the same. They do not reject API-key authentication.
+- Account API-key creation/list/revocation and account deletion do explicitly reject API keys, but other account settings do not. For example /api/autopilot GET/PUT and /api/social/connect also accept get_current_user_required and therefore accept the OAuth-issued key.
+- The OAuth token response echoes the requested scope string, but that scope is not stored or enforced on ApiKey and does not constrain subsequent API calls.
+
+Impact: a third-party MCP client that receives the OAuth access token can use it directly against the REST API to open the billing portal, inspect invoices, cancel/resume a subscription, create checkout sessions, change Autopilot settings or initiate social-profile connection, even though the consent screen explicitly promises those actions are outside its permissions. Combined with F-66, a spoofed client can obtain a much broader credential than the user was told they were granting.
+
+Fix direction: introduce enforceable API-key scopes and issue OAuth keys with a narrowly defined MCP scope. Enforce route-level permissions in auth dependencies, not only in the MCP tool list. At minimum, deny billing, subscription/cancellation, account, key-management, social-connection and Autopilot-settings routes to MCP-scoped keys unless the user explicitly grants those scopes. Make the consent screen list the exact permissions and add integration tests that use an OAuth-issued key against every excluded endpoint and expect 403.
+
+### F-68: Public OAuth dynamic client registration has no application rate limit or cleanup — medium database-abuse risk
+
+Evidence:
+- POST /oauth/register is intentionally unauthenticated for RFC 7591 dynamic registration.
+- Every valid request creates a permanent OAuthClient database row with a random client ID. There is no per-IP or global registration rate limit, no client inactivity expiry and no cleanup task for abandoned registrations.
+- The body limits the number of redirect URIs but does not cap each URI length or impose a total request-body size limit before json.loads.
+- No tests exercise registration bursts, duplicate/abandoned clients or database growth.
+
+Impact: an anonymous caller can create an unbounded number of OAuthClient rows and large redirect_uri JSON values, consuming database storage and making client lookup/operations noisier. This is an abuse-control issue rather than an authentication bypass; DCR needs to remain available to legitimate public MCP clients.
+
+Fix direction: cap request-body and individual URI/name lengths, apply a conservative per-IP registration rate limit at the trusted edge or in a shared limiter, and expire/delete clients that have never completed authorization or have been inactive for a defined period. Add burst tests and metrics for registrations per IP/day.
