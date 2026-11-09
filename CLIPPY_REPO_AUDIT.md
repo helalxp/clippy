@@ -1221,3 +1221,20 @@ Evidence:
 - gpu_decode.py does default GPU decode on, but only for H.264/HEVC yuv420p with a detectable NVIDIA card and at least GPU_DECODE_MIN_FREE_MB (default 2,500 MB) free VRAM; other codecs/low free memory fall back to CPU.
 
 This is not necessarily a defect: the defaults prioritize broad compatibility and avoid forcing a GPU on every host. It is an important product/configuration expectation, however. A user can build with GPU=1 and reserve the NVIDIA device yet still run Whisper transcription and all FFmpeg video encodes on CPU. Document a tested GPU profile separately from the CPU-safe defaults, and expose the active decoder, ASR device/backend and encoder in startup diagnostics so users can verify which parts actually use the GPU.
+
+
+## Current repository checkpoint — 2026-11-09 16:52 UTC
+
+This is the newest repository snapshot after the audit-document updates. The application source has not been modified during this audit; commits after source snapshot 1710a1d4e98c are audit-document-only commits.
+
+- Current main HEAD: c6bfd1b9c06b2fbba7fba34c7fffef79c420feae.
+- Main tree: 460 entries, 410 files, 50 directories; not truncated.
+- Current branch tips: main c6bfd1b9c06b; codex/new-ui c260c6bf8319; codex/reference-templates ba2acc1e13f6; windows-native-migration 653e3bc380dc.
+- Current branch comparison against main: codex/new-ui 0 ahead / 51 behind; codex/reference-templates 1 ahead / 50 behind; windows-native-migration 14 ahead / 50 behind.
+- codex/new-ui has no unique commits relative to main; it is an older ancestor snapshot.
+- codex/reference-templates has one unique commit (the local reference-template library feature); it is not safe to merge without reconciling 50 commits of main history.
+- windows-native-migration has 14 unique commits and 55 changed files; it remains a separate, divergent implementation line.
+- Latest completed CI run at the time of this checkpoint: run 42658472259 on audit-doc commit e2d043b4; failed. The code under test is still the 1710a1d4 source snapshot and retains the same two backend failures. Current HEAD run 42658850217 is queued.
+- Current audit document size: approximately 129 KB. Findings are numbered F-01 through F-35, with F-36 as a GPU-mode configuration note. These findings have not all been independently reproduced; each entry labels whether it is confirmed from source, a configuration risk, a race needing a concurrency test, or an unverified question.
+- No application source code, tests, build scripts, branch code, or user assets were changed or deleted during this audit. Only CLIPPY_REPO_AUDIT.md was updated.
+- Audit status remains **IN PROGRESS**. Phase 0 inventory is refreshed; Phases 1–8 have partial coverage and must not be represented as a completed line-by-line audit.
