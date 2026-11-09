@@ -548,3 +548,36 @@ Additional documentation corrections in this cleanup:
 - `docs/architecture/agent-access.md` no longer overstates the submit/delivery URL re-check as a complete DNS-rebinding defense.
 - `design.md` is retained as the active dashboard/landing design system and now uses Clippy branding.
 - The generic Vite-template `dashboard/README.md` was removed; it contained no Clippy-specific setup or operational instructions.
+
+
+## Live audit checkpoint — 2026-11-09 15:52 UTC
+
+This checkpoint supersedes older snapshot values above where they refer to a previous main HEAD. Historical snapshots are retained only as history.
+
+### Re-verified repository state
+- Current main HEAD: `1710a1d4e98cd5579d27e6c97c959557034799e0`.
+- Current main tree: 460 entries, 410 files, 50 directories; GitHub tree response was not truncated.
+- Tracked file extension counts: Python 173; JSX 50; JavaScript 25; Markdown 25; TSX 9; TypeScript 11; JSON 15; YAML 6; WebP 24; PNG 10; WOFF2 14; TTF 6; GIF 3; CSS 5; TXT 10; remaining files are other/config/asset formats.
+- Branch tips: `main=1710a1d4e98c`, `codex/new-ui=c260c6bf8319`, `codex/reference-templates=ba2acc1e13f6`, `windows-native-migration=653e3bc380dc`.
+- Current compare results against main: new-ui 0 ahead / 30 behind; reference-templates 1 ahead / 29 behind; windows-native-migration 14 ahead / 29 behind.
+- Largest tracked blob remains `churchil_queen_vertical.gif` at 65,384,963 bytes. It is retained pending exhaustive reference and packaging checks.
+
+### Latest CI run rechecked
+- Run: [42648783960](https://github.com/helalxp/clippy/actions/runs/42648783960), commit `1710a1d4e98c`.
+- Frontend build: passed.
+- Backend tests: failed, 1,226 passed, 30 skipped, 2 failed (15.55 seconds).
+- Failure 1: `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`. With `CLIP_MIN_SECONDS=20` and `CLIP_MAX_SECONDS=30`, `clip_duration_bounds()` returns `(20.0, 25.0)`. This confirms F-01 remains present on current main.
+- Failure 2: `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`. The injected test callback accepts only `path`, while `recut.perform_recut` calls it with `backdrop_type` and `backdrop_color`. This confirms the test-contract mismatch in F-02. Inspect the real `watermarked.apply_watermark` implementation and its other callers before changing production behavior.
+- CI emitted a separate warning that the workflow's Node 20 action runtime is deprecated and actions are being forced onto Node 24. This is maintenance debt, not the cause of the backend test failures.
+
+### Audit execution log
+- Phase 0 (repository/branch/tree/CI baseline): rechecked at current HEAD; inventory and branch comparisons complete for this snapshot.
+- Phase 1 (runtime/config/build/dependency contracts): started. Main Compose confirms the renderer is published as `13100:3100` on all host interfaces by default. This is a deployment exposure concern when used on an untrusted network; verify whether the backend/renderer is intended to be reachable only on a trusted local machine before release.
+- Phases 2–8 remain open. The source, test, frontend, cloud, renderer, native Windows, and asset ledgers must be updated as each file group is read. No claim of full audit completion is made.
+
+### Next verification targets
+1. Complete Phase 1 by reading every root and service-level runtime/config/build/dependency file, comparing Docker and native Windows contracts, and checking workflow scripts.
+2. Resolve F-01 with boundary tests and preserve explicit valid duration ranges.
+3. Inspect the actual watermarker signature and adapt the test fake/protocol without weakening production behavior.
+4. Trace renderer callers, authentication boundaries, network exposure, and media serving before assigning final exploitability/severity to F-03.
+5. Trace every `assert_public_url` caller and downstream HTTP/yt-dlp redirect behavior before finalizing F-04.
