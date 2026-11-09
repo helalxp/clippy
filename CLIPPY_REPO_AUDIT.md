@@ -1836,3 +1836,17 @@ Fix direction: make required DDL failures fatal during startup, or move schema c
 - Read cloud/__init__.py, database.py, models.py, config.py, storage.py, requirements-billing.txt, alembic.ini and alembic/env.py.
 - Positive controls: R2 keys are namespaced by user ID and job ID; presigned URLs are time-limited when R2_PUBLIC_BASE is unset; the public custom-domain behavior is explicitly documented as public/bearer-by-URL; PostgreSQL pool uses pre-ping; cloud mode fails fast for missing DATABASE_URL/JWT_SECRET.
 - Remaining concerns: R2_PUBLIC_BASE deliberately makes all objects under the configured bucket prefix publicly retrievable, so privacy depends on bucket/domain isolation and object-key secrecy; no signed-token Worker is implemented. R2 object delete/list operations do not inspect per-object delete errors from delete_objects. Schema migrations remain additive/manual and not versioned. Phase 6 remains partial.
+
+
+### F-55: R2 bulk-delete responses are not checked, so account erasure can succeed while objects remain — critical privacy/erasure failure
+
+Evidence:
+- cloud/account.py::delete_account intentionally deletes the user's entire R2 prefix before deleting database rows, because the database is the only index of the user's objects.
+- cloud/storage.py::delete_prefix lists the prefix and calls S3 DeleteObjects in batches, but ignores the response's Errors array and increments `deleted` by the number requested, not the number confirmed deleted.
+- S3-compatible DeleteObjects can return HTTP success while reporting per-object failures in the response body. Boto3 does not automatically raise for each entry in Errors.
+- account deletion then records the returned count in AccountDeletion and proceeds to erase all user rows, leaving no Project/UserVideo index for a later retry.
+- There is no test that simulates a partial DeleteObjects response containing Errors.
+
+Impact: an object-level permission error, legal hold, malformed key or provider-side partial failure can leave some user videos/thumbnails in R2 while the account is reported as deleted. The deletion audit count can falsely claim those objects were removed. Because DB ownership rows are then deleted, the remaining objects may become permanently orphaned and harder to locate for erasure requests.
+
+Fix direction: inspect every DeleteObjects response, collect and retry transient per-key failures, and raise if any key remains undeleted. Only erase the DB rows after every listed object is confirmed absent. Persist a deletion-pending record/prefix so failed erasures can be retried and audited. Add tests for partial success, retry success, permanent per-key failure and a complete delete; assert account rows remain until the bucket is empty.
