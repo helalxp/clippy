@@ -581,3 +581,51 @@ This checkpoint supersedes older snapshot values above where they refer to a pre
 3. Inspect the actual watermarker signature and adapt the test fake/protocol without weakening production behavior.
 4. Trace renderer callers, authentication boundaries, network exposure, and media serving before assigning final exploitability/severity to F-03.
 5. Trace every `assert_public_url` caller and downstream HTTP/yt-dlp redirect behavior before finalizing F-04.
+
+
+
+## Phase 1 findings: runtime, build, dependency and configuration contracts
+
+**Inspection completed in this batch (main @ 1710a1d4e98c):** .env.example, Dockerfile, .dockerignore, .gitignore, docker-compose.yml, docker-compose.override.yml, docker-compose.cloud.yml, docker-compose.e2e.local.yml, requirements.txt, requirements-billing.txt, .github/workflows/ci.yml, .github/workflows/publish-cli.yml, alembic.ini, render-service/Dockerfile, render-service/package.json, render-service/tsconfig.json, remotion/package.json, remotion/tsconfig.json, dashboard/package.json, dashboard/vite.config.js, dashboard/nginx.conf, dashboard/Dockerfile, cli/pyproject.toml, cli/README.md, and bin/ffmpeg. This is a configuration/build-contract review, not runtime validation.
+
+### F-08: Uvicorn trusts forwarded client headers from every source: high, confirmed configuration defect
+
+Evidence:
+- Dockerfile: Uvicorn starts with --proxy-headers and --forwarded-allow-ips "*".
+- .env.example: explicitly warns never to use "*", because callers could forge the client IP used by rate limiting and rights declarations; it documents narrowing trust to the reverse proxy.
+- app.py around line 468: first-video-per-network enforcement fingerprints request.client.host.
+- app.py around lines 3192-3194: rights attestation reads X-Forwarded-For directly and accepts its first value.
+- Base Compose publishes backend port 8000:8000 on host interfaces.
+
+The Dockerfile's wildcard overrides the documented trust boundary. With Uvicorn proxy headers enabled and every sender trusted, a direct caller can supply forwarding headers and influence the client address seen by request handlers. The attestation route independently trusts the header without checking whether the sender is a configured proxy. This undermines IP-based abuse controls and the reliability of recorded network attribution. It is not evidence that authentication or all quota controls can be bypassed.
+
+Fix direction: make the trusted proxy set explicit and configurable; use the documented FORWARDED_ALLOW_IPS setting instead of a hard-coded wildcard; ensure the API port is not publicly exposed behind a reverse proxy; and derive attestation IP only from a trusted proxy chain or the direct peer. Add tests for direct forged headers, trusted-proxy chains, and untrusted proxy sources.
+
+### F-09: Default Compose override forces NVIDIA GPU reservation: high setup compatibility risk, confirmed configuration
+
+Evidence:
+- docker-compose.override.yml sets build arg GPU=1 and reserves all NVIDIA GPU/video devices for the backend.
+- The base docker-compose.yml has no GPU reservation.
+- Dockerfile documents GPU=0 as the default CPU build and GPU-specific packages as optional.
+- Docker Compose automatically merges the default override file for a standard compose up invocation when both default-named files are present.
+
+A standard Compose startup therefore opts into the GPU build and NVIDIA device reservation even when the user intended to use the CPU-compatible default. Hosts without an NVIDIA GPU/container runtime can fail at build or startup. This conflicts with the Dockerfile's CPU-default design and makes the default setup non-portable.
+
+Fix direction: keep the base Compose path CPU-compatible. Move GPU settings into an explicitly named opt-in file (for example docker-compose.gpu.yml) that users select with -f, or use a documented profile/override mechanism that does not activate by default. Test CPU-only and NVIDIA hosts separately. Do not remove GPU support.
+
+### Configuration/build observations (not yet defects unless runtime evidence confirms)
+- The backend image installs both base and cloud billing dependencies unconditionally, while cloud imports are gated by BILLING_ENABLED. This increases image size but is documented as intentional one-image deployment.
+- The backend image installs a moving yt-dlp pre-release and clones the bgutil provider at the latest default-branch revision. These are not pinned to immutable versions/commits, so identical Dockerfile builds can change over time. Consider pinning or recording resolved versions for reproducible releases.
+- Dashboard and renderer Dockerfiles use Node 18 base images; CI currently uses Node 20 for the frontend build. The workflow also reports Node 20 action-runtime deprecation. Align supported Node versions after checking Remotion/Vite compatibility and deployed runtime constraints.
+- dashboard/Dockerfile production build uses npm install rather than npm ci, despite a committed lockfile. This weakens deterministic container builds.
+- render-service/Dockerfile also uses npm install rather than npm ci and does not copy a package lockfile before installing. Dependency resolution is therefore not reproducible.
+- .dockerignore excludes every *.gif from the backend build context. All three tracked root GIFs are consequently absent from the image unless mounted separately. Their runtime/UI references still need an exhaustive scan before any asset deletion decision.
+- cli/pyproject.toml and cli/README.md still identify the package as OpenShorts and point to the upstream OpenShorts site/repository. This may be intentional compatibility/upstream attribution, but it is inconsistent with the Clippy-branded root product overview and should be decided explicitly before publishing the CLI under the Clippy product identity.
+- alembic.ini states that cloud startup uses create_all and Alembic is for later controlled schema evolution. Verify that model changes and account-erasure tests remain synchronized; do not assume migrations are automatically applied at startup.
+- bin/ffmpeg is a PATH wrapper that injects decoder/filter thread limits but deliberately leaves encoder thread options alone. Verify that all subprocesses resolve this wrapper and that FFMPEG_REAL_BIN points to the intended real binary on each platform.
+
+### Phase 1 coverage update
+- Read all listed root deployment/dependency/CI files and the dashboard, renderer, Remotion and CLI build metadata listed above.
+- Not yet read: every nested platform-specific script/config, every workflow-adjacent release file, complete Docker build output, cloud production environment examples, native Windows branch equivalents, and all dependency lockfile metadata.
+- No Docker build, compose config render, container startup, frontend lint, renderer build, Remotion typecheck, CLI wheel build, or Windows build was executed in this remote source inspection.
+- Phase 1 remains **partial**, not complete.
