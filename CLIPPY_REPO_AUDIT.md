@@ -1402,3 +1402,17 @@ Evidence:
 Impact: a signed-in user or API client can submit several concurrent publish requests for large clips and drive backend memory usage sharply upward. The process can OOM or become unavailable to unrelated users even though each individual request is valid and the event loop itself is not blocked.
 
 Fix direction: stream the file handle through httpx multipart rather than f.read(); add a bounded global upload semaphore and a per-user rate/concurrency limit; cap file size and request duration; and return a clear 429/503 when the queue is full. Add a concurrency test proving memory use is bounded and that a second upload waits or is rejected rather than allocating another full clip buffer.
+
+
+### F-50: Clip-edit routes perform concurrent read-modify-write on shared metadata without a common per-job lock — high data-loss race
+
+Evidence:
+- app.py has _rerender_locks per job and uses them for /api/clip/rerender and /api/clip/reframe. The reframe route explicitly documents that it shares the rerender lock because both update metadata.json.
+- /api/clip/background reads metadata.json, performs a potentially long render, updates one clip and writes the whole JSON file without taking _rerender_locks.
+- /api/clip/watermark follows the same read-render-write pattern without the lock.
+- /api/subtitle, /api/edit and /api/translate also read metadata, perform external/FFmpeg work, and write the full metadata object without sharing a per-job metadata lock.
+- The lock inventory in app.py contains restore, rerender, scenes and Thumbnail Studio frame locks, but no common lock around all metadata updates.
+
+Impact: two edits to different clips in the same job can both read the same old metadata snapshot, then each write a version containing only its own change. The last writer silently discards the earlier clip's new video_url, caption style, crop overrides, recipe or watermark/background settings. The output file may exist on disk, but the dashboard/history points back to the old file. Same-clip concurrent operations can also race on output filenames and current-version selection.
+
+Fix direction: centralize clip metadata mutation in a per-job helper. Render outside the lock, then acquire the job lock, reload the latest metadata from disk, update only the target clip's fields, write atomically (temporary file + replace), update in-memory state, and release. Use the same helper from background, watermark, reframe, rerender, subtitle, edit and translate routes. Add a concurrency test that edits two different clips simultaneously and verifies both changes survive in metadata and in-memory results.
