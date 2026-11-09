@@ -1238,3 +1238,54 @@ This is the newest repository snapshot after the audit-document updates. The app
 - Current audit document size: approximately 129 KB. Findings are numbered F-01 through F-35, with F-36 as a GPU-mode configuration note. These findings have not all been independently reproduced; each entry labels whether it is confirmed from source, a configuration risk, a race needing a concurrency test, or an unverified question.
 - No application source code, tests, build scripts, branch code, or user assets were changed or deleted during this audit. Only CLIPPY_REPO_AUDIT.md was updated.
 - Audit status remains **IN PROGRESS**. Phase 0 inventory is refreshed; Phases 1–8 have partial coverage and must not be represented as a completed line-by-line audit.
+
+
+### F-37: MCP OAuth authorization-code redemption is not atomic under concurrent requests — high, confirmed race in source
+
+Evidence:
+- cloud/mcp_oauth.py token() selects OAuthCode by code_hash without SELECT FOR UPDATE.
+- It checks used_at, validates client/redirect/PKCE, sets used_at, inserts a new ApiKey and commits.
+- Two requests arriving together can both read the same row with used_at=NULL before either commits. Both then mint a distinct long-lived API key for the same one-time authorization code.
+- OAuthCode has no database constraint or atomic conditional update that prevents the second redemption; the primary key only deduplicates the code row itself.
+- tests/test_mcp_oauth.py explicitly says DB-backed registration/authorize/token behavior is exercised manually after deploy; no concurrent redemption test exists.
+
+Impact: the "single-use" code contract can be violated during a race, leaving multiple valid API keys for one authorization grant. A user may see duplicate connected-client keys and an attacker who can race a leaked code may obtain an additional credential.
+
+Fix direction: lock the OAuthCode row with SELECT ... FOR UPDATE inside a transaction before checking used_at, or perform an atomic UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING ... and mint the key in the same transaction. Add a two-connection concurrent redemption test asserting exactly one success and exactly one ApiKey.
+
+### F-38: Client-supplied X-Forwarded-For can bypass magic-link IP rate limits — medium, confirmed trust-boundary weakness
+
+Evidence:
+- Dockerfile starts Uvicorn with --proxy-headers --forwarded-allow-ips '*'.
+- cloud/auth.py request_magic_link takes request.client.host as the rate-limit IP and uses it in the per-IP count.
+- Its own comment explicitly notes that Uvicorn resolves this from X-Forwarded-For under the wildcard trust setting and a client can forge it.
+- The rate limit also counts by normalized email, so the IP bypass does not remove the per-email cap; it does permit an attacker to rotate the forwarded IP value and avoid the network-wide cap across many email addresses.
+
+Impact: a bot can send a distinct X-Forwarded-For value on every request and evade the per-IP throttle, increasing email/MX verification load and mail-sending abuse. This is a defense-in-depth and service-abuse issue, not a way to bypass the per-email rate limit for one address.
+
+Fix direction: configure Uvicorn to trust only the actual reverse-proxy IP/CIDR ranges, or have the edge proxy strip incoming X-Forwarded-For and write a trusted value. Keep the per-email cap and add an integration test through the real proxy configuration proving a client-supplied header cannot change the server-observed IP.
+
+### F-39: Stripe webhook event deduplication occurs after side effects, allowing concurrent duplicate processing — high billing/notification idempotency race
+
+Evidence:
+- cloud/billing.py stripe_webhook first checks whether StripeEvent(event.id) exists, then calls handle_event(event), and only after all side effects complete does it insert StripeEvent with ON CONFLICT DO NOTHING.
+- The initial existence check and final insert are not one atomic claim/transaction. Two concurrent deliveries of the same event can both see no StripeEvent and both execute handle_event.
+- CreditTopup.stripe_session_id has a unique constraint, which protects the actual top-up row from duplicate credits but can still make one concurrent request fail with a uniqueness error.
+- invoice.paid performs subscription state updates, sends the paid-invoice notification, and tracks revenue before the event is marked processed. Concurrent delivery can duplicate the email/analytics side effects.
+- tests/test_billing_states.py covers state gates, not duplicate event delivery; no concurrent webhook idempotency test was found.
+
+Impact: duplicate invoice notifications/revenue events and noisy webhook failures/retries are possible when Stripe retries or parallel deliveries overlap. The state update's event timestamp ordering is useful but does not make the whole event handler idempotent.
+
+Fix direction: atomically claim the event ID in a transaction before dispatch, with a processing/completed state and recovery for abandoned claims; or make every handler's external side effects idempotent using event ID as an idempotency key. Do not permanently mark a failed event complete before its business transaction succeeds. Add concurrent duplicate-delivery tests for top-up, invoice-paid, subscription update and refund.
+
+### Cloud backend audit checkpoint
+Full-file structural review completed for cloud/account.py, auth.py, billing.py, cancellation.py, config.py, database.py, lifecycle.py, metering.py, models.py, videos.py, storage.py, oauth.py and mcp_oauth.py. This pass mapped routes, transaction boundaries, user ownership predicates, storage key construction, token lifecycle, Stripe event flow, and tests. It is not yet an exhaustive statement-by-statement audit of every cloud module: autopilot, social_profiles, api_keys, marketing, emails, alerts, analytics, digest, onboarding, proxy_ledger and managed_keys still need detailed review and call-site tracing.
+
+Positive controls observed:
+- API keys store SHA-256 hashes, not raw tokens; revocation is timestamp-based.
+- OAuth redirect URIs are validated at registration and authorization, and PKCE S256 is required.
+- Account deletion checks for reserved metered jobs, cancels Stripe subscriptions before erasure, purges R2/local files, and deletes user-owned FK tables in a test-checked order.
+- Video archive keys are namespaced by user ID; project state and history lookups include user ownership checks.
+- Stripe subscription upserts use last_event_at ordering to reject stale state changes; top-ups have a unique Stripe session ID.
+- Magic-link raw tokens are not stored, are hashed, expire, and are marked used under a row lock at verification.
+- Schema bootstrap uses create_all plus explicit additive ALTER/INDEX statements. This is intentionally additive-only and not a general migration system; any future column/type/constraint change needs a controlled migration rather than relying on create_all.
