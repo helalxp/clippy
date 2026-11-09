@@ -2202,3 +2202,18 @@ Evidence:
 Impact: two builds from the same Git commit can contain different yt-dlp, bgutil, Remotion, renderer or transitive dependency versions. This can introduce extraction/render regressions or a compromised upstream dependency without any repository diff, and makes production incidents difficult to reproduce.
 
 Fix direction: pin bgutil to a reviewed commit, pin yt-dlp to a tested release or controlled update channel, commit lockfiles for render-service and Remotion, use npm ci in production builds, and record image digests/build provenance. Keep a scheduled dependency-update PR if yt-dlp must move quickly. Add CI image builds and a small YouTube-extractor/Remotion smoke test before promotion.
+
+
+### F-74: Failed managed R2 archiving is logged and abandoned; local clips are later swept — high data-durability gap
+
+Evidence:
+- app.py run_job marks a successful processing job completed, then the queue wrapper commits the minute reservation and calls _archive_managed_job.
+- _archive_managed_job catches any R2 archive exception, prints a warning and returns. It does not retry, persist an archive-pending state, or mark the job/history as incomplete.
+- The cloud default JOB_RETENTION_SECONDS is one hour. Local output cleanup eventually removes the completed job directory after that retention period.
+- app.py _archive_clip_edit_bg also launches an untracked asyncio.create_task for edited-clip archival; errors are only logged, and a process restart can discard the task without a durable retry record.
+- The dashboard can show a completed job from local files even if the R2 archive failed. After local retention removes those files, the user's durable history may have no corresponding clip object.
+- No archive-retry queue/table or integration test for R2 outage followed by local cleanup was found.
+
+Impact: a transient R2 outage, timeout, permission error or process restart during archive can turn a successfully processed and paid job into permanent clip loss after the local retention window. The UI and billing ledger still say the job completed, so the user may discover the loss only when reopening history later.
+
+Fix direction: persist an archive-pending job record before marking the managed job fully durable; retry idempotently until every clip, clean twin and project state is confirmed in R2. Keep local files while archive state is pending, and only start the retention clock after durable archive confirmation. Track edit-archive tasks in the same durable queue instead of bare asyncio.create_task. Add tests for R2 500/timeouts, partial object upload, backend restart mid-archive and cleanup refusing to delete an archive-pending directory.
