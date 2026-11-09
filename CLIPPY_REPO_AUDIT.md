@@ -1011,3 +1011,22 @@ Fix direction: implement the media-auth contract end-to-end: mint short-lived pe
 - Most managed dashboard API calls use apiFetch/apiJson, which attaches the bearer token. Static media URLs do not receive the short-lived media token described by media_auth.py because that integration is absent (F-25).
 - ResultCard's watermark preview creates URL.createObjectURL(watermarkLogo) directly during JSX rendering without revoking the URL. ThumbnailStudio's DragDropZone similarly creates object URLs inline for image previews; repeated rerenders/file changes can leak blob URLs until the page is closed. This is a low-severity client memory leak; use a memoized URL and revoke it in effect cleanup.
 - Further frontend work remains: read all 69 files in full, trace all props and event contracts into App.jsx/backend routes, review all polling/cleanup behavior, validate localStorage secret handling and consent, check accessibility/responsive states, and run ESLint plus production and desktop builds. Phase 4 remains partial.
+
+
+### F-26: Third-party API keys are persisted in localStorage with reversible XOR obfuscation — medium, confirmed secret-storage weakness
+
+Evidence:
+- dashboard/src/App.jsx lines 40-64: encrypt/decrypt use XOR with VITE_ENCRYPTION_KEY or the compiled-in static fallback "OpenShorts-Static-Salt-Change-Me", then Base64. The source comments themselves call it client-side obfuscation, not secure encryption.
+- dashboard/src/App.jsx lines 297-315 and 732-750: Upload-Post, ElevenLabs and fal.ai keys are read from and written to localStorage using that reversible transform.
+- dashboard/src/App.jsx lines 291 and 732: the Gemini key is stored in plaintext under gemini_key.
+- dashboard/src/lib/api.js stores the cloud session bearer token in localStorage as well.
+
+Impact: any same-origin script execution (including a future XSS, compromised dependency or malicious browser extension) can read the cloud session token and all BYOK/provider keys. The XOR key is shipped in the JavaScript bundle and is recoverable by anyone with the application source/bundle, so the stored values are not encrypted at rest. This is not a remote exploit by itself; it is an inaccurate protection boundary and increases the impact of client-side compromise.
+
+Fix direction: remove the "encrypted" claim and do not treat XOR/base64 as protection. For the native Windows app, move secrets into Windows Credential Manager/DPAPI through a narrow Tauri command and keep them out of WebView localStorage. For browser/self-host use, explain that persisted BYOK keys are accessible to same-origin scripts; offer session-only storage or require re-entry. Keep managed cloud credentials server-side. Add tests that ensure secrets are not written to localStorage in the desktop build once secure storage is wired.
+
+### Frontend follow-up observations
+- AuthContext scrubs the Google callback token from browser history immediately with replaceState and clears the auth hash in finally; magic-link tokens travel in the fragment and are exchanged through a POST body. This is a positive control.
+- apiFetch attaches the cloud bearer token consistently for relative API calls and translates 402 responses into QuotaError. The inspected components generally use this wrapper for protected API routes.
+- AccountPage checkout polling clears its interval on paid-plan activation, retry exhaustion or unmount. AutopilotTab polling also uses an effect cleanup.
+- ThumbnailStudio publish polling has no overall timeout or abort controller in the inspected path; if the backend publish status remains "uploading" forever or the status endpoint never resolves, the modal can remain busy indefinitely. Add a bounded timeout and explicit cancel/retry state.
