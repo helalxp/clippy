@@ -1760,3 +1760,16 @@ Fix direction: in managed mode, reject unsigned requests when _job_record return
 - Read job creation's ownership sidecar/resume-manifest writes, status recovery, source URL minting/streaming, download-all, project restore and the ownership-aware restore path.
 - Positive controls: upload slots have UUID IDs, per-file streaming byte caps, TTL cleanup, ownership checks on DELETE and process consumption, and completed video validation; source URL signatures are short-lived HMAC capabilities; cloud project restore verifies Project.user_id and writes an owner sidecar.
 - Gaps: PUT is the only upload-slot route missing the owner comparison; source streaming fails open on an unresolvable job record; pending_uploads and their files are in-memory/ephemeral across process restarts; no tests cover cross-user PUT or source-record-missing behavior.
+
+
+### F-62: User-controlled job error text is inserted raw into admin alert email HTML — medium admin phishing/injection surface
+
+Evidence:
+- app.py _record_managed_job_outcome obtains err from _job_error_text(job.logs) and passes it to cloud.alerts.record_job_outcome.
+- cloud/alerts.record_job_outcome includes the last error text verbatim (up to 1,200 characters) in both the proxy-error and high-failure-rate alert bodies.
+- cloud/alerts.send_admin_alert interpolates body directly inside an HTML <pre> element without html.escape. The Telegram path is plain text, but the configured email path sends this raw HTML.
+- Job logs can contain yt-dlp/provider error messages and user-supplied source URLs or media metadata. _scrub_secrets removes credentials but does not HTML-escape markup.
+
+Impact: a user can potentially craft a source URL or media metadata that is reflected into an operational alert and inject HTML into the administrator's email. Email clients commonly suppress scripts, but injected markup can create deceptive links, remote image requests or misleading admin instructions.
+
+Fix direction: HTML-escape body before placing it inside <pre>, and separately sanitize subject control characters. Keep Telegram plain text. Add a test using an error containing <img>, <a href> and ampersands and assert the delivered email contains escaped text rather than active markup.
