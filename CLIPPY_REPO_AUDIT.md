@@ -10,7 +10,7 @@
 
 ## 0. Mandatory instructions for agents
 
-1. Read this file before engineering work, then read this file first, then any branch-specific `AGENTS.md` / `CLAUDE.md`; read a branch-specific `CLIPPY_MASTER.md` only where that branch still contains one.
+1. Read this file before engineering work, then read branch-specific `AGENTS.md` / `CLAUDE.md` and platform contracts if present.
 2. Confirm the actual checkout: `git status --short`, `git branch --show-current`, `git branch -avv`, `git remote -v`, `git log --oneline --decorate -12`.
 3. Never assume the current checkout is `main`. The native Windows migration is on `windows-native-migration`, not in main.
 4. Source, tests, configuration, and Git history outrank this document. If this document conflicts with checked-out code, trust the code and update this document.
@@ -37,16 +37,16 @@ Repository metadata observed through GitHub:
 - Default branch: `main`
 - Main HEAD at inspection: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
 - Reported repository size: 79,360 KB (GitHub repository size metadata; not a local checkout measurement).
-- Main recursive tree: 472 entries, 422 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
+- Main recursive tree: 461 entries, 411 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
 
 ### Branch inventory
 
 | Branch | HEAD at inspection | GitHub comparison against main | Interpretation |
 |---|---|---|---|
 | `main` | `3b398f02b83f` | Default branch | Docker-oriented OpenShorts-derived application, workspace UI and existing feature patches. |
-| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 8 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
-| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 7 behind; status `diverged` | Contains a unique reference-template feature commit. |
-| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 7 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
+| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 21 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
+| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 21 behind; status `diverged` | Contains a unique reference-template feature commit. |
+| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 21 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
 
 Branch tips are moving references. Re-run comparisons before cherry-picks, merges, or release decisions.
 
@@ -59,7 +59,7 @@ Main contains 421 tracked files across these extensions:
 | Python | 173 |
 | JSX | 50 |
 | JavaScript | 25 |
-| Markdown | 31 |
+| Markdown | 26 |
 | TSX | 9 |
 | TypeScript | 11 |
 | JSON | 15 |
@@ -220,7 +220,7 @@ Do not create a second auth path or duplicate business logic for MCP. Existing a
 | `requirements*.txt` | Python dependency sets. |
 | `tests/` | Python behavior/regression/security tests. |
 | `docs/architecture/` | Subsystem design notes; verify against implementation. |
-| `CLIPPY_MASTER.md`, `CLAUDE.md` | Existing project onboarding/agent rules. |
+| `CLIPPY_REPO_AUDIT.md`, `CLAUDE.md` | Canonical engineering handover and short agent entrypoint. |
 | Windows branch: `desktop/src-tauri/src/supervisor.rs` | Desktop process supervision. |
 | Windows branch: `desktop/src-tauri/src/bootstrap.rs` | First-run bootstrap/provisioning. |
 | Windows branch: `desktop/src-tauri/src/downloader.rs` | Runtime download/provisioning. |
@@ -232,13 +232,13 @@ Do not create a second auth path or duplicate business logic for MCP. Existing a
 ## 5. Existing docs and trust hierarchy
 
 Observed documentation:
-- `CLIPPY_MASTER.md`: canonical agent/project guide; explicitly says source/tests/config/history are final truth.
+- Root `CLIPPY_MASTER.md` was consolidated into this file and removed from main. The native migration branch still has its own branch-specific copy.
 - `CLAUDE.md` (main) and `AGENTS.md` (Windows migration): short agent startup rules.
 - `README.md`: public OpenShorts product README; still contains OpenShorts branding, upstream `mutonby/openshorts` badges/links, Docker-first setup and public product claims.
 - `docs/architecture/*.md`: subsystem architecture notes.
-- `STATUS.md`, `CHANGES_COMPLETE.md`, `FINAL_SUMMARY.md`, `IMPLEMENTATION_PLAN.md`, `QUALITY_ISSUES_ANALYSIS.md`: historical implementation/status/analysis notes. These are not automatically current.
+- Historical root reports (`STATUS.md`, `CHANGES_COMPLETE.md`, `FINAL_SUMMARY.md`, `IMPLEMENTATION_PLAN.md`, `QUALITY_ISSUES_ANALYSIS.md`) were read, superseded, and removed from main after their durable context was migrated into this audit.
 
-**Observed documentation drift:** `STATUS.md` refers to local `D:\openshorts\...` paths and reports pending/fixed states that must be reconciled with current code. `QUALITY_ISSUES_ANALYSIS.md` records older values and recommendations that do not consistently match the later status narrative. Do not copy those claims into current issue lists without checking source and tests.
+**Historical documentation drift:** the removed status/quality reports contained local `D:\openshorts\...` paths and conflicting recommendations. Their claims were checked against current source and CI before removal; the verified current failures are recorded in F-01 and F-02.
 
 ## 6. Preliminary findings and risks
 
@@ -254,7 +254,7 @@ Main does not contain `desktop/`, `platform_compat.py`, `runtime-manifest.json`,
 `churchil_queen_vertical.gif` is 65,384,963 bytes (~62.4 MiB), above GitHub's recommended 50 MB warning threshold. Consider Git LFS or an external asset if the file is needed, but first check references and preserve attribution/licensing. Do not remove it blindly.
 
 ### R-04: Patch artifacts are committed alongside source — medium, confirmed
-Main contains multiple patch files, including `clippy-feature-updates.patch`, `clippy-watermark-preview-fix.patch`, `openshorts-background-watermark-fix.patch`, `openshorts-combined-watermark-background-fix.patch`, and `openshorts-final-fix.patch`. These can become stale and encourage unsafe reapplication. Determine whether they are historical records or active deliverables; if historical, label/archive them rather than applying them.
+The temporary root patch artifacts were deleted from main after confirming they are not runtime inputs. Do not recreate or reapply them as a substitute for source-level changes.
 
 ### R-05: Renderer durability and access need a focused review — high, needs verification
 The main renderer stores render jobs in a process-local `Map`, so job status disappears on process restart. Compose publishes renderer host port 13100. The inspected Express source mounts the output directory as static content and accepts render requests. Complete a full route-level auth/network review, verify whether only the backend can reach it in production, and test renderer restart during queued and active renders. Consider persistent job state, authenticated internal access, and bounded/allowlisted output paths if not already enforced elsewhere.
@@ -363,8 +363,8 @@ This ledger prevents agents from mistaking a structural survey for a complete li
 | Recursive tree main | Recursive Git tree; 421 files | Inventory inspected |
 | Recursive trees other branches | Recursive Git trees | Inventory/counts inspected; not every blob read |
 | Branch diffs | GitHub compare API | Inspected for all 3 non-main branches |
-| Main README and agent docs | README, CLIPPY_MASTER, CLAUDE | Targeted read |
-| Historical status/quality docs | STATUS, QUALITY_ISSUES_ANALYSIS | Targeted read; drift noted |
+| Main README and agent docs | Clippy README, audit, CLAUDE | Targeted read |
+| Historical status/quality docs | Read before removal; durable facts migrated into this audit |
 | Architecture docs | agent access, autopilot, billing/jobs and other docs | Targeted partial read |
 | Main API/backend | app.py first 90 lines; route/module structure not exhaustively traced | Partial |
 | Core processing | main.py first 90 lines and module inventory | Partial |
@@ -522,7 +522,7 @@ The legacy root README is being replaced with a Clippy-specific, branch-accurate
 | Repository tree | Current recursive main tree and branch heads | Complete for current snapshot |
 | Branch divergence | GitHub compare for all four listed branches | Complete for current snapshot |
 | Agent/project guides | Read root CLAUDE, root CLIPPY_MASTER, audit; read native branch AGENTS and desktop contracts | Targeted, migrated into this file |
-| Root historical docs | Read STATUS, CHANGES_COMPLETE, FINAL_SUMMARY, IMPLEMENTATION_PLAN, QUALITY_ISSUES_ANALYSIS | Complete for listed files |
+| Root historical docs | Read all five historical reports before deletion | Complete for listed files |
 | CI | Read current main workflow definition, latest run and failing job logs | Complete for latest run inspected |
 | Core backend | Targeted sections of app.py, main.py, clip_selection.py, recut.py, security_utils.py, media_auth.py | Partial; full line-by-line review remains |
 | Cloud services | Targeted sections of auth.py, metering.py, account.py, models.py | Partial; remaining modules and complete files remain |
@@ -534,3 +534,10 @@ The legacy root README is being replaced with a Clippy-specific, branch-accurate
 | Runtime verification | No local checkout, Docker, Windows machine, GPU, or media fixtures available to execute in this inspection | Not performed |
 
 **Completion rule:** Do not relabel this audit as “full line-by-line complete” until every tracked text/source/config/test/script file on each in-scope branch has been read or explicitly classified as generated/vendor/opaque binary, references have been checked, and required builds/tests have been executed in a suitable environment. A source read is not a runtime certification.
+
+
+## Repository cleanup record — 2026-11-09
+
+The main-branch documentation cleanup was committed as individual GitHub contents commits. The legacy OpenShorts-branded root README was replaced with a Clippy-specific overview; the short `CLAUDE.md` entrypoint now points to this audit. Root `CLIPPY_MASTER.md` was consolidated into this audit and removed from main. The five historical root status/change/plan reports and five saved patch artifacts were removed after their relevant context was read and migrated. Focused architecture, compliance, CLI, skills, and operational documentation were retained.
+
+Source snapshot and branch comparisons in this document refer to main HEAD `eac114eaf9f978f11dbe6bed0767eccf965132b2` before this audit-document refresh commit. The audit-document commit itself is documentation-only and will advance main after that snapshot.
