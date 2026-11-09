@@ -2289,3 +2289,17 @@ Fix direction: decide whether to preserve `openshorts` as a compatibility alias 
 - The CLI uses only the Python standard library and exposes process/status/clips/quota/publish commands. API paths and JSON field names were compared with the corresponding backend routes; the --format example mismatch is F-77.
 - No CLI-specific automated test files exist. publish-cli.yml builds the wheel, installs it and runs only `openshorts --help`; it does not exercise request construction, auth headers, webhook submission, polling, clip URL handling or publish payloads.
 - The package is intentionally zero-dependency, but there is no lock file for the build-system requirement `setuptools>=68`; CI installs the latest compatible build tool at publish time.
+
+
+### F-79: Cloud schema has no Alembic revision history; runtime startup relies on create_all and hand-written additive ALTERs — medium migration/release risk
+
+Evidence:
+- The repository contains alembic.ini, alembic/env.py and alembic/script.py.mako, but no alembic/versions directory or migration revision files.
+- alembic.ini explicitly says the boot path uses create_all and Alembic is reserved for future controlled migrations.
+- cloud/database.py creates tables from current SQLAlchemy metadata and then runs a list of hand-written additive ALTER TABLE/CREATE INDEX statements during startup.
+- SQLAlchemy create_all does not evolve existing table columns/types/constraints; the hand-written startup SQL only covers selected additive changes. There is no revision identifier or tested upgrade/downgrade path for deployed databases.
+- CI does not create a database from an older schema and test an upgrade to the current models.
+
+Impact: future schema changes that rename/drop/change columns, add non-null constraints with backfills, or alter indexes can leave deployed databases incompatible with the new application. Rolling deployments may run code against partially upgraded schemas, and there is no deterministic way to identify which schema version a customer database is on.
+
+Fix direction: introduce a first real Alembic baseline revision matching the current production schema, then add one reviewed revision per schema change. Stop relying on create_all as the production migration mechanism; keep startup checks read-only and fail clearly if the DB revision is behind. Add CI that upgrades an old fixture database to head and tests rollback where supported.
