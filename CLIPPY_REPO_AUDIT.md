@@ -1374,17 +1374,17 @@ Impact: a dubbed subtitle request can start a GPU transcription while one or mor
 
 Fix direction: move the host slot into a shared transcribe_media entrypoint or wrap subtitles.transcribe_audio in host_asr_slot just like main.transcribe_video. Ensure the slot is released even on model errors. Add a cross-process lock test covering the main pipeline, Thumbnail Studio and dubbed subtitle route.
 
-### F-47: AI Editor leaves uploaded user videos in Gemini Files for up to 48 hours — high privacy/retention mismatch
+### F-47: Dormant VideoEditor helper leaves Gemini uploads for up to 48 hours if reused without cleanup — low conditional privacy risk, no current caller found
 
 Evidence:
 - editor.py VideoEditor.upload_video uploads a full copy of the user's clip to the Gemini Files API.
 - editor.py defines delete_uploaded() and its docstring explicitly says every caller must call it in a finally block immediately after the effects pass; otherwise Google retains the file for up to 48 hours.
-- app.py /api/edit creates a VideoEditor, calls editor.upload_video(), then editor.get_ffmpeg_filter(), but never calls editor.delete_uploaded() in any success or failure path. The finally block only removes the local safe_input_path.
-- The edit route is the only VideoEditor caller found in the main application source.
+- A fresh full-text scan of main.py and app.py found no VideoEditor import, instantiation, or delete_uploaded call. The current app.py route inventory contains no /api/edit endpoint, and no current dashboard API call to that route was found.
+- The earlier statement that /api/edit is the only caller is stale relative to the audited main snapshot. editor.py is currently a dormant helper module unless an external script imports it.
 
-Impact: each AI edit leaves another full copy of the user's video in the provider's Files API for up to 48 hours, including when filter generation or FFmpeg fails. This contradicts the editor's own retention contract and any product/privacy statement implying that temporary provider uploads are deleted after use.
+Impact: no current production impact was established because no caller was found. If VideoEditor is reintroduced or used by an external integration, a caller that omits delete_uploaded will leave a full video copy with Google for up to 48 hours. Do not describe this as an active /api/edit defect until a live call path is found.
 
-Fix direction: retain the returned file handle and call editor.delete_uploaded(vid_file) from a finally block covering the entire edit operation, including failures during model processing. Add a test asserting delete is attempted exactly once after success, model failure, and FFmpeg failure. Also reconcile the public privacy policy with the provider's maximum retention window.
+Fix direction: either remove the unused helper if the feature is retired, or require a context manager/try-finally wrapper that always calls delete_uploaded and test success/model/FFmpeg failures before wiring it into a route. Recheck the provider's current retention policy at implementation time.
 
 ### F-48: Several clip-edit and publishing routes accept negative clip indexes — low functional/API validation defect
 
