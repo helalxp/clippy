@@ -37,16 +37,16 @@ Repository metadata observed through GitHub:
 - Default branch: `main`
 - Main HEAD at inspection: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
 - Reported repository size: 79,360 KB (GitHub repository size metadata; not a local checkout measurement).
-- Main recursive tree: 461 entries, 411 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
+- Main recursive tree: 460 entries, 410 files, 50 directories, ~86.38 MB of tracked blob content. Tree response was not truncated.
 
 ### Branch inventory
 
 | Branch | HEAD at inspection | GitHub comparison against main | Interpretation |
 |---|---|---|---|
 | `main` | `3b398f02b83f` | Default branch | Docker-oriented OpenShorts-derived application, workspace UI and existing feature patches. |
-| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 21 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
-| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 21 behind; status `diverged` | Contains a unique reference-template feature commit. |
-| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 21 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
+| `codex/new-ui` | `c260c6bf8319` | 0 ahead / 27 behind; status `behind` | Historical UI branch. No unique commits ahead of main in the comparison; do not treat it as a separate active feature line without rechecking. |
+| `codex/reference-templates` | `ba2acc1e13f6` | 1 ahead / 26 behind; status `diverged` | Contains a unique reference-template feature commit. |
+| `windows-native-migration` | `653e3bc380dc` | 14 ahead / 26 behind; status `diverged` | Native Windows migration plus reference-template work. This is the branch with desktop/Tauri scaffolding. |
 
 Branch tips are moving references. Re-run comparisons before cherry-picks, merges, or release decisions.
 
@@ -59,7 +59,7 @@ Main contains 421 tracked files across these extensions:
 | Python | 173 |
 | JSX | 50 |
 | JavaScript | 25 |
-| Markdown | 26 |
+| Markdown | 25 |
 | TSX | 9 |
 | TypeScript | 11 |
 | JSON | 15 |
@@ -360,7 +360,7 @@ This ledger prevents agents from mistaking a structural survey for a complete li
 |---|---|---|
 | Repository metadata/default branch | GitHub repo metadata | Inspected |
 | Branch list and branch heads | GitHub branches API | Inspected: all 4 reported branches |
-| Recursive tree main | Recursive Git tree; 421 files | Inventory inspected |
+| Recursive tree main | Recursive Git tree; 410 files at the cleanup snapshot | Inventory inspected |
 | Recursive trees other branches | Recursive Git trees | Inventory/counts inspected; not every blob read |
 | Branch diffs | GitHub compare API | Inspected for all 3 non-main branches |
 | Main README and agent docs | Clippy README, audit, CLAUDE | Targeted read |
@@ -409,7 +409,7 @@ Do not erase historical findings. Mark them superseded with the commit/test evid
 
 - Default branch: `main`
 - Current main HEAD: `ec3092eb8df5b03b7632d411f1b7c3cd8fd36c3c`
-- Recursive Git tree: 472 entries, 422 tracked files, 50 directories.
+- Recursive Git tree: 460 entries, 410 tracked files, 50 directories.
 - Branch comparisons against current main:
   - `codex/new-ui`: 0 ahead / 8 behind; no unique commits.
   - `codex/reference-templates`: 1 ahead / 7 behind; diverged.
@@ -540,4 +540,11 @@ The legacy root README is being replaced with a Clippy-specific, branch-accurate
 
 The main-branch documentation cleanup was committed as individual GitHub contents commits. The legacy OpenShorts-branded root README was replaced with a Clippy-specific overview; the short `CLAUDE.md` entrypoint now points to this audit. Root `CLIPPY_MASTER.md` was consolidated into this audit and removed from main. The five historical root status/change/plan reports and five saved patch artifacts were removed after their relevant context was read and migrated. Focused architecture, compliance, CLI, skills, and operational documentation were retained.
 
-Source snapshot and branch comparisons in this document refer to main HEAD `eac114eaf9f978f11dbe6bed0767eccf965132b2` before this audit-document refresh commit. The audit-document commit itself is documentation-only and will advance main after that snapshot.
+Source snapshot and branch comparisons in this document refer to main HEAD `ff879df772fc0051ffb3eb75f1e5e02987c95789` before this audit-document refresh commit. The audit-document commit itself is documentation-only and will advance main after that snapshot. Branch comparisons at this snapshot: `codex/new-ui` 0 ahead / 27 behind; `codex/reference-templates` 1 ahead / 26 behind; `windows-native-migration` 14 ahead / 26 behind.
+
+
+Additional documentation corrections in this cleanup:
+- `docs/architecture/jobs-and-deploys.md` now distinguishes the 1-hour cloud default from the 24-hour self-host default for job retention.
+- `docs/architecture/agent-access.md` no longer overstates the submit/delivery URL re-check as a complete DNS-rebinding defense.
+- `design.md` is retained as the active dashboard/landing design system and now uses Clippy branding.
+- The generic Vite-template `dashboard/README.md` was removed; it contained no Clippy-specific setup or operational instructions.
