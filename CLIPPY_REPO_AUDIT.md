@@ -2097,3 +2097,16 @@ Evidence:
 Impact: a Google identity with an unverified or non-authoritative third-party email can be linked to an existing Clippy account solely because the email string matches. If an attacker can obtain a Google identity whose asserted email matches a victim's magic-link account but whose current mailbox ownership has not been proven, the callback issues a JWT for the victim account. The exact exploitability depends on what Google permits for the identity's email and whether the email is authoritative; the missing verification/authority check is confirmed.
 
 Fix direction: always require email_verified=true. For @gmail.com, Google's authority is established by the Gmail domain; for Workspace, require verified email plus a validated hd claim. For other domains, do not auto-link by email: require the user to complete the existing magic-link challenge to that address or explicitly link Google from an already-authenticated session. Add tests for unverified email, verified third-party email without hd, verified Gmail, verified Workspace and an existing magic-link account collision.
+
+
+### F-70: Native Tauri Content Security Policy blocks React inline style attributes used by core editors — medium UI functionality defect, needs WebView confirmation
+
+Evidence:
+- desktop/src-tauri/tauri.conf.json sets `default-src 'self'` but does not declare a `style-src` or `style-src-attr` exception. Under CSP fallback rules, style attributes are disallowed unless explicitly permitted.
+- The packaged dashboard uses React inline style props for dynamic positioning, timeline tracks, playheads, crop windows, subtitle previews, colors and animation delays. Examples found in ResultCard.jsx, ClipEditor.jsx, ReframeEditor.jsx and SubtitleModal.jsx; ClipEditor alone has a dozen dynamic style props.
+- The CSP permits the backend and renderer origins in connect-src, and permits blob/data images, but it does not permit inline style attributes.
+- No Windows WebView2 integration test or CSP console test exists in CI.
+
+Impact: in the native packaged app, WebView2 can block the style attributes used by Clip Editor, Reframe Editor and subtitle/watermark previews. Static Tailwind classes may still render, but dynamic timeline positions, crop boxes, colors and layout states can disappear or become incorrect. This is not proven in a packaged WebView run yet, so keep severity medium pending a direct test.
+
+Fix direction: run the packaged app with CSP violation logging and add a WebView2 smoke test covering the clip editor and reframe/subtitle preview. If confirmed, permit style attributes narrowly with `style-src-attr 'unsafe-inline'` while keeping script-src strict, or refactor dynamic styles to safe CSS classes/custom properties under an explicitly tested CSP. Do not broadly add `unsafe-inline` to script-src.
