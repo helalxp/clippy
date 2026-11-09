@@ -470,7 +470,7 @@ Evidence:
 
 The guard resolves a hostname, checks the returned addresses, then returns the original URL. The downstream HTTP client/yt-dlp performs its own resolution and follows redirects. The validation result is therefore not cryptographically or transport-bound to the address that is ultimately contacted. DNS rebinding and redirect behavior need explicit tests. Disabling certificate verification further weakens transport protection.
 
-Fix direction: enforce safe destination validation at every redirect and connection, or use a fetch layer that pins the validated address while preserving the correct TLS hostname/certificate verification. Review every caller, not just the initial URL parser. Do not mark this finding fixed based only on another preflight DNS lookup.
+Caller review now narrows the scope: SaaSShorts scrape_website disables automatic redirects and validates every Location hop; webhook delivery disables redirects and re-resolves before every attempt; selected-actor HTTPX download uses the default no-auto-redirect behavior. The main YouTube/direct-file path validates the initial URL, then calls file_hosts.resolve and yt-dlp; file_hosts uses urllib.request.urlopen (which follows redirects) without a per-hop public-address check, and yt-dlp is configured with nocheckcertificate=True. This leaves the download path as the priority unresolved redirect/DNS-rebinding surface. Fix direction: enforce safe destination validation at every redirect and connection, or use a fetch layer that pins the validated address while preserving the correct TLS hostname/certificate verification. Review every caller, not just the initial URL parser. Do not mark this finding fixed based only on another preflight DNS lookup.
 
 ## Windows-native migration branch findings (branch-only)
 
@@ -725,3 +725,24 @@ Fix direction: require an existing, owner-verified session when session_id is su
 
 ### Phase 2/3 follow-up: upload and thumbnail paths
 The public thumbnail mount finding F-11 is compounded by the fact that the thumbnail generator writes generated thumbnails and person_reference.jpg under the same output tree. The upload-read limits and unchecked session path are separate defects and should be fixed independently.
+
+
+### SSRF caller matrix update (F-04)
+- Main YouTube/direct-file download: initial URL check exists, then file_hosts.resolve and yt-dlp; file_hosts uses urllib.request.urlopen with automatic redirects, and yt-dlp follows its own extractor/HTTP redirects. yt-dlp's shared options set nocheckcertificate=True. This is the priority path for deeper SSRF review.
+- SaaS website scrape: explicit follow_redirects=False and up to five redirect hops, each Location revalidated with assert_public_url. The same pattern is used for same-host subpages.
+- Webhook delivery: revalidates the URL on every attempt and sets follow_redirects=False.
+- Selected actor URL download: validates the initial URL; HTTPX default is no automatic redirect following.
+- This matrix reduces the scope of F-04 but does not close it. DNS rebinding between validation and connection remains possible for clients that resolve again; redirects in the main downloader need transport-level enforcement.
+
+### Phase 3 coverage ledger update
+| Component | Inspection | Status |
+|---|---|---|
+| main.py | Full file fetched for structural inventory; YouTube downloader and watermark implementation inspected | Partial |
+| recut.py | Full file read; call contract and CI failure traced | Targeted complete for recut implementation, not end-to-end |
+| watermarked.py | Full file read; delivery marker/name helpers | Complete for this small module |
+| clip_selection.py | Duration bounds function inspected; remaining selection logic not reviewed | Partial |
+| thumbnail.py | Output path and image-generation save flow inspected; remaining 789 lines not fully reviewed | Partial |
+| file_hosts.py | Full small module read; redirecting urllib fetch identified | Complete for this small module |
+| security_utils.py | Full small module read; DNS resolution and IP classification inspected | Complete for this small module |
+| media_auth.py | Main helpers and intended token model inspected; full test/caller matrix remains | Partial |
+| FFmpeg/GPU | Selected command construction and watermark GPU wrapper inspected | Partial; no real media/GPU execution |
