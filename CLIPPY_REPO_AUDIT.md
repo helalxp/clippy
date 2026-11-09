@@ -1878,3 +1878,18 @@ Evidence:
 Impact: a free user can edit/save a project near the end of the 7-day retention window, causing the Project row to remain, while its older UserVideo object is deleted. The library can then show a project that cannot be restored completely or whose clip URLs point to missing files. The job-prefix cleanup is skipped because the Project is considered recently updated.
 
 Fix direction: define one consistent expiry timestamp for the project and every object required to restore it. Either expire the whole project prefix based on Project.updated_at and retain all referenced clip objects until then, or expire the entire project regardless of recent edit-state updates. Do not delete a UserVideo object while any retained Project.state references its filename. Add a test with an old UserVideo and recently updated Project, then assert either the whole project is removed or every referenced object remains restorable.
+
+
+### F-66: R2 retention sweep can delete a user's library after they upgrade or reactivate — high data-loss race
+
+Evidence:
+- cloud/videos.purge_free_expired selects expired UserVideo and Project rows, checks metering.is_free_user in a separate short-lived database session, then releases that session before deleting R2 objects and database rows.
+- cloud/videos.purge_expired similarly selects canceled subscriptions, checks that the user is not free (and therefore still appears lapsed) in one session, checks for library rows in another, then deletes the entire R2 user prefix before deleting the DB rows.
+- Neither path locks the User/Subscription row or creates a durable retention-deletion claim that the Stripe webhook/subscription-upsert path must honor.
+- A successful Stripe subscription update can therefore race after the retention eligibility check but before the object deletion. The sweeper still deletes the user's objects even though the user has upgraded/reactivated by the time deletion occurs.
+- The comments promise that paid libraries are durable and that a user who upgraded keeps everything, but the current check-then-delete sequence does not guarantee that promise under concurrency.
+- Existing retention tests cover expiry windows and eligibility in isolation; no test races a subscription upgrade/reactivation against the actual R2 deletion sequence.
+
+Impact: a user who upgrades or reactivates at the same time the retention sweeper runs can lose clips and projects permanently. The database rows are also deleted after the R2 objects, so the missing library cannot be reconstructed from the normal history index.
+
+Fix direction: introduce a durable per-user retention state/lease and make the eligibility transition atomic with subscription updates. At minimum, lock the relevant User/Subscription rows, re-check the plan and last_event_at immediately before committing a purge claim, and have subscription activation cancel any unstarted claim. Do not hold a long DB transaction across all object I/O without a deliberate design; a two-phase claim with a short lease and cancellation check before each delete batch is safer. Add concurrency tests for free-to-paid upgrade and canceled-to-active reactivation during a purge.
