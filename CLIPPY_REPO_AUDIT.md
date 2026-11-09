@@ -1773,3 +1773,34 @@ Evidence:
 Impact: a user can potentially craft a source URL or media metadata that is reflected into an operational alert and inject HTML into the administrator's email. Email clients commonly suppress scripts, but injected markup can create deceptive links, remote image requests or misleading admin instructions.
 
 Fix direction: HTML-escape body before placing it inside <pre>, and separately sanitize subject control characters. Keep Telegram plain text. Add a test using an error containing <img>, <a href> and ampersands and assert the delivered email contains escaped text rather than active markup.
+
+
+### F-52: Disk cleanup can delete active SaaSShorts job directories — high data-loss defect
+
+Evidence:
+- SaaSShorts stores job records in saas_jobs keyed by the bare UUID, but stores files under OUTPUT_DIR/saas_<uuid>.
+- The generic _job_is_active(job_id) helper checks _running_jobs, jobs[job_id], and the resume manifest at OUTPUT_DIR/<job_id>/.resume.json. It does not inspect saas_jobs and does not strip the saas_ prefix.
+- _sweep_expired_job_dirs and _enforce_output_size_cap both use _job_is_active on the directory name. An active SaaSShorts directory is therefore considered inactive.
+- SaaSShorts generation can take several minutes and uses its own asyncio task/semaphore, not the main processing queue's _running_jobs set or resume manifest.
+
+Impact: if a SaaSShorts directory is older than JOB_RETENTION_SECONDS (default 1 hour), or OUTPUT_DIR exceeds OUTPUT_MAX_GB, the generic cleanup can delete that directory while generate_full_video is still writing into it. The job can fail, lose cached assets needed for retry, or report a completed result whose file has vanished.
+
+Fix direction: give SaaSShorts jobs a durable active marker/manifest and teach both cleanup paths to resolve the directory name to the matching saas_jobs record. Better: centralize active-directory ownership in a registry shared by every pipeline. Add tests that advance the clock past retention and exceed the size cap while a SaaSShorts job is processing, asserting its directory survives; then assert completed/failed jobs become eligible after the retention window.
+
+### F-53: Generic upload cleanup does not recognize active Thumbnail Studio source files — medium data-loss defect
+
+Evidence:
+- Thumbnail Studio saves source videos under UPLOAD_DIR using names like thumb_<session_uuid>_<filename> and stores the session in thumbnail_sessions.
+- _sweep_expired_uploads derives an active job ID by taking the filename prefix before the first underscore. For a thumbnail source this returns the constant string "thumb", not the session UUID.
+- _job_is_active("thumb") never checks thumbnail_sessions, so a source file older than JOB_RETENTION_SECONDS can be deleted even while background transcription, frame extraction or a later thumbnail publish still depends on it.
+- Thumbnail Studio has no independent source-retention sweep or durable session manifest.
+
+Impact: long-running transcription or a long-lived Thumbnail Studio session can lose its source video after the generic one-hour upload retention, causing later analyze/frames/publish actions to fail with a missing source file. The cleanup can also leave an in-memory session pointing at a nonexistent path.
+
+Fix direction: store a durable owner/session marker for thumbnail uploads and make the upload sweeper recognize active thumbnail sessions; apply a separate documented TTL after the session becomes terminal. Add a test that advances the clock beyond JOB_RETENTION_SECONDS while a thumbnail session is active and asserts its source remains, then expires it after the session TTL.
+
+### Cleanup/lifecycle checkpoint
+- Read job recovery, resume manifests, deploy handover, shared-GPU admission, queue dispatch, subprocess execution, auto-retry, reservation settlement, cloud archive, webhook delivery, upload/output retention, size caps, and account-local purge.
+- Positive controls: main clip jobs have a .owner sidecar, resume manifests with bounded attempts, heartbeats for deploy handover, shared-GPU admission, bounded job concurrency, upload/output size caps, and retention skips for queued/running jobs; terminal managed jobs settle reservations and archive before notifying webhooks.
+- Remaining cleanup gaps: SaaSShorts and Thumbnail Studio are outside the main job active-state registry; thumbnail directory is intentionally skipped by age cleanup and excluded from size-cap deletion candidates, so generated thumbnails can accumulate indefinitely and can keep OUTPUT_DIR above its configured cap. Pending upload slots and Thumbnail Studio session/publish state are process-local and are not recovered after restart.
+- No cancellation endpoint exists for main processing jobs in the inspected route inventory; deploy drain and process termination are implemented, but user-initiated job cancellation is not. Confirm whether this is an intentional product decision or a missing user workflow.
