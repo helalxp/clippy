@@ -437,15 +437,15 @@ The function widens any range narrower than 15 seconds, but the assignment uses 
 
 Fix direction: preserve a valid user-supplied range. Only repair an inverted/degenerate range according to a documented policy; do not silently narrow a valid 20–30 second request. Add boundary tests for 5, 10, 15, 20, 30, 60, 175, and 180 second limits.
 
-### F-02 — Recut watermark test double no longer matches the call contract — low, confirmed CI failure
+### F-02 — Source-path recut watermark call is incompatible with the real watermark function — high, confirmed production-path defect
 
 Evidence:
 - `recut.py:326-328`
 - `tests/test_recut.py:278-284`
 
-The production call passes `backdrop_type` and `backdrop_color` keyword arguments. The test injects `watermarker=lambda path: ...`, which rejects those keywords. The CI failure is confirmed; whether the production behavior is correct still depends on the real `watermarked.apply_watermark` signature and end-to-end render verification.
+The production call passes `backdrop_type` and `backdrop_color` keyword arguments. The test injects `watermarker=lambda path: ...`, which rejects those keywords. Follow-up inspection of the actual production target confirms `main.apply_watermark(video_path, output_path=None)` accepts neither keyword. Therefore the default source-path recut implementation also raises TypeError whenever watermark=True reaches this branch. The test double is stale, but it exposed a real production call-contract defect.
 
-Fix direction: update the injected fake to accept and assert keyword arguments, or define and test a stable watermarker protocol. Do not weaken production behavior merely to satisfy a stale fake.
+Fix direction: choose one stable watermarker contract. Either extend main.apply_watermark to support the requested backdrop options (if those options are genuinely part of the intended watermark feature) or remove the unsupported kwargs from recut. Update the fake to match the chosen protocol and add a test that uses the real function signature through a monkeypatched implementation. Then exercise a source-path recut with watermark=True using a real short media fixture.
 
 ## High-priority security findings
 
@@ -675,3 +675,27 @@ Fix direction: replace the direct StaticFiles mount with an authenticated/capabi
 - Read selected route/helper sections covering request identity, job ownership, uploads, process submission/attestation, project restoration, background/watermark edits, render proxy, social analytics/scheduling, thumbnail upload/generation/frames, SaaS analysis/generation/retry/status, media mounts, and media path helpers.
 - The full implementations of all 54 routes, all cloud routers, MCP endpoints, free tools, and every root Python module still require review.
 - Continue with the video pipeline and security-sensitive helpers, then finish the backend route matrix and test mapping. Do not infer that a route is safe merely because a helper name appears in the route.
+
+
+## Phase 3 checkpoint: video pipeline and media processing
+
+### F-02 production impact confirmed
+The production watermark implementation was inspected at main.py around lines 1462-1528. Its actual callable is apply_watermark(video_path, output_path=None); it does not accept backdrop_type or backdrop_color. recut.py passes both keyword arguments to the default implementation. Therefore the current source-path recut watermark branch is broken in production, not merely a test-fixture mismatch. The CI test failure is a valid signal of a real integration defect.
+
+### Additional pipeline inspection
+- main.py was fetched in full for structural inventory (2,733 lines; 42 top-level definitions) and targeted review of YouTube download and watermark paths.
+- recut.py was read in full (approximately 300 lines). It provides a standard-library-oriented EDL/recut engine, source and fast paths, word-timed transcript remapping, temporary-file cleanup, optional reframe, watermark and caption hooks.
+- watermarked.py was read in full. It is a filename/marker helper for free-plan delivery copies; it does not implement the visual watermark rendering function.
+- clip_selection.py duration bounds and tests/test_generation_controls.py were read. The test suite expects valid explicit 20–30 second bounds to remain unchanged; the implementation narrows this to 20–25 seconds.
+- main.download_youtube_video validates the initial URL with assert_public_url, then passes it through file_hosts.resolve and yt-dlp. The yt-dlp options currently set nocheckcertificate=True. Redirect/host behavior across file_hosts and yt-dlp remains under review.
+- SaaSShorts website scraping explicitly disables automatic redirects and revalidates each redirect hop. This narrows the earlier SSRF concern for that specific scraper, but does not establish safety for every other URL consumer.
+- The visual watermark implementation probes dimensions and runs FFmpeg/GPU decode with a local watermark asset. The free-plan naming/marker layer is separate from that render function.
+
+### New pipeline review questions
+- Verify every caller of main.apply_watermark and recut.perform_recut against the actual signatures.
+- Review user-uploaded logo read limits: the clip watermark route calls logo.read() before checking its 10 MB cap; this means the cap is checked after the entire upload has already been read into memory. Check other uploaded image paths for the same pattern and record a finding if the behavior is reachable.
+- Trace file_hosts.resolve and yt-dlp redirect/download behavior against SSRF protections, including certificate verification and proxy paths.
+- Review all FFmpeg command builders for shell invocation, path quoting, timeout, metadata scrubbing, codec fallback, and CPU/GPU parity.
+- Review generated intermediate files, sidecars and media delivery rules together; the /thumbnails static-mount finding F-11 is especially relevant to generated face-reference images.
+
+Phase 3 remains partial. No media fixture, FFmpeg render, GPU path, or Windows-native media execution was run in this remote source inspection.
