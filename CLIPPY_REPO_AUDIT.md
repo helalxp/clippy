@@ -629,3 +629,49 @@ Fix direction: keep the base Compose path CPU-compatible. Move GPU settings into
 - Not yet read: every nested platform-specific script/config, every workflow-adjacent release file, complete Docker build output, cloud production environment examples, native Windows branch equivalents, and all dependency lockfile metadata.
 - No Docker build, compose config render, container startup, frontend lint, renderer build, Remotion typecheck, CLI wheel build, or Windows build was executed in this remote source inspection.
 - Phase 1 remains **partial**, not complete.
+
+
+## Phase 2 findings: backend/API route and ownership review
+
+**Inventory performed on main @ 1710a1d4e98c:**
+- app.py: 7,599 lines, 54 HTTP route decorators, 207 top-level functions/classes.
+- main.py: 2,733 lines, 42 top-level functions/classes; no HTTP routes (processing/pipeline module).
+- 47 root-level Python modules were enumerated. This phase has mapped the route surface and read selected high-risk route/helper sections; it has not yet completed a line-by-line review of all 173 Python files or every route body.
+
+### Route/ownership observations
+- Most core job routes visibly call _ensure_job_files and/or _assert_job_owner before reading or mutating job content: status, source, downloads, edit, transcript, EDL, rerender, scenes, background, watermark, reframe, subtitles, hooks, translation, thumbnail sessions, SaaS job status, and render polling.
+- Social analytics and scheduled-post routes delegate to _social_analytics_auth, which resolves the caller's Upload-Post key and forces the managed profile in cloud mode. Scheduled-post cancellation checks the returned profile's scheduled-post list before deleting.
+- Public gallery pages and public UGC/actor galleries are explicitly public by design in the current implementation. This is a product/privacy decision, not automatically a defect.
+- Cloud account restore verifies the authenticated user against the Project row before restoring files. Standard video jobs use owner sidecars during disk recovery; SaaSShorts retry handling is a separate path and currently does not use that sidecar mechanism.
+- Upload PUT route uses a UUID upload slot as a bearer capability and does not authenticate the PUT request itself. The subsequent process call checks the slot's user_id in _take_pending_upload. This may be intentional for agent upload flows, but the bearer capability and overwrite semantics need a dedicated threat-model/test review.
+
+### F-10: SaaSShorts disk retry can reassign a persisted job to a different cloud user — high, confirmed source-level tenant-isolation defect
+
+Evidence:
+- app.py around lines 7389-7445.
+- A retry for a job still present in saas_jobs calls _assert_job_owner.
+- If the job is absent from memory, the code instead resolves output/saas_<retry_job_id> with _safe_under and accepts the directory if it exists.
+- It then writes a new in-memory record with user_id set to the current caller.
+- Unlike the standard job restore path, this SaaSShorts retry path does not read or validate a persisted .owner sidecar, and the creation path shown does not write one.
+
+Impact: after a process restart (when saas_jobs is empty), a cloud user who knows another SaaSShorts job UUID can submit it as retry_job_id. If the old output directory remains, the endpoint can re-use and modify that directory and assign its in-memory owner to the new caller. This is a cross-tenant ownership gap conditional on knowing the job ID and the directory surviving. UUID unpredictability reduces discoverability but is not an authorization control.
+
+Fix direction: persist an owner record at job creation and verify it before disk retry; fail closed when an existing directory has no owner record in cloud mode. Add a restart simulation test: create as user A, clear process memory, attempt retry as user B, expect 404; retry as user A should succeed.
+
+### F-11: Thumbnail media directory is mounted publicly despite the media-auth contract — high privacy exposure, confirmed
+
+Evidence:
+- app.py mounts /videos through RestoringStaticFiles with _media_guard, but mounts /thumbnails directly with Starlette StaticFiles and no guard or auth handler.
+- media_auth.py documents /videos and /thumbnails as protected prefixes and defines deliverable-extension/path checks and capability/user-token helpers.
+- app.py comments say the old static mounts exposed actor photos and face crops, and describes both prefixes as needing real handlers; the actual thumbnail mount contradicts that stated design.
+- thumbnail.py writes generated thumbnails and person_reference.jpg beneath output/thumbnails/<session_id>/ and returns public-style /thumbnails/<session_id>/<file> URLs.
+- thumbnail.py extracts face frames/crops for use as person references. These are biometric-like close-up images and should not be assumed public.
+
+Impact: anyone who obtains a thumbnail session's URL can request files from the thumbnail directory without a user token, path capability, or ownership check. Depending on generated files and URL leakage, this can expose generated thumbnails, face-reference crops and other session images. The media_auth allowlist is not applied to this mount.
+
+Fix direction: replace the direct StaticFiles mount with an authenticated/capability-aware handler that applies media_auth path normalization and extension allowlisting, checks the session/job owner for user-token requests, and supports explicit signed URLs only where public sharing is intended. Add tests that anonymous requests to a private session's thumbnail/frame URLs return 404, owner-token requests succeed, expired tokens fail, and only intended public assets can be shared.
+
+### Phase 2 review limits and next steps
+- Read selected route/helper sections covering request identity, job ownership, uploads, process submission/attestation, project restoration, background/watermark edits, render proxy, social analytics/scheduling, thumbnail upload/generation/frames, SaaS analysis/generation/retry/status, media mounts, and media path helpers.
+- The full implementations of all 54 routes, all cloud routers, MCP endpoints, free tools, and every root Python module still require review.
+- Continue with the video pipeline and security-sensitive helpers, then finish the backend route matrix and test mapping. Do not infer that a route is safe merely because a helper name appears in the route.
