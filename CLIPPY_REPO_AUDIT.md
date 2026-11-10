@@ -2425,3 +2425,20 @@ Fix direction: separate request admission from file persistence. Check identity,
 ### Main processing admission/cleanup review — 2026-11-10
 - Read the complete `/api/process` route (3077-3550) and the cleanup/cap loop (1577-1740).
 - F-126 is independent of the periodic size caps: those caps run only every five minutes, while the expensive file write precedes the quota check and rejected-request cleanup is missing.
+### F-127: Download-all skips the ownership check when a valid on-disk job is absent from the local jobs map — high cross-tenant media disclosure
+
+Evidence:
+- app.py `/api/jobs/{job_id}/download-all` calls `_ensure_job_files(job_id, request)` but ignores its boolean result.
+- It checks ownership only inside `if job_id in jobs:`. If the job is not in this instance's in-memory map, no owner/authentication check is performed before reading `output/<job_id>/*_metadata.json` and building a ZIP.
+- `_ensure_job_files` explicitly supports the multi-instance/deploy-handover case: when a job is not in `jobs`, it attempts `restore_project`. In cloud mode `restore_project` requires authentication and verifies the database Project owner, but `_ensure_job_files` catches the resulting HTTPException and returns False.
+- If the shared/local job directory already exists but belongs to another user (for example, it was created by another API instance after this instance started), a non-owner's restore fails, the route continues because it ignores False, and the local metadata/clip files are still read and returned.
+- Other file-reading routes inspected in the same region generally check that the job was loaded into `jobs` after `_ensure_job_files`; this route's conditional owner check is the outlier.
+
+Impact: on a cloud deployment where instances share OUTPUT_DIR, a caller who knows another user's job UUID can retrieve all clips in a ZIP from an instance that has the files on disk but has not loaded the job into its in-memory map. The request can be unauthenticated: a failed `restore_project` auth check is swallowed by `_ensure_job_files`, then the route serves the local files. The UUID is not a sufficient access-control boundary, particularly because media URLs already expose job IDs to anyone holding them (F-25).
+
+Fix direction: require a valid authenticated user in billing mode, require `_ensure_job_files` to return True, and unconditionally call `_assert_job_owner` on a disk-recovered job record before touching files. If the job is not in `jobs` after ensure, return 404. Add a regression test with a valid on-disk metadata directory, no in-memory job entry, billing enabled, and anonymous/wrong-owner requests; both must receive 404 and no ZIP bytes.
+
+### Cross-instance job-file authorization review — 2026-11-10
+- Confirmed `_ensure_job_files` returns False rather than raising when `restore_project` rejects an unauthenticated or non-owner caller.
+- Confirmed `/api/jobs/{job_id}/download-all` ignores that result and proceeds from the filesystem when the in-memory record is absent.
+- This is a distinct authorization defect from public `/videos` URLs (F-25) and from renderer output exposure (F-03): it is an authenticated API ZIP endpoint that accidentally fails open in the shared-filesystem handover state.
