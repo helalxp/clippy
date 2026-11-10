@@ -2216,3 +2216,30 @@ Evidence:
 Impact: each replaced actor-image preview can retain a Blob URL and its underlying image data until the page is closed. This is a small client-side memory leak, most visible when users iterate through many large actor images.
 
 Fix direction: keep the current object URL in state/ref and revoke the previous URL on replacement and component unmount. Add a component test that verifies the prior URL is revoked when a new image is selected and on unmount.
+
+
+### F-116: API-key active-key limit is a check-then-insert race — low/medium, confirmed missing serialization
+
+Evidence:
+- cloud/api_keys.py::create_key (around lines 89-108) counts active keys for the user, rejects at MAX_ACTIVE_KEYS=10, then inserts a new ApiKey row in the same transaction.
+- The count query does not lock the user row or existing key rows, and the schema has no database constraint limiting the number of active (revoked_at IS NULL) keys per user.
+- Two or more concurrent create requests can all observe fewer than 10 active keys and each insert, taking the account over the advertised limit.
+- Existing API-key tests cover creation, hashing, one-time display and revocation, but do not issue concurrent create requests at the boundary.
+
+Impact: a burst of parallel requests can bypass the ten-active-key product limit. This is a bounded policy bypass, not an authentication bypass: each created key is still random, hashed and scoped to its owner.
+
+Fix direction: serialize key creation per user (for example, lock the owning User row with SELECT ... FOR UPDATE before counting) or use a database-enforced quota representation. Keep the count and insert in the same transaction. Add a PostgreSQL concurrency test that starts several create requests with nine active keys and proves exactly one succeeds.
+
+### Phase 4 cloud-module coverage update — 2026-11-10
+- Read full source for cloud/alerts.py, analytics.py, api_keys.py, cancellation.py, config.py, database.py, digest.py, email_policy.py, lifecycle.py, managed_keys.py, oauth.py, onboarding.py, proxy_ledger.py, social_profiles.py, storage.py, videos.py and models.py.
+- cloud/api_keys.py is now covered end-to-end for key generation/hash/resolve, session-only key management, owner-scoped revocation and active-key quota; F-116 records the quota race.
+- cloud/onboarding.py uses a PostgreSQL upsert with ON CONFLICT DO NOTHING, so double submissions are first-write-wins.
+- cloud/social_profiles.py derives a stable remote profile name from the user's UUID, scopes the generated JWT to that profile, and uses a closed redirect-target map. The external profile creation is rechecked under the DB transaction to avoid duplicate local rows.
+- cloud/storage.py uses a single R2 client and paginates list/delete operations. The custom-domain mode is deliberately public and is already documented in F-64; the default presigned mode is time-limited.
+- cloud/email_policy.py intentionally fails open on transient DNS resolver errors to avoid locking out legitimate users; this remains an explicit anti-abuse/availability tradeoff, not a confirmed defect.
+- cloud/proxy_ledger.py's daily budget check also fails open if the DB is unavailable, explicitly favoring job availability over a strict spend cap. This is a cost-control tradeoff that needs product/operator acceptance and an alert; it must not be described as a hard ceiling during DB failure.
+- cloud/alerts.py, analytics.py and digest.py use best-effort/background reporting. Their process-local alert cooldowns and pending buffers are not durable; this affects notification completeness, not job/billing correctness.
+- cloud/lifecycle.py claims a lifecycle email row before sending. Delivery failures are not retried because the unique claim is permanent; this is already captured by F-81.
+- cloud/database.py confirms schema initialization is create_all plus hand-written additive DDL and logs additive migration errors without failing startup; see F-113.
+- cloud/videos.py full source reviewed for R2 archive/edit, project/history, retention sweeps and expiry warnings. Previously recorded F-39, F-64, F-65, F-66, F-95 and F-96 remain the principal archive/retention/erasure concerns; no new independent defect was added from this pass.
+- cloud/models.py full model definitions reviewed. Constraints and uniqueness support the findings above; no schema-level active API-key quota constraint exists.
