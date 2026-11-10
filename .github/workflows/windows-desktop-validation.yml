@@ -60,3 +60,18 @@ jobs:
 
       - name: Check Tauri Rust application
         run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Build complete NSIS installer
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cargo-tauri -ErrorAction SilentlyContinue)) {
+            cargo install tauri-cli --version "^2" --locked
+            if ($LASTEXITCODE -ne 0) { throw "Tauri CLI installation failed." }
+          }
+          Push-Location ./desktop/src-tauri
+          try {
+            cargo tauri build --bundles nsis
+            if ($LASTEXITCODE -ne 0) { throw "NSIS installer build failed." }
+          } finally {
+            Pop-Location
+          }
