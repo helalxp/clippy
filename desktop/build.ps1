@@ -41,6 +41,10 @@ if (-not (Test-Path (Join-Path $dashboardDist "index.html"))) {
     throw "Dashboard build did not produce dashboard\dist\index.html."
 }
 
+Write-Host "Staging the backend and renderer payload..."
+& (Join-Path $PSScriptRoot "prepare-payload.ps1")
+if ($LASTEXITCODE -ne 0) { throw "Application payload preparation failed (exit $LASTEXITCODE)." }
+
 Write-Host "Building Windows NSIS installer..."
 Push-Location $tauriDir
 try {
