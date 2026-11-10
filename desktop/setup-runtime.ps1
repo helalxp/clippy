@@ -42,12 +42,6 @@ function Assert-Sha256([string]$Path, [string]$Expected) {
 }
 
 New-Item -ItemType Directory -Path $Runtime, $Downloads -Force | Out-Null
-$DriveLetter = [IO.Path]::GetPathRoot($Root).Substring(0, 1)
-$FreeBytes = (Get-PSDrive -Name $DriveLetter).Free
-$MinimumFreeBytes = 8GB
-if ($FreeBytes -lt $MinimumFreeBytes) {
-    throw "Clippy setup needs at least 8 GB free on drive $DriveLetter. Available: $([math]::Round($FreeBytes / 1GB, 1)) GB."
-}
 foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
@@ -95,6 +89,13 @@ if (Test-Path $ManifestPath) {
     } catch {
         Write-Stage "Previous runtime manifest is invalid; repairing managed runtimes."
     }
+}
+
+$DriveLetter = [IO.Path]::GetPathRoot($Root).Substring(0, 1)
+$FreeBytes = (Get-PSDrive -Name $DriveLetter).Free
+$MinimumFreeBytes = 8GB
+if ($FreeBytes -lt $MinimumFreeBytes) {
+    throw "Clippy setup needs at least 8 GB free on drive $DriveLetter. Available: $([math]::Round($FreeBytes / 1GB, 1)) GB."
 }
 
 # Python and native wheels require the Microsoft Visual C++ runtime.
