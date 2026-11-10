@@ -9,7 +9,9 @@ On a Windows build machine, install the Rust stable toolchain, Node.js LTS,
 Tauri 2 Windows prerequisites (including WebView2), and NSIS prerequisites.
 Then run this from the repository root:
 
-    git pull origin windows-installer-release
+    git fetch origin
+    git switch windows-installer-release
+    git pull --ff-only origin windows-installer-release
     powershell -ExecutionPolicy Bypass -File .\desktop\build.ps1
 
 The script resolves paths relative to itself, installs locked dashboard
