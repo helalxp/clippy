@@ -2267,3 +2267,25 @@ Fix direction: decode and infer in bounded frame batches with the model's tempor
 - mcp_ui.py uses DOM textContent for clip titles and escapes '<' in baked JSON before inserting it into a script block, preventing title-based script-tag termination in the inline resource. The message listener does not validate origin/source; host-specific trust assumptions still need a real MCP Apps integration test.
 - llm_backend.py permits an operator-configured LLM_BASE_URL and sends prompts to it. This is configuration-controlled, not caller-controlled in the inspected route path; document that self-hosters must only point it at trusted endpoints.
 - translate.py uses fixed ElevenLabs API hosts, bounded HTTP timeouts and streaming output writes; no caller-controlled remote URL was found in the dubbing flow.
+
+### F-118: Documented cloud Compose stack starts the Vite development server as its frontend — high deployment/security mismatch
+
+Evidence:
+- docker-compose.cloud.yml documents the cloud-mode command as `docker compose -f docker-compose.yml -f docker-compose.cloud.yml up --build` and describes the file as the cloud mode for openshorts.app.
+- It does not override the frontend service.
+- The inherited docker-compose.yml frontend service explicitly builds dashboard/Dockerfile with `target: dev`, publishes host port 5175:5173 and starts `npm run dev -- --host`.
+- dashboard/Dockerfile's separate `prod` stage is the Nginx static server, but the documented cloud command never selects it.
+- The Vite dev server's proxy configuration points `/api`, `/videos`, `/thumbnails`, `/gallery`, `/video` and `/render` to internal backend/renderer services. That is a development routing arrangement, not a hardened production reverse-proxy configuration.
+- The production Dockerfile stage expects VITE_API_URL to be supplied at build time when the API is on a separate public host; the cloud Compose override does not provide that build arg.
+
+Impact: a deployment following the cloud Compose instructions exposes a Vite development server on a host-published port instead of the production Nginx build. The service has development-mode behavior and a different frontend/API routing contract than the production static site. Operators may believe they have deployed the production frontend when they have not.
+
+Fix direction: give cloud mode its own explicit frontend override selecting the `prod` stage, set VITE_API_URL to the public API origin (or configure a deliberate Nginx reverse proxy for the API), remove the public Vite dev port, and expose only the intended public frontend/reverse-proxy ports. Add a compose-config assertion that cloud mode resolves to the prod target and an HTTP smoke test for frontend assets plus API routing.
+
+### Build and deployment configuration coverage — 2026-11-10
+- Read .github/workflows/ci.yml, publish-cli.yml, root Dockerfile, docker-compose.yml, docker-compose.cloud.yml, docker-compose.override.yml, docker-compose.e2e.local.yml, dashboard/Dockerfile, dashboard/nginx.conf, dashboard/package.json, render-service/Dockerfile, render-service/package.json, remotion/package.json, remotion/tsconfig.json, alembic.ini, glama.json and server.json.
+- F-118 is a newly confirmed mismatch between the cloud Compose command and the frontend image stage it actually launches.
+- F-70 and F-71 already cover the Node 18 EOL and weak dependency pinning concerns. The renderer and Remotion npm scripts include test/build commands, but current CI does not invoke renderer tests or Remotion typecheck.
+- The base compose stack bind-mounts the repository root over /app and publishes backend and renderer host ports. This is a development-oriented setup; production must deliberately isolate renderer and restrict backend access rather than inheriting these host mappings unexamined (see F-03/F-105).
+- Dockerfile excludes .env from image layers. The development/cloud Compose bind mount makes a host .env visible under /app, where app.py's load_dotenv reads it; the cloud Compose comment about mounted SMTP variables depends on this bind mount and would become false if the volume is removed without adding env_file or explicit environment forwarding.
+- server.json and glama.json still identify the upstream OpenShorts repository/service, consistent with the branding/ownership decision already noted in F-112; no blind identity rewrite is recommended.
