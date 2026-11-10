@@ -45,13 +45,9 @@ jobs:
         shell: pwsh
         run: ./dashboard/build-desktop.ps1
 
-      - name: Install renderer dependencies
-        working-directory: render-service
-        run: npm ci
-
-      - name: Compile renderer
-        working-directory: render-service
-        run: npm run build
+      - name: Prepare packaged backend and renderer payload
+        shell: pwsh
+        run: ./desktop/prepare-payload.ps1
 
       - name: Check backend Python syntax
         run: python -m compileall -q .
