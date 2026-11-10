@@ -50,6 +50,16 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     let current = app_root.join("current");
     let staging = app_root.join("current.installing");
     let backup = app_root.join("current.previous");
+    let app_version = env!("CARGO_PKG_VERSION");
+
+    if current.join(".clippy-app-version").is_file()
+        && fs::read_to_string(current.join(".clippy-app-version")).ok().as_deref() == Some(app_version)
+        && current.join("app.py").is_file()
+        && current.join("render-service").join("dist").join("server.js").is_file()
+        && current.join("remotion").join("src").join("index.ts").is_file()
+    {
+        return Ok(current.display().to_string());
+    }
 
     let resource_dir = app.path().resource_dir().map_err(|e| format!("Cannot locate installer resources: {e}"))?;
     let archive_path = resource_dir.join("app-payload.zip");
@@ -91,6 +101,8 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
     }
+    fs::write(current.join(".clippy-app-version"), app_version)
+        .map_err(|e| format!("Cannot write application version marker: {e}"))?;
 
     Ok(current.display().to_string())
 }
