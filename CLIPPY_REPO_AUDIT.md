@@ -2340,3 +2340,22 @@ Fix direction: verify `X-OpenShorts-Signature` against the exact raw HTTP reques
 - The n8n README signature example uses a parsed-object reserialization rather than raw bytes; it should be replaced alongside the workflow fix.
 - The CLI help text mismatch F-111 remains; no CLI-specific request/argument tests are present. The CLI is standard-library-only and uses bounded urllib request timeouts, but polling has no overall deadline by design.
 - Font license files are present for Montserrat, and the Docker font map aliases common families to installed Liberation/Anton fonts. Binary font and media asset licensing still requires a complete per-asset provenance check.
+### F-122: Generating actor choices uploads them to the public S3 actor gallery before the user opts into sharing — high privacy/consent defect
+
+Evidence:
+- dashboard/src/components/SaaShortsTab.jsx defaults `shareToGallery` to false and labels its separate checkbox as the explicit choice to share the finished video publicly. The UI tells the user the video, product name and script will be visible at `/gallery` only when this checkbox is enabled.
+- The same UI lets the user enter an actor description and click “Generate 3 new actors” before the sharing checkbox is enabled. It does not disclose that the generated options are uploaded to a public gallery.
+- app.py `/api/saasshorts/actor-options` calls `upload_actor_to_s3` for every generated image immediately, before an actor is selected and regardless of `share_to_gallery`.
+- s3_uploader.py::upload_actor_to_s3 uploads the image to `AWS_S3_PUBLIC_BUCKET` under `avatars/`, constructs a direct public S3 URL, and also writes a sibling JSON object containing the full actor description and public URL.
+- app.py `/api/saasshorts/actor-gallery` and s3_uploader.py::list_actor_gallery enumerate the `avatars/` prefix and return these images/descriptions to any visitor; the frontend fetches this public gallery on mount and displays “Previously generated actors”.
+- docs/compliance/subprocessors.md describes AWS S3 as receiving the public UGC gallery and actor images “solo si el usuario opta por publicar” (only if the user opts to publish). That is false for actor-option images.
+
+Impact: simply generating preview actor options discloses the generated face images and the user's actor-description text to a public S3 bucket and makes them discoverable to other visitors. This occurs even if the user never selects an actor, never generates a video and leaves “Share this video in the public gallery” unchecked. There is no per-user delete control for these public actor objects in the inspected code.
+
+Fix direction: keep generated actor options in private per-user storage (local working storage or private R2) while the user chooses. Only upload the selected actor to the public gallery after a separate, clearly worded opt-in that explicitly covers the actor image and description, not just the finished video. Store ownership and provide delete/retention cleanup for opted-in assets. Add tests proving `share_to_gallery=false` never calls upload_actor_to_s3 and that public listing only returns explicitly shared objects. Update the subprocessor register to describe the real data flow after the code is corrected.
+
+### SaaS actor-gallery privacy review — 2026-11-10
+- Confirmed `shareToGallery` defaults false and controls only the completed video upload in `/api/saasshorts/generate`.
+- Confirmed actor preview generation is a separate `/api/saasshorts/actor-options` request and uploads every generated candidate to the public S3 `avatars/` prefix immediately.
+- Confirmed the metadata sidecar stores the raw actor description, and `/api/saasshorts/actor-gallery` exposes all such objects across users.
+- The custom actor upload route is explicitly local-only; this finding concerns generated actor preview options, not the custom upload path.
