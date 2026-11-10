@@ -38,12 +38,18 @@ downloads, GPU variants, and repair before distribution.
       runtime\
         python\python.exe
         node\node.exe
+      settings.json
       data\output\
+      data\uploads\
+      data\models\whisper\
+      data\models\huggingface\
       logs\
 
-User output, projects, settings, caches, and downloaded model weights must
-remain outside the application install directory. AI model weights are not
-core runtime dependencies and must not be bundled into the installer.
+User output, uploads, settings, caches, and downloaded model weights remain
+outside the application install directory. Whisper models are downloaded only
+when selected in the app and stored under data\models\whisper; Hugging Face
+cache files use data\models\huggingface. Model weights are not core runtime
+dependencies and must not be bundled into the installer.
 
 ## Developer prerequisites
 
