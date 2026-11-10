@@ -29,10 +29,9 @@ fn check_runtime() -> Result<bootstrap::BootstrapStatus, String> {
         .ok_or_else(|| "LOCALAPPDATA not found".to_string())?;
     let runtime_root = local.join("Clippy").join("runtime");
 
-    let config = bootstrap::BootstrapConfig {
-        runtime_root,
-        manifest_path: std::path::PathBuf::from("D:\\openshorts\\runtime-manifest.json"),
-    };
+    // The manifest belongs to the per-user installation, never the developer checkout.
+    let manifest_path = local.join("Clippy").join("runtime-manifest.json");
+    let config = bootstrap::BootstrapConfig { runtime_root, manifest_path };
 
     let bootstrap = Bootstrap::new(config);
     bootstrap.get_status()
