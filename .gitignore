@@ -51,3 +51,8 @@ skills-lock.json
 CLAUDE.local.md
 target/
 gen/
+
+# Generated native Windows installer payload
+desktop/src-tauri/resources/app-payload.zip
+desktop/src-tauri/resources/app-payload.sha256
+desktop/src-tauri/resources/app-payload-stage/
