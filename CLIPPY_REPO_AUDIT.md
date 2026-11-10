@@ -2503,11 +2503,12 @@ Evidence:
 - The session records retain user ID, transcript segments, title/conversation state, duration and source-video paths in memory.
 - `cleanup_jobs` runs every five minutes and sweeps job directories, source uploads, SaaSShorts jobs and pending agent-upload slots, but it never iterates `thumbnail_sessions` or removes expired thumbnail sessions.
 - The only observed removal path is `_purge_local_jobs_for_user` during account deletion. Self-host sessions and sessions for users who remain registered have no expiry path. Their source files may be deleted by the upload age sweep while the in-memory session remains indefinitely.
+- The same lifecycle gap exists for `publish_jobs`: `/api/thumbnail/publish` inserts one record per publish and `/api/thumbnail/publish/status` reads it, but no cleanup loop or TTL ever removes completed/failed records. The account-erasure callback does not purge this map either.
 - The manual-title mode can create a session with no source video and no created timestamp, so it is not naturally covered by file-based cleanup.
 
 Impact: repeated Thumbnail Studio use causes the backend's in-memory session map to grow for the lifetime of the process. Large transcript arrays and conversation histories remain resident after the source file expires, and stale sessions continue to appear valid even though their source is gone. On long-lived self-host/cloud workers this creates unbounded memory growth and stale UI state.
 
-Fix direction: add an explicit `created_at`/`last_accessed_at` to every session, enforce a per-user active-session cap, and sweep expired sessions alongside their associated thumbnail files/source uploads. Ensure active generation/publish tasks can extend a session lease safely. Add tests for expiry of uploaded-video and manual-title sessions, and verify the associated files are deleted without touching active sessions.
+Fix direction: add an explicit `created_at`/`last_accessed_at` to every session and publish record, enforce a per-user active-session cap, and sweep expired sessions plus completed/failed publish records alongside their associated thumbnail files/source uploads. Ensure active generation/publish tasks can extend a session lease safely. Add tests for expiry of uploaded-video and manual-title sessions, and verify the associated files are deleted without touching active sessions.
 
 ### Thumbnail-session lifecycle review — 2026-11-10
 - Confirmed `cleanup_jobs` has no thumbnail-session expiry loop; the only direct dictionary removal is in the account-erasure callback.
