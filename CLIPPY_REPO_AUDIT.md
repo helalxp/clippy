@@ -2513,3 +2513,21 @@ Fix direction: add an explicit `created_at`/`last_accessed_at` to every session 
 ### Thumbnail-session lifecycle review — 2026-11-10
 - Confirmed `cleanup_jobs` has no thumbnail-session expiry loop; the only direct dictionary removal is in the account-erasure callback.
 - Confirmed source upload age cleanup is independent of the in-memory session map, so a session can outlive its source video.
+### F-133: Account deletion does not cancel in-flight or semaphore-waiting SaaSShorts generation tasks — high erasure race
+
+Evidence:
+- `/api/saasshorts/generate` launches `asyncio.create_task(run_generation())` and does not retain a task handle or register it with account lifecycle management.
+- `run_generation` waits on the global `concurrency_semaphore` and then calls `generate_full_video` without checking whether the job still exists in `saas_jobs` or whether the owning account is still active.
+- `cloud/account.py::delete_account` blocks only while a `UsageLedger` reservation is in `reserved` state. SaaSShorts generation uses caller-provided Fal.ai/ElevenLabs keys and creates no UsageLedger reservation, so account deletion does not wait for it.
+- The registered `_purge_local_jobs_for_user` callback removes the user's `saas_jobs` entry and output directory, but it has no reference to the running task and cannot cancel it.
+- `saasshorts.py::generate_full_video` calls `os.makedirs(output_dir, exist_ok=True)` at the beginning of execution. A task waiting on the semaphore can therefore start after account deletion and recreate the just-purged directory, then continue making external API calls and writing user content.
+- The task checks `if job_id in saas_jobs` only after generation completes. That prevents the deleted job from being marked complete or uploaded to the public gallery, but it does not prevent the generation or local files from being recreated.
+
+Impact: a user can delete their account while a SaaSShorts generation is queued or running. The deletion endpoint reports success, but the background task may continue consuming resources and recreate local files containing the user's script, actor image and generated video after the erasure purge. The new files are no longer associated with a `saas_jobs` record, so normal account-erasure cleanup cannot find them by user ID.
+
+Fix direction: store task handles/cancellation tokens by user and job, cancel and await every SaaSShorts task before deleting data, and re-check account/job existence immediately after acquiring the semaphore and before every external side effect. Add a durable owner marker to SaaSShorts output directories so post-restart erasure can find them. Add a test that queues a job behind a held semaphore, deletes the account, releases the semaphore, and proves no generation starts and no directory is recreated.
+
+### SaaSShorts erasure-race review — 2026-11-10
+- Confirmed account deletion checks only reserved UsageLedger rows; SaaSShorts generation does not create one.
+- Confirmed local purge removes the in-memory `saas_jobs` record but does not cancel the task.
+- Confirmed a semaphore-waiting task invokes `generate_full_video`, which recreates its output directory after deletion.
