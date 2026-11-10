@@ -2375,3 +2375,20 @@ Fix direction: pass open file objects to httpx's multipart encoder (or use an ex
 - Confirmed ownership is checked against the thumbnail session before the upload task is queued, and publish status is scoped to the same user.
 - Confirmed the thumbnail URL is resolved under OUTPUT_DIR or THUMBNAILS_DIR with `_safe_under`, blocking traversal to server files.
 - The large-file memory issue is independent of those path/ownership controls and is recorded as F-123.
+### F-124: Several image upload routes validate size only after reading the entire file, or have no server-side size cap — medium/high memory-exhaustion risk
+
+Evidence:
+- app.py `/api/clip/watermark` calls `raw = await logo.read()` and only afterwards checks `len(raw) > 10 * 1024 * 1024`. The check therefore does not bound peak memory.
+- app.py `/api/thumbnail/generate` reads optional `face` and `background` uploads using `await face.read()` / `await background.read()` with no byte cap, content-type validation or dimension cap.
+- The custom watermark path in `/api/process` demonstrates the correct contrasting pattern: it reads 256 KiB chunks, counts bytes and aborts/deletes the partial file as soon as 10 MB is exceeded.
+- These endpoints are multipart routes and the backend does not define a global request-body limit in the inspected FastAPI/Compose configuration.
+
+Impact: a managed user can submit an oversized logo, face photo or background image and force the API process to allocate the full body in memory before rejection (or without rejection for thumbnail face/background). Large requests can OOM the backend and affect every user sharing the process.
+
+Fix direction: use a shared bounded-upload helper that streams to a temporary file, enforces byte and decoded-pixel limits while reading, validates MIME from file contents rather than the filename alone, and deletes partial files on every failure. For watermark, read at most 10 MB + 1 byte. For face/background, define explicit limits and verify dimensions/pixel count before image decoding. Add tests proving oversized inputs stop after the first over-limit chunk without reading the rest.
+
+### Upload-boundary review — 2026-11-10
+- `/api/process` custom watermark already implements a chunked 10 MB cap and removes the partial file on failure.
+- `/api/thumbnail/upload` uses chunked reads and removes an oversized partial video.
+- `/api/clip/watermark` has a nominal 10 MB cap but applies it after an unbounded read.
+- `/api/thumbnail/generate` has no size limit on the optional face/background uploads.
