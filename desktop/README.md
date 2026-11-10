@@ -14,15 +14,16 @@ Then run this from the repository root:
     git pull --ff-only origin windows-installer-release
     powershell -ExecutionPolicy Bypass -File .\desktop\build.ps1
 
-The script resolves paths relative to itself, installs locked dashboard
-dependencies, and asks Tauri to create an NSIS installer. Output is expected
-under desktop\src-tauri\target\release\bundle\nsis.
+The script resolves paths relative to itself, builds the dashboard, compiles
+the renderer, stages the backend and Remotion source with their production
+Node dependencies, and asks Tauri to create an NSIS installer. On first launch,
+the app extracts that payload to the per-user Clippy directory. Output is
+expected under desktop\src-tauri\target\release\bundle\nsis.
 
-IMPORTANT: the current build produces the desktop shell and frontend bundle
-only. It is NOT yet a complete end-user installer. The managed Python/Node/
-FFmpeg runtime, Python packages, compiled renderer payload, Remotion browser
-runtime, and first-run download/repair flow still need to be integrated and
-tested before distributing it as a working Clippy application.
+IMPORTANT: this is an intermediate installer, not yet a complete end-user
+release. Managed Python and Node runtimes, FFmpeg, Python packages, Remotion's
+browser runtime, and the resumable first-run runtime download/repair flow are
+still being integrated and must pass clean-machine testing before distribution.
 
 ## Expected managed service layout
 
