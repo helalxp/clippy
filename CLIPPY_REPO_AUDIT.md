@@ -2475,19 +2475,23 @@ Fix direction: meter each actual Gemini call with `reserve_managed_action` (manu
 - Parsed all app.py route blocks that call `resolve_gemini` and compared them with reservation calls.
 - `/api/process`, `/api/edit`, `/api/effects/generate`, `/api/thumbnail/analyze`, `/api/thumbnail/generate` and `/api/saasshorts/analyze` reserve managed minutes.
 - `/api/thumbnail/titles` refinement and `/api/thumbnail/describe` do not reserve; F-129 records both omissions.
-### F-130: SaaSShorts full-video generation launches unbounded background tasks with no per-user or global concurrency admission — high availability risk
+### F-130: SaaSShorts generation has a global semaphore but no bounded pending queue or per-user admission — medium/high availability risk
 
 Evidence:
-- app.py `/api/saasshorts/generate` checks only `require_managed_entitlement` and presence of the caller's Fal.ai and ElevenLabs API keys.
-- Each request creates a new `saas_jobs` entry and launches `asyncio.create_task(run_generation())`; the task then runs `generate_full_video` in the default executor.
-- No per-user active-job count, global semaphore, bounded queue, request cooldown or server-side daily generation cap is checked before creating the task.
-- The ordinary clip pipeline's per-plan simultaneous-job limit is enforced inside `reserve_process_minutes`; SaaSShorts generation does not call that function and is outside that concurrency policy.
-- The endpoint can also retry by reusing an existing job directory, but the retry path does not limit how many concurrent retries/requests may target the same output directory.
+- app.py defines `concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)` with a default of five, and `/api/saasshorts/generate` acquires it before running `generate_full_video` in the executor. So active generation is globally bounded; it would be inaccurate to say there is no global concurrency limit.
+- Each request nevertheless creates its job directory and `saas_jobs` entry, then launches a new `asyncio.create_task(run_generation())`. Every excess task waits on the semaphore in memory; there is no bounded queue length, per-user pending-job limit, queue rejection policy or durable queue.
+- The per-plan simultaneous-job count in `reserve_process_minutes` does not cover SaaSShorts jobs. The SaaSShorts route has no equivalent per-user active-plus-pending count.
+- A request can create its job directory and selected-actor asset before it waits for the semaphore. A large backlog therefore accumulates memory and disk state even though only five generations run at once.
+- Retrying an existing `retry_job_id` reuses the same output directory, but no per-job lock prevents concurrent retries from racing on cached assets/output files.
 
-Impact: an entitled user can rapidly launch many full video generations. Although Fal.ai/ElevenLabs API usage is charged to the caller's supplied keys, each task consumes shared backend threads, CPU/FFmpeg, disk, outbound bandwidth and S3 work. Concurrent retries can also write to the same cached asset/output directory. A single account can therefore degrade the service for other users.
+Impact: one entitled user can queue an arbitrary number of background tasks, consume memory and disk, and occupy the entire pending queue ahead of other users. Concurrent retries can corrupt shared job assets. The semaphore limits active generation but does not provide fair admission or bounded backlog.
 
-Fix direction: add a global bounded SaaSShorts worker queue and a per-user active generation limit, with atomic job claims and a safe retry lock per job ID. Reject or queue excess requests before starting any external call or filesystem work. Add tests for parallel requests by one user, aggregate concurrency across users, and simultaneous retries of the same job.
+Fix direction: add an atomic per-user cap that counts active and queued SaaSShorts jobs, plus a bounded global queue with explicit 429/queue-full behavior. Use a per-job lock for retries. Persist queue state or clearly mark queued work as volatile. Add tests for one-user queue flooding, fair scheduling across users, and concurrent retries.
 
+### SaaSShorts generation admission review — 2026-11-10
+- Read the complete `/api/saasshorts/generate` route and request model, including retry behavior, actor-image handling, external API configuration, background task creation, optional public gallery upload and status ownership checks.
+- The finished-video public gallery upload is gated by `share_to_gallery`; the separate actor preview upload is not, as recorded in F-122.
+- `MAX_CONCURRENT_JOBS` does provide a global semaphore of five active SaaSShorts generations by default. The missing controls are a bounded pending queue, per-user admission and same-job retry serialization.
 ### SaaSShorts generation admission review — 2026-11-10
 - Read the complete `/api/saasshorts/generate` route and request model, including retry behavior, actor-image handling, external API configuration, background task creation, optional public gallery upload and status ownership checks.
 - The finished-video public gallery upload is gated by `share_to_gallery`; the separate actor preview upload is not, as recorded in F-122.
