@@ -2475,3 +2475,20 @@ Fix direction: meter each actual Gemini call with `reserve_managed_action` (manu
 - Parsed all app.py route blocks that call `resolve_gemini` and compared them with reservation calls.
 - `/api/process`, `/api/edit`, `/api/effects/generate`, `/api/thumbnail/analyze`, `/api/thumbnail/generate` and `/api/saasshorts/analyze` reserve managed minutes.
 - `/api/thumbnail/titles` refinement and `/api/thumbnail/describe` do not reserve; F-129 records both omissions.
+### F-130: SaaSShorts full-video generation launches unbounded background tasks with no per-user or global concurrency admission — high availability risk
+
+Evidence:
+- app.py `/api/saasshorts/generate` checks only `require_managed_entitlement` and presence of the caller's Fal.ai and ElevenLabs API keys.
+- Each request creates a new `saas_jobs` entry and launches `asyncio.create_task(run_generation())`; the task then runs `generate_full_video` in the default executor.
+- No per-user active-job count, global semaphore, bounded queue, request cooldown or server-side daily generation cap is checked before creating the task.
+- The ordinary clip pipeline's per-plan simultaneous-job limit is enforced inside `reserve_process_minutes`; SaaSShorts generation does not call that function and is outside that concurrency policy.
+- The endpoint can also retry by reusing an existing job directory, but the retry path does not limit how many concurrent retries/requests may target the same output directory.
+
+Impact: an entitled user can rapidly launch many full video generations. Although Fal.ai/ElevenLabs API usage is charged to the caller's supplied keys, each task consumes shared backend threads, CPU/FFmpeg, disk, outbound bandwidth and S3 work. Concurrent retries can also write to the same cached asset/output directory. A single account can therefore degrade the service for other users.
+
+Fix direction: add a global bounded SaaSShorts worker queue and a per-user active generation limit, with atomic job claims and a safe retry lock per job ID. Reject or queue excess requests before starting any external call or filesystem work. Add tests for parallel requests by one user, aggregate concurrency across users, and simultaneous retries of the same job.
+
+### SaaSShorts generation admission review — 2026-11-10
+- Read the complete `/api/saasshorts/generate` route and request model, including retry behavior, actor-image handling, external API configuration, background task creation, optional public gallery upload and status ownership checks.
+- The finished-video public gallery upload is gated by `share_to_gallery`; the separate actor preview upload is not, as recorded in F-122.
+- `require_managed_entitlement` authenticates/entitles the caller but does not provide concurrency admission. F-130 records the missing queue/limits.
