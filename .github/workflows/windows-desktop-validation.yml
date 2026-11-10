@@ -1,0 +1,60 @@
+name: Windows desktop validation
+
+on:
+  push:
+    branches:
+      - windows-installer-release
+  pull_request:
+    branches:
+      - windows-installer-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            dashboard/package-lock.json
+            render-service/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Build desktop dashboard
+        shell: pwsh
+        run: ./dashboard/build-desktop.ps1
+
+      - name: Install renderer dependencies
+        working-directory: render-service
+        run: npm ci
+
+      - name: Compile renderer
+        working-directory: render-service
+        run: npm run build
+
+      - name: Check backend Python syntax
+        run: python -m compileall -q .
+
+      - name: Check Tauri Rust application
+        run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
