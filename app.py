@@ -19,6 +19,7 @@ import asyncio
 import signal
 import socket
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from dotenv import load_dotenv
 from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
@@ -49,6 +50,16 @@ _FIRST_RUN = True
 _USER_MODEL_SIZE = None
 _USER_GPU_MODE = None
 
+
+def _settings_file_path() -> Path:
+    explicit = os.environ.get("CLIPPY_SETTINGS_PATH")
+    if explicit:
+        return Path(explicit).expanduser()
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "Clippy" / "settings.json"
+    return Path("Clippy") / "settings.json"
+
 def is_first_run() -> bool:
     global _FIRST_RUN
     return _FIRST_RUN
@@ -60,8 +71,7 @@ def mark_first_run_complete(model_size: str, gpu_mode: bool):
     _USER_GPU_MODE = gpu_mode
     # Save settings
     import json
-    from pathlib import Path
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if not settings_path.parent.exists():
         settings_path.parent.mkdir(parents=True, exist_ok=True)
     if settings_path.exists():
@@ -77,7 +87,7 @@ def get_user_model_size() -> str:
     if _USER_MODEL_SIZE:
         return _USER_MODEL_SIZE
     # Check saved settings
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if settings_path.exists():
         try:
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
