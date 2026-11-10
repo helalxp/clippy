@@ -63,7 +63,7 @@ if (Test-Path $archive) { Remove-Item $archive -Force }
 $Tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
 if (-not $Tar) { throw "Windows tar.exe is required to package the application payload." }
 $PayloadItems = @(Get-ChildItem -LiteralPath $stageRoot -Force | ForEach-Object { $_.Name })
-& $Tar.Source -a -c -f $archive -C $stageRoot @PayloadItems
+& $Tar.Path -a -c -f $archive -C $stageRoot @PayloadItems
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $archive)) {
     throw "Could not create the application payload archive (exit $LASTEXITCODE)."
 }
