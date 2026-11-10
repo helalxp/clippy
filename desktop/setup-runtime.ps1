@@ -19,6 +19,7 @@ $NodeChecksumsUrl = "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt"
 $FfmpegArchiveName = "ffmpeg-release-essentials.zip"
 $FfmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$FfmpegArchiveName"
 $FfmpegChecksumUrl = "$FfmpegArchiveUrl.sha256"
+$VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
 function Write-Stage([string]$Message) {
     Write-Output "[Clippy setup] $Message"
@@ -62,6 +63,19 @@ if (Test-Path $ManifestPath) {
     } catch {
         Write-Stage "Previous runtime manifest is invalid; repairing managed runtimes."
     }
+}
+
+# Python and several native wheels require the Microsoft Visual C++ runtime.
+# Install the signed Microsoft redistributable privately as a machine prerequisite.
+$VcRedist = Join-Path $Downloads "vc_redist.x64.exe"
+Download-File $VcRedistUrl $VcRedist
+$VcSignature = Get-AuthenticodeSignature -FilePath $VcRedist
+if ($VcSignature.Status -ne "Valid" -or $VcSignature.SignerCertificate.Subject -notmatch "Microsoft") {
+    throw "Microsoft Visual C++ redistributable signature is not valid."
+}
+$VcProcess = Start-Process -FilePath $VcRedist -ArgumentList "/install /quiet /norestart" -Wait -PassThru
+if ($VcProcess.ExitCode -notin @(0, 3010)) {
+    throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
 }
 
 # Python is installed privately into Clippy's runtime folder. Its Authenticode
