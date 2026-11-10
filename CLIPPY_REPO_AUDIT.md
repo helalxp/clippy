@@ -2557,3 +2557,18 @@ Fix direction: store custom actor uploads in a private per-user directory or obj
 - Confirmed additional unreleased object URLs beyond the original F-115 examples: `SaaShortsTab.jsx` creates a local actor-preview URL and does not revoke it when replaced/unmounted; `ThumbnailStudio.jsx`'s DragDropZone creates an object URL inline during render for image previews; `ResultCard.jsx` creates an object URL inline during render for the post-generation watermark preview.
 - Positive controls: MediaInput.jsx revokes its duration-probe URL; ProcessingAnimation.jsx revokes the local video URL in effect cleanup; GalleryCard.jsx, ResultCard.jsx and ThumbnailStudio.jsx revoke their download blob URLs after triggering the download. App.jsx also revokes the download-all ZIP URL.
 - The scan found external links with `target=_blank`; the inspected dynamic URLs in SaaShortsTab, AutopilotTab, InvoicesCard and SocialAnalyticsCard include `rel=noopener` or `rel=noopener noreferrer`. The few static links without explicit rel are to fixed upstream/project URLs; no user-controlled `target=_blank` injection was found in this pass.
+### F-136: Public S3 gallery endpoints have unbounded listing and response sizes — medium availability/scaling risk
+
+Evidence:
+- `/api/saasshorts/gallery` is unauthenticated and accepts a caller-controlled `limit: int = 50` with no minimum/maximum validation.
+- `s3_uploader.list_video_gallery` paginates and accumulates every `videos/*/metadata.json` object into `meta_files`, sorts the entire list, and only then applies `limit` while downloading metadata bodies. The default limit therefore does not bound the S3 listing or in-memory key list; a very large caller-supplied limit can also make it download and return the entire gallery.
+- `/api/saasshorts/actor-gallery` is also unauthenticated and calls `list_actor_gallery()` with no limit. That helper paginates the complete `avatars/` prefix, builds an in-memory map of every image/metadata pair, and downloads every metadata JSON body before returning all entries.
+- Actor metadata includes user-controlled actor-description text and has no byte-size cap; the gallery listing has no cache in `list_actor_gallery`.
+
+Impact: as the public gallery grows, a normal page load can trigger an O(total objects) S3 scan and metadata reads. An unauthenticated caller can repeatedly force full listings or request an enormous video-gallery limit, consuming S3 requests, backend memory/CPU and response bandwidth. A large actor-description payload magnifies the cost.
+
+Fix direction: use bounded cursor pagination (server-enforced max page size, e.g. 50), store a compact indexed gallery manifest or database index, and avoid reading every metadata object per request. Cap metadata JSON bytes and description lengths, add a short cache, and rate-limit anonymous gallery endpoints. Add tests proving the `limit` parameter is clamped and each request touches no more than one page of objects.
+
+### Public-gallery scalability review — 2026-11-10
+- Confirmed `/api/saasshorts/gallery` and `/api/saasshorts/actor-gallery` are public routes with no authentication requirement.
+- Confirmed the video gallery's limit applies after full key enumeration and the actor gallery has no limit at all.
