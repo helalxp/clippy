@@ -66,5 +66,6 @@ Remove-Item $stageRoot -Recurse -Force
 $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 $size = (Get-Item $archive).Length
 Write-Host "Application payload ready: $archive"
+Set-Content -Path (Join-Path $resourceRoot "app-payload.sha256") -Value $hash -NoNewline
 Write-Host "SHA256: $hash"
 Write-Host "Size: $size bytes"
