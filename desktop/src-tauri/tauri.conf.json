@@ -34,7 +34,8 @@
     "shortDescription": "Local AI video clipping and editing",
     "longDescription": "Clippy is a local-first AI video clipping and editing application.",
     "resources": {
-      "resources/app-payload.zip": "app-payload.zip"
+      "resources/app-payload.zip": "app-payload.zip",
+      "resources/app-payload.sha256": "app-payload.sha256"
     }
   }
 }
