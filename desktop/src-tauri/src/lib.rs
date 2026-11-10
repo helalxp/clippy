@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use supervisor::{ServiceStatus, Supervisor};
 use bootstrap::Bootstrap;
 use tauri::State;
+use std::process::Command;
 
 #[tauri::command]
 fn start_services(state: State<'_, Mutex<Supervisor>>) -> Result<ServiceStatus, String> {
@@ -77,7 +78,7 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     let mut zip = zip::ZipArchive::new(archive).map_err(|e| format!("Application payload is invalid: {e}"))?;
     zip.extract(&staging).map_err(|e| format!("Cannot extract application payload: {e}"))?;
 
-    for relative in ["app.py", "render-service/dist/server.js", "remotion/src/index.ts"] {
+    for relative in ["app.py", "render-service/dist/server.js", "remotion/src/index.ts", "setup-runtime.ps1"] {
         if !staging.join(relative).is_file() {
             let _ = fs::remove_dir_all(&staging);
             return Err(format!("Application payload is incomplete; missing {relative}"));
@@ -107,6 +108,36 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     Ok(current.display().to_string())
 }
 
+
+#[tauri::command]
+fn setup_runtime() -> Result<String, String> {
+    let local = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "LOCALAPPDATA not found".to_string())?;
+    let script = local.join("Clippy").join("app").join("current").join("setup-runtime.ps1");
+    if !script.is_file() {
+        return Err(format!("Runtime setup script is missing: {}", script.display()));
+    }
+
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .output()
+        .map_err(|e| format!("Could not launch the runtime installer: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "Runtime setup failed ({}).\n{}\n{}",
+            output.status,
+            stdout,
+            stderr
+        ));
+    }
+    Ok(stdout.into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -116,7 +147,8 @@ pub fn run() {
             stop_services,
             service_status,
             check_runtime,
-            install_app_payload
+            install_app_payload,
+            setup_runtime
         ])
         .run(tauri::generate_context!())
         .expect("error while running Clippy desktop application");
