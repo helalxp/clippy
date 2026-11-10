@@ -26,7 +26,9 @@ struct RuntimePaths {
     root: PathBuf,
     python: PathBuf,
     node: PathBuf,
+    ffmpeg: PathBuf,
     output: PathBuf,
+    uploads: PathBuf,
     logs: PathBuf,
 }
 
@@ -55,15 +57,18 @@ impl RuntimePaths {
         let node = env::var_os("CLIPPY_NODE_EXE")
             .map(PathBuf::from)
             .unwrap_or_else(|| runtime.join("node").join("node.exe"));
+        let ffmpeg = runtime.join("ffmpeg").join("bin");
         let output = root.join("data").join("output");
+        let uploads = root.join("data").join("uploads");
         let logs = root.join("logs");
-        Ok(Self { root: app, python, node, output, logs })
+        Ok(Self { root: app, python, node, ffmpeg, output, uploads, logs })
     }
 
     fn validate(&self) -> Result<(), String> {
         let required = [
             (&self.python, "Managed Python runtime"),
             (&self.node, "Managed Node.js runtime"),
+            (&self.ffmpeg.join("ffmpeg.exe"), "Managed FFmpeg runtime"),
             (&self.root.join("app.py"), "Clippy backend payload (app.py)"),
             (&self.root.join("render-service").join("dist").join("server.js"), "Compiled renderer"),
             (&self.root.join("remotion").join("src").join("index.ts"), "Remotion source"),
@@ -95,7 +100,14 @@ impl Supervisor {
         let paths = RuntimePaths::discover()?;
         paths.validate()?;
         fs::create_dir_all(&paths.output).map_err(|e| format!("Cannot create output directory: {e}"))?;
+        fs::create_dir_all(&paths.uploads).map_err(|e| format!("Cannot create uploads directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
+        let mut child_path = vec![paths.ffmpeg.clone()];
+        if let Some(existing) = env::var_os("PATH") {
+            child_path.extend(env::split_paths(&existing));
+        }
+        let child_path = env::join_paths(child_path)
+            .map_err(|e| format!("Cannot construct application PATH: {e}"))?;
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
@@ -105,6 +117,9 @@ impl Supervisor {
             .current_dir(&paths.root)
             .env("PYTHONPATH", &paths.root)
             .env("OUTPUT_DIR", &paths.output)
+            .env("UPLOAD_DIR", &paths.uploads)
+            .env("CLIPPY_SETTINGS_PATH", env::var_os("LOCALAPPDATA").unwrap_or_default())
+            .env("PATH", &child_path)
             .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{RENDERER_PORT}"))
             .env("HOST", BACKEND_HOST)
             .env("PORT", BACKEND_PORT.to_string())
@@ -119,6 +134,7 @@ impl Supervisor {
             .env("HOST", RENDERER_HOST)
             .env("PORT", RENDERER_PORT.to_string())
             .env("OUTPUT_DIR", &paths.output)
+            .env("PATH", &child_path)
             .env("REMOTION_BUNDLE_PATH", paths.root.join("remotion"))
             .stdout(Stdio::from(renderer_stdout))
             .stderr(Stdio::from(renderer_log))
