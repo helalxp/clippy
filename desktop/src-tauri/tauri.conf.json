@@ -6,30 +6,26 @@
   "build": {
     "beforeDevCommand": "npm --prefix ../../dashboard run dev -- --host 127.0.0.1",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "cd ../../dashboard && npm run build",
+    "beforeBuildCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../dashboard/build-desktop.ps1",
     "frontendDist": "../../dashboard/dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Clippy",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 1100,
-        "minHeight": 700,
-        "resizable": true,
-        "center": true
-      }
-    ],
+    "windows": [{
+      "title": "Clippy",
+      "width": 1440,
+      "height": 900,
+      "minWidth": 1100,
+      "minHeight": 700,
+      "resizable": true,
+      "center": true
+    }],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:8000 http://127.0.0.1:13100 ws://127.0.0.1:8000 ws://127.0.0.1:13100; img-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:8000; media-src 'self' asset: http://asset.localhost blob: http://127.0.0.1:8000"
     }
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis"
-    ],
+    "targets": ["nsis"],
     "category": "Video",
     "shortDescription": "Local AI video clipping and editing",
     "longDescription": "Clippy is a local-first AI video clipping and editing application."
