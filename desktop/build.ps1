@@ -22,8 +22,23 @@ Push-Location $dashboardDir
 try {
     npm ci
     if ($LASTEXITCODE -ne 0) { throw "Dashboard npm ci failed (exit $LASTEXITCODE)." }
+
+    Write-Host "Building dashboard for the local Clippy API..."
+    $previousApiUrl = $env:VITE_API_URL
+    $env:VITE_API_URL = "http://127.0.0.1:8000"
+    try {
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw "Dashboard build failed (exit $LASTEXITCODE)." }
+    } finally {
+        $env:VITE_API_URL = $previousApiUrl
+    }
 } finally {
     Pop-Location
+}
+
+$dashboardDist = Join-Path $dashboardDir "dist"
+if (-not (Test-Path (Join-Path $dashboardDist "index.html"))) {
+    throw "Dashboard build did not produce dashboard\dist\index.html."
 }
 
 Write-Host "Building Windows NSIS installer..."
