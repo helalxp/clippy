@@ -53,12 +53,37 @@ $ExpectedState = "python=$PythonVersion;node=$NodeVersion;ffmpeg=gyan-release-es
 if (Test-Path $ManifestPath) {
     try {
         $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-        if ($Existing.state -eq $ExpectedState -and
+        $RuntimeFilesPresent =
             (Test-Path (Join-Path $PythonDir "python.exe")) -and
             (Test-Path (Join-Path $NodeDir "node.exe")) -and
-            (Test-Path (Join-Path $FfmpegDir "ffmpeg.exe"))) {
-            Write-Stage "Managed runtimes already match this application. No downloads needed."
-            exit 0
+            (Test-Path (Join-Path $FfmpegDir "ffmpeg.exe"))
+        if ($Existing.state -eq $ExpectedState -and $RuntimeFilesPresent) {
+            Write-Stage "Verifying installed backend and Remotion dependencies..."
+            $PythonHealthy = $false
+            $NodeHealthy = $false
+            Push-Location $App
+            try {
+                $env:OUTPUT_DIR = Join-Path $Root "data\output"
+                $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
+                $env:CLIPPY_SETTINGS_PATH = $env:LOCALAPPDATA
+                & (Join-Path $PythonDir "python.exe") -c "import app; import torch; import faster_whisper" *> $null
+                $PythonHealthy = ($LASTEXITCODE -eq 0)
+                $BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser(); }).catch(e => { console.error(e); process.exit(1); });"
+                Push-Location (Join-Path $App "render-service")
+                try {
+                    & (Join-Path $NodeDir "node.exe") -e $BrowserCheck *> $null
+                    $NodeHealthy = ($LASTEXITCODE -eq 0)
+                } finally {
+                    Pop-Location
+                }
+            } finally {
+                Pop-Location
+            }
+            if ($PythonHealthy -and $NodeHealthy) {
+                Write-Stage "Managed runtimes and application dependencies are healthy. No downloads needed."
+                exit 0
+            }
+            Write-Stage "A runtime health check failed; repairing dependencies."
         }
     } catch {
         Write-Stage "Previous runtime manifest is invalid; repairing managed runtimes."
