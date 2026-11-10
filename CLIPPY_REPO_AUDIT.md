@@ -2459,3 +2459,19 @@ Fix direction: in BILLING_ENABLED mode, treat missing/empty owner metadata as an
 - Confirmed `_recover_jobs_from_disk` reconstructs jobs with `user_id=None` when `.owner` is absent.
 - Confirmed `_assert_job_owner` treats `None` as an unconditional pass even when BILLING_ENABLED is true.
 - Confirmed the `/api/process` owner-sidecar write failure is logged and ignored, so the invalid state can be created by a normal managed job rather than only by legacy data.
+### F-129: Thumbnail title refinement and description-generation endpoints call the managed Gemini key without reserving quota — high cost-control gap
+
+Evidence:
+- app.py `/api/thumbnail/titles` resolves the managed Gemini key, then its refinement branch calls `refine_titles` in an executor. It does not call `reserve_managed_action`, apply a per-user rate limit or cap the accumulated conversation length. The manual-title branch is local-only, but the refinement branch is a billable Gemini call.
+- app.py `/api/thumbnail/describe` resolves the managed Gemini key and calls `generate_youtube_description` in an executor for every request. It also has no `reserve_managed_action` call or per-user rate limit.
+- The neighboring `/api/thumbnail/analyze` and `/api/thumbnail/generate` routes explicitly reserve managed minutes before invoking Gemini, so the omission in titles/describe is not a deliberate global free-action policy.
+- `resolve_gemini` only verifies an active entitlement and returns the operator's managed Gemini key; it does not itself meter or limit calls.
+
+Impact: any entitled cloud user can repeatedly call the refinement and description endpoints and generate operator-funded Gemini requests without consuming their plan balance. The titles conversation array also grows on each refinement, increasing prompt/token cost per call. This bypasses the product's managed-analysis metering and spend controls.
+
+Fix direction: meter each actual Gemini call with `reserve_managed_action` (manual title mode should remain free because it makes no external call), commit only after successful generation, and release on error. Add a per-session/user request limit and a maximum message/history token budget. Add tests proving every managed Gemini call creates exactly one reservation and repeated calls cannot bypass quota.
+
+### Thumbnail AI metering review — 2026-11-10
+- Parsed all app.py route blocks that call `resolve_gemini` and compared them with reservation calls.
+- `/api/process`, `/api/edit`, `/api/effects/generate`, `/api/thumbnail/analyze`, `/api/thumbnail/generate` and `/api/saasshorts/analyze` reserve managed minutes.
+- `/api/thumbnail/titles` refinement and `/api/thumbnail/describe` do not reserve; F-129 records both omissions.
