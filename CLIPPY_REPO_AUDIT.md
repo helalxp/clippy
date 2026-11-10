@@ -2531,3 +2531,20 @@ Fix direction: store task handles/cancellation tokens by user and job, cancel an
 - Confirmed account deletion checks only reserved UsageLedger rows; SaaSShorts generation does not create one.
 - Confirmed local purge removes the in-memory `saas_jobs` record but does not cancel the task.
 - Confirmed a semaphore-waiting task invokes `generate_full_video`, which recreates its output directory after deletion.
+### F-134: Custom SaaS actor uploads are stored in a shared publicly served folder with no owner marker or erasure mapping — high privacy gap
+
+Evidence:
+- app.py `/api/saasshorts/actor-upload` accepts a user image, writes it to `OUTPUT_DIR/actor_uploads/custom_<8-hex>.png`, and returns `/videos/actor_uploads/<filename>`.
+- The route docstring says the image is stored locally only, not S3. However, `/videos` is mounted through `RestoringStaticFiles` and its guard calls `media_auth.is_servable`, which only normalizes the relative path and checks the file extension. PNG is an allowed extension; no user authentication, media token or owner check is applied.
+- The filename contains only eight random hex characters (32 bits) and the shared folder has no per-user subdirectory or `.owner` sidecar.
+- `_purge_local_jobs_for_user` deletes owned UUID job folders, SaaSShorts job folders and thumbnail-session folders. It has no mapping from a user to `output/actor_uploads` files, so account deletion cannot identify and erase this user's custom actor image.
+- The cleanup loop treats `actor_uploads` as a generic output directory and may remove the entire folder only after the job-retention age; that is not immediate per-user erasure and can also affect other users' files.
+
+Impact: a custom actor image (potentially a personal photo or likeness) is publicly retrievable by anyone who obtains or guesses its `/videos/actor_uploads/...` URL, even when the user has not opted to share the finished video. Deleting the account does not remove the image by ownership, and deleting the shared folder would affect other users.
+
+Fix direction: store custom actor uploads in a private per-user directory or object prefix, outside the public `/videos` static mount. Deliver them through authenticated/signed media access, persist owner metadata, and include them in account-erasure cleanup. If the image must be public for a gallery feature, require a separate explicit opt-in and store it in the public gallery only after that choice. Add tests that anonymous requests cannot fetch a private actor image and account deletion removes exactly the owner's image without affecting other users.
+
+### Custom actor-upload privacy review — 2026-11-10
+- Confirmed `.png` is in `media_auth.SERVABLE_EXTENSIONS`, and the `/videos` guard has no authentication or per-user capability check.
+- Confirmed the custom actor upload route returns the static `/videos/actor_uploads/...` URL and does not write owner metadata.
+- This is separate from F-122: F-122 concerns generated actor previews uploaded to the public S3 gallery before opt-in; F-134 concerns custom user-uploaded images served from the local static media mount and missed by account erasure.
