@@ -65,7 +65,8 @@ if (Test-Path $ManifestPath) {
             try {
                 $env:OUTPUT_DIR = Join-Path $Root "data\output"
                 $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
-                $env:CLIPPY_SETTINGS_PATH = $env:LOCALAPPDATA
+                $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
+                $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
                 & (Join-Path $PythonDir "python.exe") -c "import app; import torch; import faster_whisper" *> $null
                 $PythonHealthy = ($LASTEXITCODE -eq 0)
                 $BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser(); }).catch(e => { console.error(e); process.exit(1); });"
