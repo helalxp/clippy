@@ -23,8 +23,9 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "Preparing the renderer runtime payload..."
-Invoke-Checked "npm" @("ci", "--omit=dev") $renderDir
+Invoke-Checked "npm" @("ci") $renderDir
 Invoke-Checked "npm" @("run", "build") $renderDir
+Invoke-Checked "npm" @("prune", "--omit=dev") $renderDir
 Invoke-Checked "npm" @("ci", "--omit=dev") $remotionDir
 
 if (-not (Test-Path (Join-Path $renderDir "dist\server.js"))) {
