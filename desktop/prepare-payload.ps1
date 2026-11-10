@@ -55,7 +55,7 @@ foreach ($name in $directories) {
 # Remove development-only files while retaining package locks and production
 # node_modules needed by the renderer and Remotion bundler.
 Get-ChildItem $stageRoot -Directory -Recurse -Force |
-    Where-Object { $_.Name -in @(".git", ".cache", "coverage", "test", "tests") } |
+    Where-Object { $_.Name -in @(".git", ".cache", "coverage") } |
     Sort-Object FullName -Descending |
     ForEach-Object { if (Test-Path $_.FullName) { Remove-Item $_.FullName -Recurse -Force } }
 
