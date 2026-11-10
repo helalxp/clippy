@@ -10,6 +10,7 @@ import LoginModal from './components/LoginModal'
 import { readPendingPlan } from './lib/pendingPlan'
 import { applyConsent } from './lib/consent'
 import CookieBanner from './components/CookieBanner'
+import DesktopRuntimeGate from './components/DesktopRuntimeGate'
 
 const App = lazy(() => import('./App.jsx'))
 const Legal = lazy(() => import('./Legal.jsx'))
@@ -117,7 +118,7 @@ function Root() {
   if (view === 'auth') {
     return <div className="min-h-screen flex items-center justify-center bg-background text-zinc-400">Signing you in…</div>;
   }
-  if (view === 'app') return <App />;
+  if (view === 'app') return <DesktopRuntimeGate><App /></DesktopRuntimeGate>;
   return <Landing onLaunchApp={handleLaunchApp} />;
 }
 
