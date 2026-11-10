@@ -2349,6 +2349,7 @@ Evidence:
 - s3_uploader.py::upload_actor_to_s3 uploads the image to `AWS_S3_PUBLIC_BUCKET` under `avatars/`, constructs a direct public S3 URL, and also writes a sibling JSON object containing the full actor description and public URL.
 - app.py `/api/saasshorts/actor-gallery` and s3_uploader.py::list_actor_gallery enumerate the `avatars/` prefix and return these images/descriptions to any visitor; the frontend fetches this public gallery on mount and displays “Previously generated actors”.
 - docs/compliance/subprocessors.md describes AWS S3 as receiving the public UGC gallery and actor images “solo si el usuario opta por publicar” (only if the user opts to publish). That is false for actor-option images.
+- The `share_to_gallery` checkbox only gates the extra public S3 gallery upload of the finished video. The generated result is still returned as `/videos/saas_<job_id>/<filename>` under the unauthenticated `/videos` static mount, so leaving the checkbox off does not make the generated video itself private; it only keeps it out of the separate gallery listing (see F-25).
 
 Impact: simply generating preview actor options discloses the generated face images and the user's actor-description text to a public S3 bucket and makes them discoverable to other visitors. This occurs even if the user never selects an actor, never generates a video and leaves “Share this video in the public gallery” unchecked. There is no per-user delete control for these public actor objects in the inspected code.
 
