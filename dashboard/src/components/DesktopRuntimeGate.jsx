@@ -55,8 +55,8 @@ export default function DesktopRuntimeGate({ children }) {
             <div className="rounded-input border border-rule bg-paper2 p-4 mb-4">
               <h2 className="text-sm font-semibold text-ink mb-2">One-time runtime setup is still required</h2>
               <p className="text-sm text-muted leading-relaxed">
-                Clippy could not finish its first-run setup. The app payload is installed, but one or more
-                managed runtimes or dependencies may be missing. Check the technical details and retry.
+                Clippy could not finish its first-run setup. The application or one of its managed runtimes could not be installed. Check the technical
+                details and retry.
               </p>
             </div>
             <details className="mb-5">
@@ -68,7 +68,7 @@ export default function DesktopRuntimeGate({ children }) {
               onClick={() => setAttempt((value) => value + 1)}
               className="btn-primary px-4 py-2 text-sm"
             >
-              Retry service startup
+              Retry setup
             </button>
           </>
         )}
