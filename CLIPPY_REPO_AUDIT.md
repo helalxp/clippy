@@ -2359,3 +2359,19 @@ Fix direction: keep generated actor options in private per-user storage (local w
 - Confirmed actor preview generation is a separate `/api/saasshorts/actor-options` request and uploads every generated candidate to the public S3 `avatars/` prefix immediately.
 - Confirmed the metadata sidecar stores the raw actor description, and `/api/saasshorts/actor-gallery` exposes all such objects across users.
 - The custom actor upload route is explicitly local-only; this finding concerns generated actor preview options, not the custom upload path.
+### F-123: Thumbnail publishing reads the entire source video and thumbnail into RAM before upload — high OOM risk
+
+Evidence:
+- app.py `/api/thumbnail/publish` accepts the uploaded video from the thumbnail session. The same upload flow permits files up to `MAX_FILE_SIZE_MB` (2,048 MB).
+- Its background `do_upload` opens both files and constructs `files` using `vf.read()` and `tf.read()`, materializing the entire video and thumbnail as bytes before the HTTP request starts.
+- The request then sends those in-memory byte strings through `httpx.Client(timeout=600.0)`. The file handles are already closed; no streaming file object or bounded chunking is used.
+- The endpoint can therefore allocate close to the full 2 GB source size in one Python process, plus multipart buffers and the rest of the backend's resident ML/runtime memory.
+
+Impact: publishing a large thumbnail-studio source can exhaust backend/container memory and kill the API process, interrupting unrelated users' jobs and requests. The per-upload 2 GB limit is not a safe memory limit.
+
+Fix direction: pass open file objects to httpx's multipart encoder (or use an explicitly streaming multipart implementation) and keep the handles open until the request completes. Enforce a separate, realistic maximum publish size if Upload-Post has a lower limit. Add a test with a file-like object that raises if read() is called without a bounded size, and a memory-bounded integration test for a large sparse video.
+
+### Thumbnail publish route review — 2026-11-10
+- Confirmed ownership is checked against the thumbnail session before the upload task is queued, and publish status is scoped to the same user.
+- Confirmed the thumbnail URL is resolved under OUTPUT_DIR or THUMBNAILS_DIR with `_safe_under`, blocking traversal to server files.
+- The large-file memory issue is independent of those path/ownership controls and is recorded as F-123.
