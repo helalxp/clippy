@@ -217,7 +217,8 @@ Push-Location $App
 try {
     $env:OUTPUT_DIR = Join-Path $Root "data\output"
     $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
-    $env:CLIPPY_SETTINGS_PATH = $env:LOCALAPPDATA
+    $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
+    $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
     & $PythonExe -c "import app; import torch; print('Backend imports OK; torch CUDA:', torch.cuda.is_available())"
     if ($LASTEXITCODE -ne 0) { throw "Backend import verification failed. Check the Python dependency log." }
 } finally {
