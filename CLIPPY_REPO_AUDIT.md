@@ -2442,3 +2442,20 @@ Fix direction: require a valid authenticated user in billing mode, require `_ens
 - Confirmed `_ensure_job_files` returns False rather than raising when `restore_project` rejects an unauthenticated or non-owner caller.
 - Confirmed `/api/jobs/{job_id}/download-all` ignores that result and proceeds from the filesystem when the in-memory record is absent.
 - This is a distinct authorization defect from public `/videos` URLs (F-25) and from renderer output exposure (F-03): it is an authenticated API ZIP endpoint that accidentally fails open in the shared-filesystem handover state.
+### F-128: Cloud job ownership checks fail open when a recovered job has no `.owner` sidecar — critical multi-tenant isolation gap
+
+Evidence:
+- app.py::_recover_jobs_from_disk reconstructs completed jobs from output directories. It sets `owner = None` when `.owner` is absent, empty or unreadable through the guarded recovery path, then stores that value as `jobs[job_id]['user_id']`.
+- app.py::_assert_job_owner returns immediately when `record['user_id']` is None. That is a no-op in billing mode too, not just in self-host mode.
+- `/api/process` writes `.owner` only after creating the job and catches/logs any write failure without aborting the job. The job can therefore complete successfully without a durable owner sidecar.
+- In cloud mode the core processing endpoint is otherwise paid-only and `_owner_id` stamps the authenticated user. Therefore a completed cloud job with a missing owner sidecar is an integrity failure, not a legitimate anonymous/BYOK job.
+- `/api/status`, `/api/source-url`, `/api/source`, `/api/jobs/{job_id}/download-all` and numerous edit/media endpoints rely on `_assert_job_owner` for their tenant boundary. For a recovered ownerless record, that helper permits the request without authenticating or comparing a user.
+
+Impact: if a managed job's `.owner` sidecar was not persisted or is lost/corrupted before restart recovery, the recovered job becomes accessible to any caller who knows its UUID. The caller may be able to read status, mint a signed source URL, download the original source and access clip/edit endpoints. This is a systemic cross-tenant isolation failure, broader than the individual source-route edge case in F-51 and the download-all shared-instance bypass in F-127.
+
+Fix direction: in BILLING_ENABLED mode, treat missing/empty owner metadata as an invalid/unavailable job and fail closed with 404; never let `None` mean public. Persist the owner atomically with the job manifest before accepting/enqueuing the job, and abort job creation if the durable ownership record cannot be written. During recovery, reconcile ownership from the authoritative `Project` row in the database (or R2 object prefix) before adding the job to `jobs`. Keep ownerless behavior only in explicit self-host mode. Add tests for missing, empty, malformed and unreadable `.owner` sidecars across restart recovery, and assert anonymous plus every other user is denied.
+
+### Recovery ownership review — 2026-11-10
+- Confirmed `_recover_jobs_from_disk` reconstructs jobs with `user_id=None` when `.owner` is absent.
+- Confirmed `_assert_job_owner` treats `None` as an unconditional pass even when BILLING_ENABLED is true.
+- Confirmed the `/api/process` owner-sidecar write failure is logged and ignored, so the invalid state can be created by a normal managed job rather than only by legacy data.
