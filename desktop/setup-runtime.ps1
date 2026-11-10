@@ -1,0 +1,195 @@
+$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$Root = Join-Path $env:LOCALAPPDATA "Clippy"
+$App = Join-Path $Root "app\current"
+$Runtime = Join-Path $Root "runtime"
+$Downloads = Join-Path $Root "downloads"
+$PythonDir = Join-Path $Runtime "python"
+$NodeDir = Join-Path $Runtime "node"
+$FfmpegDir = Join-Path $Runtime "ffmpeg\bin"
+$ManifestPath = Join-Path $Root "runtime-manifest.json"
+
+$PythonVersion = "3.12.10"
+$PythonInstallerUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+$NodeVersion = "22.23.3"
+$NodeArchiveName = "node-v$NodeVersion-win-x64.zip"
+$NodeArchiveUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName"
+$NodeChecksumsUrl = "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt"
+$FfmpegArchiveName = "ffmpeg-release-essentials.zip"
+$FfmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$FfmpegArchiveName"
+$FfmpegChecksumUrl = "$FfmpegArchiveUrl.sha256"
+
+function Write-Stage([string]$Message) {
+    Write-Output "[Clippy setup] $Message"
+}
+
+function Download-File([string]$Url, [string]$Destination) {
+    if (Test-Path $Destination) { Remove-Item $Destination -Force }
+    Write-Stage "Downloading $([IO.Path]::GetFileName($Destination))..."
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
+    if (-not (Test-Path $Destination) -or (Get-Item $Destination).Length -lt 1024) {
+        throw "Download did not produce a valid file: $Destination"
+    }
+}
+
+function Assert-Sha256([string]$Path, [string]$Expected) {
+    $Actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Actual -ne $Expected.ToLowerInvariant()) {
+        throw "SHA-256 verification failed for $Path. Expected $Expected, got $Actual"
+    }
+}
+
+New-Item -ItemType Directory -Path $Runtime, $Downloads -Force | Out-Null
+foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1")) {
+    if (-not (Test-Path (Join-Path $App $Required))) {
+        throw "Application payload is incomplete. Missing $Required in $App"
+    }
+}
+
+$RequirementsHash = (Get-FileHash (Join-Path $App "requirements.txt") -Algorithm SHA256).Hash.ToLowerInvariant()
+$ExpectedState = "python=$PythonVersion;node=$NodeVersion;ffmpeg=gyan-release-essentials;requirements=$RequirementsHash"
+if (Test-Path $ManifestPath) {
+    try {
+        $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+        if ($Existing.state -eq $ExpectedState -and
+            (Test-Path (Join-Path $PythonDir "python.exe")) -and
+            (Test-Path (Join-Path $NodeDir "node.exe")) -and
+            (Test-Path (Join-Path $FfmpegDir "ffmpeg.exe"))) {
+            Write-Stage "Managed runtimes already match this application. No downloads needed."
+            exit 0
+        }
+    } catch {
+        Write-Stage "Previous runtime manifest is invalid; repairing managed runtimes."
+    }
+}
+
+# Python is installed privately into Clippy's runtime folder. Its Authenticode
+# signature is checked before the silent installer is allowed to run.
+$PythonExe = Join-Path $PythonDir "python.exe"
+if (-not (Test-Path $PythonExe)) {
+    $Installer = Join-Path $Downloads "python-$PythonVersion-amd64.exe"
+    Download-File $PythonInstallerUrl $Installer
+    $Signature = Get-AuthenticodeSignature -FilePath $Installer
+    if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
+        throw "Python installer signature is not valid or is not issued to the Python Software Foundation."
+    }
+    Write-Stage "Installing private Python $PythonVersion runtime..."
+    New-Item -ItemType Directory -Path $PythonDir -Force | Out-Null
+    $Args = @("/quiet", "InstallAllUsers=0", "TargetDir=$PythonDir", "Include_pip=1", "Include_launcher=0", "Include_test=0", "Shortcuts=0", "PrependPath=0")
+    $Process = Start-Process -FilePath $Installer -ArgumentList $Args -Wait -PassThru
+    if ($Process.ExitCode -notin @(0, 3010) -or -not (Test-Path $PythonExe)) {
+        throw "Private Python installation failed with exit code $($Process.ExitCode)."
+    }
+}
+& $PythonExe --version
+if ($LASTEXITCODE -ne 0) { throw "Managed Python runtime failed its version check." }
+
+# Node's archive is checked against the SHA-256 value published alongside the
+# official Node.js release archive.
+$NodeExe = Join-Path $NodeDir "node.exe"
+if (-not (Test-Path $NodeExe)) {
+    $NodeZip = Join-Path $Downloads $NodeArchiveName
+    $Checksums = Join-Path $Downloads "node-v$NodeVersion-SHASUMS256.txt"
+    Download-File $NodeArchiveUrl $NodeZip
+    Download-File $NodeChecksumsUrl $Checksums
+    $Line = Get-Content $Checksums | Where-Object { $_ -match "\s$([regex]::Escape($NodeArchiveName))$" } | Select-Object -First 1
+    if (-not $Line) { throw "Official Node.js checksum file does not contain $NodeArchiveName." }
+    $Expected = ($Line -split "\s+")[0]
+    Assert-Sha256 $NodeZip $Expected
+    $Extract = Join-Path $Downloads "node-extract"
+    if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
+    Expand-Archive -Path $NodeZip -DestinationPath $Extract -Force
+    $ExtractedRoot = Join-Path $Extract "node-v$NodeVersion-win-x64"
+    if (-not (Test-Path (Join-Path $ExtractedRoot "node.exe"))) { throw "Node.js archive layout was unexpected." }
+    New-Item -ItemType Directory -Path $NodeDir -Force | Out-Null
+    Get-ChildItem $ExtractedRoot -Force | Move-Item -Destination $NodeDir
+    Remove-Item $Extract -Recurse -Force
+}
+& $NodeExe --version
+if ($LASTEXITCODE -ne 0) { throw "Managed Node.js runtime failed its version check." }
+
+# FFmpeg is downloaded from the Windows builds publisher and verified against
+# the publisher's SHA-256 sidecar before extraction.
+$FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+if (-not (Test-Path $FfmpegExe)) {
+    $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
+    $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
+    Download-File $FfmpegArchiveUrl $FfmpegZip
+    Download-File $FfmpegChecksumUrl $FfmpegHashFile
+    $HashText = Get-Content $FfmpegHashFile -Raw
+    if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
+    Assert-Sha256 $FfmpegZip $Matches[1]
+    $Extract = Join-Path $Downloads "ffmpeg-extract"
+    if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
+    Expand-Archive -Path $FfmpegZip -DestinationPath $Extract -Force
+    $FfmpegBinary = Get-ChildItem $Extract -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+    if (-not $FfmpegBinary) { throw "FFmpeg archive did not contain ffmpeg.exe." }
+    $SourceBin = $FfmpegBinary.Directory.FullName
+    New-Item -ItemType Directory -Path $FfmpegDir -Force | Out-Null
+    Copy-Item (Join-Path $SourceBin "*") -Destination $FfmpegDir -Recurse -Force
+    Remove-Item $Extract -Recurse -Force
+}
+& $FfmpegExe -version
+if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg runtime failed its version check." }
+
+# Install the CUDA-enabled PyTorch wheel when an NVIDIA driver is present;
+# otherwise install the official CPU wheel. Other pinned application packages
+# are installed from requirements.txt without replacing that selected wheel.
+$TorchIndex = "https://download.pytorch.org/whl/cpu"
+$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($Nvidia) {
+    & nvidia-smi
+    if ($LASTEXITCODE -eq 0) {
+        $TorchIndex = "https://download.pytorch.org/whl/cu126"
+        Write-Stage "NVIDIA GPU detected; selecting the CUDA 12.6 PyTorch wheels."
+    }
+}
+Write-Stage "Installing pinned PyTorch and application Python dependencies. This can take several minutes."
+& $PythonExe -m pip install --disable-pip-version-check --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "Could not prepare pip in the managed Python runtime." }
+& $PythonExe -m pip install --disable-pip-version-check "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
+if ($LASTEXITCODE -ne 0) { throw "PyTorch installation failed from $TorchIndex." }
+
+$FilteredRequirements = Join-Path $Downloads "requirements-runtime.txt"
+Get-Content (Join-Path $App "requirements.txt") |
+    Where-Object { $_ -notmatch "^\s*(torch|torchvision)\s*==" } |
+    Set-Content -Path $FilteredRequirements -Encoding UTF8
+& $PythonExe -m pip install --disable-pip-version-check -r $FilteredRequirements
+if ($LASTEXITCODE -ne 0) { throw "Application Python dependency installation failed." }
+
+Write-Stage "Verifying backend imports..."
+Push-Location $App
+try {
+    $env:OUTPUT_DIR = Join-Path $Root "data\output"
+    $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
+    $env:CLIPPY_SETTINGS_PATH = $env:LOCALAPPDATA
+    & $PythonExe -c "import app; import torch; print('Backend imports OK; torch CUDA:', torch.cuda.is_available())"
+    if ($LASTEXITCODE -ne 0) { throw "Backend import verification failed. Check the Python dependency log." }
+} finally {
+    Pop-Location
+}
+
+Write-Stage "Installing Remotion's browser runtime..."
+$BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser(); console.log('Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
+Push-Location (Join-Path $App "render-service")
+try {
+    & $NodeExe -e $BrowserCheck
+    if ($LASTEXITCODE -ne 0) { throw "Remotion browser installation failed." }
+} finally {
+    Pop-Location
+}
+
+New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | Out-Null
+@{
+    schema = 1
+    state = $ExpectedState
+    installedAt = (Get-Date).ToUniversalTime().ToString("o")
+    python = $PythonVersion
+    node = $NodeVersion
+    ffmpeg = "gyan-release-essentials"
+    requirementsSha256 = $RequirementsHash
+    gpuMode = if ($TorchIndex -match "cu126") { "cuda126" } else { "cpu" }
+} | ConvertTo-Json -Depth 5 | Set-Content -Path $ManifestPath -Encoding UTF8
+
+Write-Stage "Runtime setup completed successfully."
