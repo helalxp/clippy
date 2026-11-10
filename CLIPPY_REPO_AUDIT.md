@@ -2392,3 +2392,18 @@ Fix direction: use a shared bounded-upload helper that streams to a temporary fi
 - `/api/thumbnail/upload` uses chunked reads and removes an oversized partial video.
 - `/api/clip/watermark` has a nominal 10 MB cap but applies it after an unbounded read.
 - `/api/thumbnail/generate` has no size limit on the optional face/background uploads.
+### F-125: SaaS website scraper buffers arbitrary public-page responses without a byte limit — medium/high memory-exhaustion risk
+
+Evidence:
+- app.py `/api/saasshorts/analyze` accepts a caller-supplied product URL and invokes `scrape_website` in a worker thread.
+- saasshorts.py::scrape_website uses `httpx.Client.get()` (non-streaming) for the main page, then parses the entire `response.text` with BeautifulSoup before truncating extracted text to 10,000 characters.
+- It can fetch up to three additional same-host subpages, each also using non-streaming `client.get()` and parsing the entire response before truncating extracted text to 5,000 characters.
+- The URL is checked with `security_utils.assert_public_url` and redirects are revalidated, which is a useful SSRF control, but neither the main page nor subpages have a response-byte cap or Content-Length guard.
+
+Impact: a caller can submit a public URL (or same-host subpage) that serves a very large body. httpx buffers the complete response before the later text truncation, so a single analysis request can allocate hundreds of megabytes or more in the API worker and cause memory pressure/OOM. The SSRF allowlist does not address response-size exhaustion.
+
+Fix direction: stream responses and abort after a small configurable maximum (for example 2-5 MB per page and 10 MB total per analysis), regardless of Content-Length. Check content type, reject unsupported binary bodies, and cap redirects/subpage count. Add tests with a streaming server that emits more than the limit and assert the scraper stops reading promptly.
+
+### SaaS website-fetch review — 2026-11-10
+- The main SaaS URL and each of up to three same-host subpages pass through the public-URL/redirect guard. The Google Search grounding research function does not directly fetch the caller URL itself.
+- F-125 is specifically an unbounded response-body issue, not a claim that the scraper accepts private IPs without validation.
