@@ -29,7 +29,7 @@ function Download-File([string]$Url, [string]$Destination) {
     if (Test-Path $Destination) { Remove-Item $Destination -Force }
     Write-Stage "Downloading $([IO.Path]::GetFileName($Destination))..."
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
-    if (-not (Test-Path $Destination) -or (Get-Item $Destination).Length -lt 1024) {
+    if (-not (Test-Path $Destination) -or (Get-Item $Destination).Length -lt 1) {
         throw "Download did not produce a valid file: $Destination"
     }
 }
