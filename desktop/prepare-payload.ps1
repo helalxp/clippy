@@ -42,7 +42,6 @@ New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 # sibling modules and launches several of them as subprocesses.
 Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
-Copy-Item (Join-Path $repoRoot "runtime-manifest.json") -Destination $stageRoot
 
 $directories = @("assets", "fonts", "reference_templates", "render-service", "remotion", "bin")
 foreach ($name in $directories) {
