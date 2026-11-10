@@ -244,12 +244,15 @@ try {
 
 New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | Out-Null
 @{
+    version = "1.0.0"
+    components = @{
+        python = @{ version = $PythonVersion; installed = $true }
+        node = @{ version = $NodeVersion; installed = $true }
+        ffmpeg = @{ version = "gyan-release-essentials"; installed = $true }
+    }
     schema = 1
     state = $ExpectedState
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
-    python = $PythonVersion
-    node = $NodeVersion
-    ffmpeg = "gyan-release-essentials"
     requirementsSha256 = $RequirementsHash
     gpuMode = if ($TorchIndex -match "cu126") { "cuda126" } else { "cpu" }
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $ManifestPath -Encoding UTF8
