@@ -76,8 +76,8 @@ if (-not (Test-Path $PythonExe)) {
     }
     Write-Stage "Installing private Python $PythonVersion runtime..."
     New-Item -ItemType Directory -Path $PythonDir -Force | Out-Null
-    $Args = @("/quiet", "InstallAllUsers=0", "TargetDir=$PythonDir", "Include_pip=1", "Include_launcher=0", "Include_test=0", "Shortcuts=0", "PrependPath=0")
-    $Process = Start-Process -FilePath $Installer -ArgumentList $Args -Wait -PassThru
+    $InstallerArgs = '/quiet InstallAllUsers=0 TargetDir="' + $PythonDir + '" Include_pip=1 Include_launcher=0 Include_test=0 Shortcuts=0 PrependPath=0'
+    $Process = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -Wait -PassThru
     if ($Process.ExitCode -notin @(0, 3010) -or -not (Test-Path $PythonExe)) {
         throw "Private Python installation failed with exit code $($Process.ExitCode)."
     }
