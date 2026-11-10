@@ -51,19 +51,32 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     let current = app_root.join("current");
     let staging = app_root.join("current.installing");
     let backup = app_root.join("current.previous");
-    let app_version = env!("CARGO_PKG_VERSION");
-
-    if current.join(".clippy-app-version").is_file()
-        && fs::read_to_string(current.join(".clippy-app-version")).ok().as_deref() == Some(app_version)
-        && current.join("app.py").is_file()
-        && current.join("render-service").join("dist").join("server.js").is_file()
-        && current.join("remotion").join("src").join("index.ts").is_file()
-    {
-        return Ok(current.display().to_string());
-    }
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
 
     let resource_dir = app.path().resource_dir().map_err(|e| format!("Cannot locate installer resources: {e}"))?;
     let archive_path = resource_dir.join("app-payload.zip");
+    let digest_path = resource_dir.join("app-payload.sha256");
+    if !archive_path.is_file() || !digest_path.is_file() {
+        return Err("Bundled application payload or its SHA-256 manifest is missing.".to_string());
+    }
+    let expected_hash = fs::read_to_string(&digest_path)
+        .map_err(|e| format!("Cannot read payload digest: {e}"))?
+        .trim()
+        .to_ascii_lowercase();
+    if expected_hash.len() != 64 || !expected_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Bundled application payload digest is malformed.".to_string());
+    }
+
+    if current.join(".clippy-payload-sha256").is_file()
+        && fs::read_to_string(current.join(".clippy-payload-sha256")).ok().map(|v| v.trim().to_string()).as_deref() == Some(expected_hash.as_str())
+        && current.join("app.py").is_file()
+        && current.join("render-service").join("dist").join("server.js").is_file()
+        && current.join("remotion").join("src").join("index.ts").is_file()
+        && current.join("setup-runtime.ps1").is_file()
+    {
+        return Ok(current.display().to_string());
+    }
     if !archive_path.is_file() {
         return Err(format!("Bundled application payload is missing: {}", archive_path.display()));
     }
@@ -74,7 +87,20 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     }
     fs::create_dir_all(&staging).map_err(|e| format!("Cannot create setup directory: {e}"))?;
 
-    let archive = fs::File::open(&archive_path).map_err(|e| format!("Cannot open application payload: {e}"))?;
+    let mut archive_file = fs::File::open(&archive_path).map_err(|e| format!("Cannot open application payload: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut hash_buffer = [0u8; 64 * 1024];
+    loop {
+        let count = archive_file.read(&mut hash_buffer).map_err(|e| format!("Cannot read application payload: {e}"))?;
+        if count == 0 { break; }
+        hasher.update(&hash_buffer[..count]);
+    }
+    let actual_hash = format!("{:x}", hasher.finalize());
+    if actual_hash != expected_hash {
+        return Err("Bundled application payload failed SHA-256 verification.".to_string());
+    }
+    drop(archive_file);
+    let archive = fs::File::open(&archive_path).map_err(|e| format!("Cannot reopen application payload: {e}"))?;
     let mut zip = zip::ZipArchive::new(archive).map_err(|e| format!("Application payload is invalid: {e}"))?;
     zip.extract(&staging).map_err(|e| format!("Cannot extract application payload: {e}"))?;
 
@@ -102,8 +128,8 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
     }
-    fs::write(current.join(".clippy-app-version"), app_version)
-        .map_err(|e| format!("Cannot write application version marker: {e}"))?;
+    fs::write(current.join(".clippy-payload-sha256"), expected_hash)
+        .map_err(|e| format!("Cannot write application payload marker: {e}"))?;
 
     Ok(current.display().to_string())
 }
