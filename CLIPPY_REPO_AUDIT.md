@@ -2360,6 +2360,7 @@ Fix direction: keep generated actor options in private per-user storage (local w
 - Confirmed actor preview generation is a separate `/api/saasshorts/actor-options` request and uploads every generated candidate to the public S3 `avatars/` prefix immediately.
 - Confirmed the metadata sidecar stores the raw actor description, and `/api/saasshorts/actor-gallery` exposes all such objects across users.
 - The custom actor upload route is explicitly local-only; this finding concerns generated actor preview options, not the custom upload path.
+- The actor-options route also creates `output/saas_actors_<uuid>` as a local fallback but does not write an owner marker or add the folder to `saas_jobs`. If the S3 upload fails, the returned fallback `/videos/saas_actors_<uuid>/...` URL is still served by the public media mount, and account erasure cannot map that directory back to the user.
 ### F-123: Thumbnail publishing reads the entire source video and thumbnail into RAM before upload — high OOM risk
 
 Evidence:
