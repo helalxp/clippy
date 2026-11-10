@@ -2407,3 +2407,21 @@ Fix direction: stream responses and abort after a small configurable maximum (fo
 ### SaaS website-fetch review — 2026-11-10
 - The main SaaS URL and each of up to three same-host subpages pass through the public-URL/redirect guard. The Google Search grounding research function does not directly fetch the caller URL itself.
 - F-125 is specifically an unbounded response-body issue, not a claim that the scraper accepts private IPs without validation.
+### F-126: `/api/process` writes large uploads and job artifacts before quota/validation completes, then leaves them behind on rejection — high disk-exhaustion risk
+
+Evidence:
+- app.py `/api/process` creates `output/<job_uuid>` before the managed minute reservation is attempted.
+- It also writes the optional custom watermark into that job directory and writes a direct video upload (or moves/copies a pre-uploaded file) into UPLOAD_DIR before calling `reserve_process_minutes` at approximately line 3418.
+- `reserve_process_minutes` can reject a zero-balance user with HTTP 402 before the probe/rate-limit stage. The endpoint does not wrap the preceding directory/file creation in a cleanup `try/finally`, and this call is not inside `_drop_unstarted_job`.
+- The same leak occurs when later generation-control validation rejects a request after the job directory and custom watermark have been written, or when the duration probe raises for an uploaded file.
+- The direct file upload cap is 2,048 MB. A request can therefore write a multi-gigabyte source to disk and only then discover that the caller has no minutes.
+- `_enforce_uploads_size_cap` and `_enforce_output_size_cap` run from `cleanup_jobs`, which sleeps 300 seconds between sweeps. They are not synchronous admission controls and do not immediately remove files from a rejected request.
+- The per-user managed probe rate check occurs inside `reserve_process_minutes` after the input file has been written; a zero-balance rejection happens before `_check_probe_rate`, so that rate limit does not bound repeated rejected large uploads.
+
+Impact: a signed-in user with an active entitlement but zero remaining minutes can repeatedly submit large files, receive 402 responses, and still leave the uploaded bytes and job directories on the server. The documented 2 GB per-file cap and five-minute cleanup interval permit rapid multi-gigabyte disk consumption. Invalid clip-control values can also leave the pre-created output directory and custom watermark behind.
+
+Fix direction: separate request admission from file persistence. Check identity, entitlement and current balance before accepting a large body wherever possible; for file-duration-based metering, stream to a bounded staging file with a per-user pending-upload quota and reserve before moving it into the job workspace. Wrap every pre-enqueue step in a cleanup transaction that removes the job directory, staged upload, hardlink/copy and releases any reservation on all exceptions and early returns. Apply rate limits before accepting the body, not after. Add tests for zero-balance 2 GB uploads, invalid clip controls after watermark upload, duration-probe failure, and upload-slot consumption rollback.
+
+### Main processing admission/cleanup review — 2026-11-10
+- Read the complete `/api/process` route (3077-3550) and the cleanup/cap loop (1577-1740).
+- F-126 is independent of the periodic size caps: those caps run only every five minutes, while the expensive file write precedes the quota check and rejected-request cleanup is missing.
