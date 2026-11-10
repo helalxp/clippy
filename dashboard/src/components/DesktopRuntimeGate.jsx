@@ -22,6 +22,8 @@ export default function DesktopRuntimeGate({ children }) {
     try {
       await invoke('install_app_payload');
       await invoke('setup_runtime');
+      const runtimeStatus = await invoke('check_runtime');
+      if (runtimeStatus?.error) throw new Error(runtimeStatus.error);
       await invoke('start_services');
       setState({ status: 'ready', error: '' });
     } catch (error) {
