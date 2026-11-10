@@ -45,6 +45,12 @@ jobs:
         shell: pwsh
         run: ./dashboard/build-desktop.ps1
 
+      - name: Validate PowerShell installer scripts
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
+
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
         run: ./desktop/prepare-payload.ps1
