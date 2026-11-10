@@ -2572,3 +2572,20 @@ Fix direction: use bounded cursor pagination (server-enforced max page size, e.g
 ### Public-gallery scalability review — 2026-11-10
 - Confirmed `/api/saasshorts/gallery` and `/api/saasshorts/actor-gallery` are public routes with no authentication requirement.
 - Confirmed the video gallery's limit applies after full key enumeration and the actor gallery has no limit at all.
+### F-137: The cloud backend is under an upstream commercial license that prohibits the intended third-party paid/hosted product use — critical commercialization/legal blocker
+
+Evidence:
+- Root `NOTICE` explicitly states that all content under `cloud/` is not covered by the root MIT license and is instead governed by `cloud/LICENSE`.
+- `cloud/LICENSE` identifies the copyright holder as OpenShorts (openshorts.app), not Clippy/Helal, and permits viewing, modification, contribution and self-hosting only for personal or internal business use.
+- The same license expressly prohibits offering the cloud software or derivatives to third parties as a hosted, managed or paid service, white-labeling it, reselling/redistributing it for consideration, or removing/circumventing its billing/metering/entitlement controls without a separate written commercial agreement.
+- The license says contributions submitted to `cloud/` are accepted under those same terms and grants the copyright holder the right to license those contributions commercially.
+- The current Clippy engineering plan includes a commercial product direction; shipping or hosting the existing `cloud/` code as a paid Clippy service would therefore conflict with the license unless the necessary written commercial rights have been obtained.
+
+Impact: the team cannot safely assume that the whole repository is MIT-licensed or that the cloud SaaS backend can be sold/hosted under the Clippy brand. The root MIT license applies to code outside `cloud/`; it does not grant commercial SaaS rights to the cloud backend. This is a release/commercialization blocker, not a technical implementation issue.
+
+Required decision before commercial release: obtain and retain a written commercial agreement/license from the upstream copyright holder that explicitly covers the planned Clippy product, distribution, hosting, modifications and customer use; or remove/rewrite the affected cloud code and all derivative components under a license the team has the right to use. Have qualified counsel review the fork's provenance, copyright notices, dependency licenses and any contributions already made to `cloud/`. Do not simply change `cloud/LICENSE` or remove the notice and assume the restriction disappears.
+
+### License boundary review — 2026-11-10
+- Read root LICENSE, NOTICE and cloud/LICENSE in full.
+- Confirmed the MIT license applies to the repository outside `cloud/`; the cloud backend is separately licensed under the OpenShorts Commercial License.
+- This finding is especially important for the stated goal of making Clippy a product to sell. A desktop-only product using only MIT-covered code may have a different analysis; any inclusion/use of `cloud/` requires the separate rights described above.
