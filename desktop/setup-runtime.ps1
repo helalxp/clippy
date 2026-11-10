@@ -65,17 +65,26 @@ if (Test-Path $ManifestPath) {
     }
 }
 
-# Python and several native wheels require the Microsoft Visual C++ runtime.
-# Install the signed Microsoft redistributable privately as a machine prerequisite.
-$VcRedist = Join-Path $Downloads "vc_redist.x64.exe"
-Download-File $VcRedistUrl $VcRedist
-$VcSignature = Get-AuthenticodeSignature -FilePath $VcRedist
-if ($VcSignature.Status -ne "Valid" -or $VcSignature.SignerCertificate.Subject -notmatch "Microsoft") {
-    throw "Microsoft Visual C++ redistributable signature is not valid."
+# Python and native wheels require the Microsoft Visual C++ runtime.
+# Install the signed Microsoft redistributable only when the x64 runtime is absent.
+$VcRuntimeKey = "HKLM:\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64"
+$VcRuntimeInstalled = $false
+try {
+    $VcRuntimeInstalled = (Get-ItemProperty -Path $VcRuntimeKey -Name Installed -ErrorAction Stop).Installed -eq 1
+} catch {
+    $VcRuntimeInstalled = $false
 }
-$VcProcess = Start-Process -FilePath $VcRedist -ArgumentList "/install /quiet /norestart" -Wait -PassThru
-if ($VcProcess.ExitCode -notin @(0, 3010)) {
-    throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
+if (-not $VcRuntimeInstalled) {
+    $VcRedist = Join-Path $Downloads "vc_redist.x64.exe"
+    Download-File $VcRedistUrl $VcRedist
+    $VcSignature = Get-AuthenticodeSignature -FilePath $VcRedist
+    if ($VcSignature.Status -ne "Valid" -or $VcSignature.SignerCertificate.Subject -notmatch "Microsoft") {
+        throw "Microsoft Visual C++ redistributable signature is not valid."
+    }
+    $VcProcess = Start-Process -FilePath $VcRedist -ArgumentList "/install /quiet /norestart" -Verb RunAs -Wait -PassThru
+    if ($VcProcess.ExitCode -notin @(0, 3010)) {
+        throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
+    }
 }
 
 # Python is installed privately into Clippy's runtime folder. Its Authenticode
