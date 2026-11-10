@@ -20,6 +20,7 @@ export default function DesktopRuntimeGate({ children }) {
     if (!isDesktop) return;
     setState({ status: 'starting', error: '' });
     try {
+      await invoke('install_app_payload');
       await invoke('start_services');
       setState({ status: 'ready', error: '' });
     } catch (error) {
