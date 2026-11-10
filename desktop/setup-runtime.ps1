@@ -208,7 +208,7 @@ if ($LASTEXITCODE -ne 0) { throw "PyTorch installation failed from $TorchIndex."
 $FilteredRequirements = Join-Path $Downloads "requirements-runtime.txt"
 Get-Content (Join-Path $App "requirements.txt") |
     Where-Object { $_ -notmatch "^\s*(torch|torchvision)\s*==" } |
-    Set-Content -Path $FilteredRequirements -Encoding UTF8
+    Set-Content -Path $FilteredRequirements -Encoding ASCII
 & $PythonExe -m pip install --disable-pip-version-check -r $FilteredRequirements
 if ($LASTEXITCODE -ne 0) { throw "Application Python dependency installation failed." }
 
