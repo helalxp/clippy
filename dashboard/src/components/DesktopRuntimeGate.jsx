@@ -21,6 +21,7 @@ export default function DesktopRuntimeGate({ children }) {
     setState({ status: 'starting', error: '' });
     try {
       await invoke('install_app_payload');
+      await invoke('setup_runtime');
       await invoke('start_services');
       setState({ status: 'ready', error: '' });
     } catch (error) {
@@ -48,15 +49,14 @@ export default function DesktopRuntimeGate({ children }) {
           </div>
         </div>
         {state.status === 'starting' ? (
-          <p className="text-sm text-muted">Starting the local backend and video renderer…</p>
+          <p className="text-sm text-muted">Checking and installing Clippy's private runtimes and Python dependencies. The first setup can take several minutes…</p>
         ) : (
           <>
             <div className="rounded-input border border-rule bg-paper2 p-4 mb-4">
               <h2 className="text-sm font-semibold text-ink mb-2">One-time runtime setup is still required</h2>
               <p className="text-sm text-muted leading-relaxed">
-                The desktop interface is installed, but Clippy's Python backend, Node renderer,
-                and application files are not installed yet. API connections and Whisper model
-                downloads will not work until those components are installed.
+                Clippy could not finish its first-run setup. The app payload is installed, but one or more
+                managed runtimes or dependencies may be missing. Check the technical details and retry.
               </p>
             </div>
             <details className="mb-5">
