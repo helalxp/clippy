@@ -2307,3 +2307,36 @@ Fix direction: do not update the documents to match unsafe behavior by simply we
 - The ChatGPT app package, CLI skill and HTTP reference still carry OpenShorts product/domain/upstream repository identity. Treat these as externally published integration contracts; do not silently rename them during the Clippy fork without a domain/operator/compatibility decision (F-112).
 - docs/dsa-notice-and-action.md describes a manual human notice-and-action process and 3-strike account termination; no durable notice/strike workflow was found in the source tree during this pass. The document itself says strikes must survive redeploys. This needs an operator-process confirmation before the public promise is relied on; it is not yet classified as a code defect because manual handling may be external to this repository.
 - ops/README.md and the compliance backup schedule still require host-level setup and restore verification; those operational controls cannot be proven from repository code alone.
+### F-120: The documented encrypted PostgreSQL backup script is absent from the repository — critical recovery/compliance gap
+
+Evidence:
+- ops/README.md repeatedly instructs operators to install and schedule `ops/pg_backup.sh`, calls it the only backup mechanism, and says it is what makes the 30-day deletion-from-backups promise true.
+- docs/compliance/retencion.md says encrypted PostgreSQL backups are retained for 30 days and cites `ops/pg_backup.sh` as the implementation.
+- The complete current main Git tree contains `ops/README.md` but no `ops/pg_backup.sh` or any other backup script under ops/.
+- The same docs say the script is not automatic and must be installed/scheduled manually; no host-level evidence or successful restore record is stored in this repository.
+
+Impact: an operator following the documented instructions cannot install the referenced backup job because the script does not exist. The claimed 30-day backup retention and disaster-recovery procedure are therefore not reproducible from this repo, and database recovery may be impossible after a host/data-volume loss. The privacy policy's deletion-from-backups statement is not substantiated by a versioned mechanism.
+
+Fix direction: restore or implement the referenced backup script with encrypted streaming, explicit fail-closed behavior, bucket-scoped credentials, retention deletion, safe logging and tested restore instructions. Add a CI shell test for the script and a scheduled operational restore test. Until a real backup job and restore are verified on the host, mark the backup retention/recovery commitment as an operational control not yet demonstrated rather than an implemented control.
+
+### F-121: n8n content-machine webhook does not verify the HMAC secret and can accept forged clip-ready events — high integration trust-boundary defect
+
+Evidence:
+- examples/n8n/openshorts-content-machine.json configures `webhook_secret: "change-me"` on the Start OpenShorts job node, so the backend sends `X-OpenShorts-Signature` for each webhook.
+- The public `Clips ready (webhook)` node is an unauthenticated POST webhook. Its first processing node is `Job completed?`, which checks only `body.event`; no node reads or verifies `X-OpenShorts-Signature`.
+- A forged `job.completed` body flows into `One item per clip`, which sends the caller-supplied title and download_url to the configured Telegram chat and adds a Publish callback button containing the caller-supplied job_id and clip_index.
+- When the owner taps that button, `Schedule social post` uses the workflow's stored OpenShorts API key to call `/api/social/post` with that job_id and clip_index. It does not use or validate the supplied download_url, so a forged notification can misrepresent a real clip owned by the connected account and induce the user to publish that clip.
+- examples/n8n/README.md's optional verification snippet computes HMAC over `JSON.stringify($json.body)`, not the raw request bytes that the backend signs. Re-serializing parsed JSON is not guaranteed to reproduce the original byte sequence, so this example is not a reliable signature verifier.
+- The simpler openshorts-clip-and-notify workflow also exposes an unauthenticated webhook and can be spammed with forged completion/failure notifications, although it does not itself schedule a post.
+
+Impact: anyone who discovers the n8n production webhook URL can inject forged clip-ready messages into the owner's Telegram chat. This is a notification-spoofing / approval-phishing surface; if the attacker also knows a valid job ID and clip index, the forged button can cause the owner to publish that account's real clip while believing they are approving the item shown in the forged message.
+
+Fix direction: verify `X-OpenShorts-Signature` against the exact raw HTTP request body before any node processes the event; reject missing/invalid signatures with 401/403. Use a per-install random secret, not `change-me`. Provide a tested n8n Code node that receives raw body bytes and uses timing-safe comparison, or place a small authenticated proxy in front of the webhook. Bind approval callback data to a server-issued nonce/job/clip tuple and re-fetch the clip metadata from the authenticated OpenShorts API before sending the Telegram preview. Add forged/missing/valid-signature integration tests.
+
+### Operational and n8n integration review checkpoint — 2026-11-10
+- Read ops/README.md, examples/n8n/README.md, both n8n workflow JSON files, font license/configuration files, dashboard/public/robots.txt, cli/README.md, cli/openshorts_cli.py, cli/pyproject.toml, requirements.txt, requirements-billing.txt and alembic/env.py.
+- F-120 is confirmed by the complete main tree inventory: the only tracked ops file is README.md; the backup script named by the README and retention schedule is absent.
+- F-121 is confirmed by inspection of every node in the content-machine workflow: the webhook is public, no HMAC verification node exists, and the downstream Telegram approval and social-post API call trust the webhook payload.
+- The n8n README signature example uses a parsed-object reserialization rather than raw bytes; it should be replaced alongside the workflow fix.
+- The CLI help text mismatch F-111 remains; no CLI-specific request/argument tests are present. The CLI is standard-library-only and uses bounded urllib request timeouts, but polling has no overall deadline by design.
+- Font license files are present for Montserrat, and the Docker font map aliases common families to installed Liberation/Anton fonts. Binary font and media asset licensing still requires a complete per-asset provenance check.
