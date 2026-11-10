@@ -197,6 +197,11 @@ Write-Stage "Installing pinned PyTorch and application Python dependencies. This
 & $PythonExe -m pip install --disable-pip-version-check --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "Could not prepare pip in the managed Python runtime." }
 & $PythonExe -m pip install --disable-pip-version-check "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
+if ($LASTEXITCODE -ne 0 -and $TorchIndex -match "cu126") {
+    Write-Stage "CUDA wheel installation failed; falling back to the official CPU PyTorch wheels."
+    $TorchIndex = "https://download.pytorch.org/whl/cpu"
+    & $PythonExe -m pip install --disable-pip-version-check "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
+}
 if ($LASTEXITCODE -ne 0) { throw "PyTorch installation failed from $TorchIndex." }
 
 $FilteredRequirements = Join-Path $Downloads "requirements-runtime.txt"
