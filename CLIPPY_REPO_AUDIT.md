@@ -2243,3 +2243,27 @@ Fix direction: serialize key creation per user (for example, lock the owning Use
 - cloud/database.py confirms schema initialization is create_all plus hand-written additive DDL and logs additive migration errors without failing startup; see F-113.
 - cloud/videos.py full source reviewed for R2 archive/edit, project/history, retention sweeps and expiry warnings. Previously recorded F-39, F-64, F-65, F-66, F-95 and F-96 remain the principal archive/retention/erasure concerns; no new independent defect was added from this pass.
 - cloud/models.py full model definitions reviewed. Constraints and uniqueness support the findings above; no schema-level active API-key quota constraint exists.
+
+
+### F-117: Default TransNetV2 scene detection materializes every decoded source frame in RAM and GPU memory — high resource-exhaustion risk
+
+Evidence:
+- scene_detection.py::_extract_frames_small invokes FFmpeg with stdout=subprocess.PIPE and returns all decoded frames as one NumPy array shaped (N, 27, 48, 3).
+- scene_detection.py::_detect_transnetv2 then creates a contiguous copy and a Torch tensor from the entire frame array before calling model.predict_frames.
+- No maximum frame count, duration-derived memory budget, chunked inference or backpressure exists in this path.
+- At 30 fps the raw RGB frame array alone is approximately 3,888 bytes × 30 × duration_seconds: about 700 MB for one hour and 1.4 GB for two hours, before the contiguous copy, Torch tensor, model activations, other concurrent jobs or the original video.
+- The source cap is configurable and can be unset in self-hosted mode; the file upload cap does not prevent long, highly compressed videos from producing a very large decoded-frame array.
+
+Impact: a long source can exhaust backend RAM or GPU memory during scene detection, killing the worker/container or triggering GPU OOM and retries. Concurrent jobs amplify the peak even though model inference itself is serialized by _TN2_LOCK, because decoded arrays are created before acquiring that lock.
+
+Fix direction: decode and infer in bounded frame batches with the model's temporal overlap/context requirements preserved; do not accumulate all raw frames in stdout. If batching is not immediately feasible, estimate decoded memory before starting and fail with a clear maximum-duration/resource message rather than risking container OOM. Add tests that assert bounded batch sizes and an integration benchmark on a long synthetic source while recording peak RSS and VRAM.
+
+### Phase 3 follow-up coverage — 2026-11-10
+- Full source read: active_speaker.py, burned_subtitles.py, camera_inset.py, edit_builder.py, editor.py, file_hosts.py, frame_sampler.py, free_tools.py, gemini_worker.py, hook_grounding.py, hook_placement.py, hooks.py, layout_picker.py, layout_ranges.py, llm_backend.py, log_view.py, mcp_stdio.py, mcp_ui.py, panel_layout.py, punch_in.py, quality_probe.py, scene_detection.py, screencast_layout.py, social_metrics.py, split_layout.py, translate.py, verify_aesthetic.py, verify_custom_hook.py, verify_hooks.py and watermarked.py.
+- Confirmed scene_detection.py is the default TransNetV2 path and _extract_frames_small captures all decoded frames in memory; F-117 records the resource risk.
+- active_speaker.decode_activity and several reframe/trajectory subprocesses still have no explicit execution deadline; covered by F-109 where applicable. frame_sampler.read_at_path also waits on a streaming FFmpeg pipe without a deadline and should be included in the timeout remediation/test matrix.
+- free_tools.fetch_transcript reads a YouTube json3 caption response without a byte limit; the response is derived from a YouTube caption track rather than an arbitrary user-supplied URL. This remains an unbounded-response hardening item, not yet classified as a confirmed exploit.
+- file_hosts.py restricts refresh fetches to the hard-coded tmpfiles.org host and bounds the HTML response to 200 KB; no arbitrary-host SSRF was found in that helper.
+- mcp_ui.py uses DOM textContent for clip titles and escapes '<' in baked JSON before inserting it into a script block, preventing title-based script-tag termination in the inline resource. The message listener does not validate origin/source; host-specific trust assumptions still need a real MCP Apps integration test.
+- llm_backend.py permits an operator-configured LLM_BASE_URL and sends prompts to it. This is configuration-controlled, not caller-controlled in the inspected route path; document that self-hosters must only point it at trusted endpoints.
+- translate.py uses fixed ElevenLabs API hosts, bounded HTTP timeouts and streaming output writes; no caller-controlled remote URL was found in the dubbing flow.
