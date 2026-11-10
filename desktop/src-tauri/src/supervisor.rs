@@ -30,6 +30,7 @@ struct RuntimePaths {
     output: PathBuf,
     uploads: PathBuf,
     models: PathBuf,
+    settings_file: PathBuf,
     logs: PathBuf,
 }
 
@@ -62,8 +63,9 @@ impl RuntimePaths {
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
         let models = root.join("data").join("models");
+        let settings_file = root.join("settings.json");
         let logs = root.join("logs");
-        Ok(Self { root: app, python, node, ffmpeg, output, uploads, models, logs })
+        Ok(Self { root: app, python, node, ffmpeg, output, uploads, models, settings_file, logs })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -123,11 +125,12 @@ impl Supervisor {
             .env("PYTHONUTF8", "1")
             .env("OUTPUT_DIR", &paths.output)
             .env("UPLOAD_DIR", &paths.uploads)
+            .env("CLIPPY_MODELS_DIR", &paths.models)
+            .env("CLIPPY_SETTINGS_PATH", &paths.settings_file)
             .env("HF_HOME", paths.models.join("huggingface"))
             .env("HUGGINGFACE_HUB_CACHE", paths.models.join("huggingface").join("hub"))
             .env("TORCH_HOME", paths.models.join("torch"))
             .env("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-            .env("CLIPPY_SETTINGS_PATH", env::var_os("LOCALAPPDATA").unwrap_or_default())
             .env("PATH", &child_path)
             .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{RENDERER_PORT}"))
             .env("HOST", BACKEND_HOST)
