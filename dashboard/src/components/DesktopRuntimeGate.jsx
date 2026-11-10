@@ -55,8 +55,8 @@ export default function DesktopRuntimeGate({ children }) {
             <div className="rounded-input border border-rule bg-paper2 p-4 mb-4">
               <h2 className="text-sm font-semibold text-ink mb-2">One-time runtime setup is still required</h2>
               <p className="text-sm text-muted leading-relaxed">
-                Clippy could not finish its first-run setup. The application or one of its managed runtimes could not be installed. Check the technical
-                details and retry.
+                Clippy could not finish its first-run setup. Clippy could not complete startup. The application payload, managed runtimes, or local
+                services may need repair. Check the technical details and retry.
               </p>
             </div>
             <details className="mb-5">
