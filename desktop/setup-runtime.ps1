@@ -67,7 +67,7 @@ if (Test-Path $ManifestPath) {
 
 # Python and native wheels require the Microsoft Visual C++ runtime.
 # Install the signed Microsoft redistributable only when the x64 runtime is absent.
-$VcRuntimeKey = "HKLM:\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64"
+$VcRuntimeKey = "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
 $VcRuntimeInstalled = $false
 try {
     $VcRuntimeInstalled = (Get-ItemProperty -Path $VcRuntimeKey -Name Installed -ErrorAction Stop).Installed -eq 1
