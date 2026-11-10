@@ -105,7 +105,19 @@ impl Bootstrap {
     }
 
     pub fn get_status(&self) -> Result<BootstrapStatus, String> {
-        let missing = self.validate_components()?;
+        let mut missing = self.validate_components()?;
+        let manifest_valid = fs::read_to_string(&self.config.manifest_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<RuntimeManifest>(&content).ok())
+            .map(|manifest| {
+                manifest.version == "1.0.0"
+                    && ["python", "node", "ffmpeg"].iter()
+                        .all(|component| manifest.components.contains_key(*component))
+            })
+            .unwrap_or(false);
+        if !manifest_valid {
+            missing.push("Runtime manifest is missing or invalid".to_string());
+        }
         let progress = if missing.is_empty() { 100.0 } else { 0.0 };
 
         // Detect GPU status
