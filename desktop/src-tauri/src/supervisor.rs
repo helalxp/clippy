@@ -29,6 +29,7 @@ struct RuntimePaths {
     ffmpeg: PathBuf,
     output: PathBuf,
     uploads: PathBuf,
+    models: PathBuf,
     logs: PathBuf,
 }
 
@@ -60,8 +61,9 @@ impl RuntimePaths {
         let ffmpeg = runtime.join("ffmpeg").join("bin");
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
+        let models = root.join("data").join("models");
         let logs = root.join("logs");
-        Ok(Self { root: app, python, node, ffmpeg, output, uploads, logs })
+        Ok(Self { root: app, python, node, ffmpeg, output, uploads, models, logs })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -101,6 +103,7 @@ impl Supervisor {
         paths.validate()?;
         fs::create_dir_all(&paths.output).map_err(|e| format!("Cannot create output directory: {e}"))?;
         fs::create_dir_all(&paths.uploads).map_err(|e| format!("Cannot create uploads directory: {e}"))?;
+        fs::create_dir_all(&paths.models).map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
         let mut child_path = vec![paths.ffmpeg.clone()];
         if let Some(existing) = env::var_os("PATH") {
@@ -118,6 +121,10 @@ impl Supervisor {
             .env("PYTHONPATH", &paths.root)
             .env("OUTPUT_DIR", &paths.output)
             .env("UPLOAD_DIR", &paths.uploads)
+            .env("HF_HOME", paths.models.join("huggingface"))
+            .env("HUGGINGFACE_HUB_CACHE", paths.models.join("huggingface").join("hub"))
+            .env("TORCH_HOME", paths.models.join("torch"))
+            .env("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
             .env("CLIPPY_SETTINGS_PATH", env::var_os("LOCALAPPDATA").unwrap_or_default())
             .env("PATH", &child_path)
             .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{RENDERER_PORT}"))
