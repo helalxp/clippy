@@ -20,10 +20,13 @@ Node dependencies, and asks Tauri to create an NSIS installer. On first launch,
 the app extracts that payload to the per-user Clippy directory. Output is
 expected under desktop\src-tauri\target\release\bundle\nsis.
 
-IMPORTANT: this is an intermediate installer, not yet a complete end-user
-release. Managed Python and Node runtimes, FFmpeg, Python packages, Remotion's
-browser runtime, and the resumable first-run runtime download/repair flow are
-still being integrated and must pass clean-machine testing before distribution.
+IMPORTANT: this is still an engineering preview, not yet a production release.
+The first-run script now provisions private Python, Node.js, FFmpeg, Python
+packages, PyTorch (CUDA 12.6 on detected NVIDIA systems, CPU otherwise), and
+Remotion's browser runtime. It verifies upstream signatures/checksums and
+records the installed runtime state. The complete flow still needs clean-
+machine testing, including dependency compatibility, UAC behavior, interrupted
+downloads, GPU variants, and repair before distribution.
 
 ## Expected managed service layout
 
