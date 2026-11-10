@@ -108,6 +108,18 @@ impl Supervisor {
         fs::create_dir_all(&paths.models).map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
         let mut child_path = vec![paths.ffmpeg.clone()];
+        // PyTorch's CUDA wheels place cuBLAS/cuDNN DLLs inside the managed
+        // Python environment. CTranslate2 (used by faster-whisper) needs those
+        // DLL directories on PATH on Windows.
+        if let Some(python_root) = paths.python.parent() {
+            let nvidia_root = python_root.join("Lib").join("site-packages").join("nvidia");
+            for relative in ["cublas\\bin", "cudnn\\bin", "cuda_runtime\\bin"] {
+                let dll_dir = nvidia_root.join(relative);
+                if dll_dir.is_dir() {
+                    child_path.push(dll_dir);
+                }
+            }
+        }
         if let Some(existing) = env::var_os("PATH") {
             child_path.extend(env::split_paths(&existing));
         }
