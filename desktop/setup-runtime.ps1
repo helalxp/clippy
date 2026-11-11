@@ -37,7 +37,7 @@ trap {
         Write-Stage ("Failure location: " + $Failure.InvocationInfo.PositionMessage)
         Write-Stage ("Diagnostic log: " + $SetupLogPath)
     } catch { }
-    break
+    exit 1
 }
 
 Write-Stage "Runtime setup engine started."
