@@ -186,14 +186,21 @@ fn setup_runtime_blocking(app: tauri::AppHandle) -> Result<String, String> {
     let stdout = child.stdout.take().ok_or("Could not capture setup output")?;
     let stderr = child.stderr.take().ok_or("Could not capture setup errors")?;
     let (tx, rx) = mpsc::channel::<(String, String)>();
-    for (stream_name, stream) in [("stdout", stdout), ("stderr", stderr)] {
-        let tx = tx.clone();
-        thread::spawn(move || {
-            for line in BufReader::new(stream).lines().flatten() {
-                if tx.send((stream_name.to_string(), line)).is_err() { break; }
-            }
-        });
-    }
+    // ChildStdout and ChildStderr are distinct types, so drain them on
+    // separate reader threads. Both must be drained concurrently to avoid
+    // deadlocking when either pipe fills.
+    let stdout_tx = tx.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if stdout_tx.send(("stdout".to_string(), line)).is_err() { break; }
+        }
+    });
+    let stderr_tx = tx.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            if stderr_tx.send(("stderr".to_string(), line)).is_err() { break; }
+        }
+    });
     drop(tx);
 
     let mut recent = Vec::new();
