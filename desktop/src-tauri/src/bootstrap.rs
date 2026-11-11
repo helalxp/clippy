@@ -18,6 +18,7 @@ pub struct RuntimeComponent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeManifest {
     pub version: String,
     pub schema: u32,
