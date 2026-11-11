@@ -37,6 +37,10 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Validate synchronized application version
+        shell: pwsh
+        run: ./desktop/validate-version.ps1
+
       - name: Install dashboard dependencies
         working-directory: dashboard
         run: npm ci
