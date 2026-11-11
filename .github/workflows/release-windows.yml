@@ -9,7 +9,35 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend test dependencies
+        run: >
+          pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy
+          opencv-python-headless python-dotenv google-genai fastapi boto3
+          PyJWT email-validator python-multipart
+      - name: Run backend tests
+        run: pytest tests/ -v
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Build frontend
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
   build-and-publish:
+    needs: validate
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
