@@ -61,7 +61,7 @@ $ScratchDrive = [System.IO.DriveInfo]::GetDrives() |
     Sort-Object AvailableFreeSpace -Descending |
     Select-Object -First 1
 if (-not $ScratchDrive) { throw "No writable fixed drive is available for setup temporary files." }
-$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName "ClippySetupTemp"
+$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ("ClippySetupTemp-" + $env:USERNAME)
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
@@ -158,7 +158,13 @@ if (-not (Test-Path $PythonExe)) {
     Download-File $PythonInstallerUrl $Installer
     $Signature = Get-AuthenticodeSignature -FilePath $Installer
     if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
-        throw "Python installer signature is not valid or is not issued to the Python Software Foundation."
+        Write-Stage "Cached Python installer failed signature verification; downloading a fresh copy."
+        Remove-Item $Installer -Force -ErrorAction SilentlyContinue
+        Download-File $PythonInstallerUrl $Installer
+        $Signature = Get-AuthenticodeSignature -FilePath $Installer
+        if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
+            throw "Python installer signature is not valid or is not issued to the Python Software Foundation."
+        }
     }
     Write-Stage "Installing private Python $PythonVersion runtime..."
     New-Item -ItemType Directory -Path $PythonDir -Force | Out-Null
@@ -179,8 +185,14 @@ if (-not (Test-Path $NodeExe)) {
     $Checksums = Join-Path $Downloads "node-v$NodeVersion-SHASUMS256.txt"
     Download-File $NodeArchiveUrl $NodeZip
     Download-File $NodeChecksumsUrl $Checksums
-    $Line = Get-Content $Checksums | Where-Object { $_ -match "\s$([regex]::Escape($NodeArchiveName))$" } | Select-Object -First 1
-    if (-not $Line) { throw "Official Node.js checksum file does not contain $NodeArchiveName." }
+    $Line = Get-Content $Checksums -ErrorAction SilentlyContinue | Where-Object { $_ -match "\s$([regex]::Escape($NodeArchiveName))$" } | Select-Object -First 1
+    if (-not $Line) {
+        Write-Stage "Cached Node.js checksum file is incomplete; downloading it again."
+        Remove-Item $Checksums -Force -ErrorAction SilentlyContinue
+        Download-File $NodeChecksumsUrl $Checksums
+        $Line = Get-Content $Checksums | Where-Object { $_ -match "\s$([regex]::Escape($NodeArchiveName))$" } | Select-Object -First 1
+        if (-not $Line) { throw "Official Node.js checksum file does not contain $NodeArchiveName." }
+    }
     $Expected = ($Line -split "\s+")[0]
     try {
         Assert-Sha256 $NodeZip $Expected
@@ -210,8 +222,14 @@ if (-not (Test-Path $FfmpegExe)) {
     $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
     Download-File $FfmpegArchiveUrl $FfmpegZip
     Download-File $FfmpegChecksumUrl $FfmpegHashFile
-    $HashText = Get-Content $FfmpegHashFile -Raw
-    if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
+    $HashText = Get-Content $FfmpegHashFile -Raw -ErrorAction SilentlyContinue
+    if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") {
+        Write-Stage "Cached FFmpeg checksum file is incomplete; downloading it again."
+        Remove-Item $FfmpegHashFile -Force -ErrorAction SilentlyContinue
+        Download-File $FfmpegChecksumUrl $FfmpegHashFile
+        $HashText = Get-Content $FfmpegHashFile -Raw
+        if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
+    }
     $FfmpegExpectedHash = $Matches[1]
     try {
         Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
