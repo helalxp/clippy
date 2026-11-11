@@ -182,7 +182,14 @@ if (-not (Test-Path $NodeExe)) {
     $Line = Get-Content $Checksums | Where-Object { $_ -match "\s$([regex]::Escape($NodeArchiveName))$" } | Select-Object -First 1
     if (-not $Line) { throw "Official Node.js checksum file does not contain $NodeArchiveName." }
     $Expected = ($Line -split "\s+")[0]
-    Assert-Sha256 $NodeZip $Expected
+    try {
+        Assert-Sha256 $NodeZip $Expected
+    } catch {
+        Write-Stage "Cached Node.js archive failed verification; downloading a fresh copy."
+        Remove-Item $NodeZip -Force -ErrorAction SilentlyContinue
+        Download-File $NodeArchiveUrl $NodeZip
+        Assert-Sha256 $NodeZip $Expected
+    }
     $Extract = Join-Path $ScratchRoot "node-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
     Expand-Archive -Path $NodeZip -DestinationPath $Extract -Force
@@ -205,7 +212,15 @@ if (-not (Test-Path $FfmpegExe)) {
     Download-File $FfmpegChecksumUrl $FfmpegHashFile
     $HashText = Get-Content $FfmpegHashFile -Raw
     if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
-    Assert-Sha256 $FfmpegZip $Matches[1]
+    $FfmpegExpectedHash = $Matches[1]
+    try {
+        Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
+    } catch {
+        Write-Stage "Cached FFmpeg archive failed verification; downloading a fresh copy."
+        Remove-Item $FfmpegZip -Force -ErrorAction SilentlyContinue
+        Download-File $FfmpegArchiveUrl $FfmpegZip
+        Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
+    }
     $Extract = Join-Path $ScratchRoot "ffmpeg-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
     Expand-Archive -Path $FfmpegZip -DestinationPath $Extract -Force
@@ -273,7 +288,7 @@ try {
 }
 
 New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | Out-Null
-@$Manifest = @{
+$Manifest = @{
     version = "1.0.0"
     components = @{
         python = @{ version = $PythonVersion; installed = $true }
