@@ -136,14 +136,28 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
 
 
 #[tauri::command]
-fn setup_runtime() -> Result<String, String> {
+async fn setup_runtime() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(setup_runtime_blocking)
+        .await
+        .map_err(|e| format!("Runtime setup worker failed: {e}"))?
+}
+
+fn setup_runtime_blocking() -> Result<String, String> {
+    use std::io::Write;
+
     let local = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| "LOCALAPPDATA not found".to_string())?;
-    let script = local.join("Clippy").join("app").join("current").join("setup-runtime.ps1");
+    let root = local.join("Clippy");
+    let script = root.join("app").join("current").join("setup-runtime.ps1");
     if !script.is_file() {
         return Err(format!("Runtime setup script is missing: {}", script.display()));
     }
+
+    let log_dir = root.join("logs");
+    std::fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("Cannot create runtime setup log directory: {e}"))?;
+    let log_path = log_dir.join("runtime-setup.log");
 
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
@@ -153,12 +167,25 @@ fn setup_runtime() -> Result<String, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Cannot open runtime setup log {}: {e}", log_path.display()))?;
+    writeln!(log, "\n===== Runtime setup invocation =====")
+        .map_err(|e| format!("Cannot write runtime setup log: {e}"))?;
+    log.write_all(stdout.as_bytes())
+        .map_err(|e| format!("Cannot write runtime setup log: {e}"))?;
+    log.write_all(stderr.as_bytes())
+        .map_err(|e| format!("Cannot write runtime setup log: {e}"))?;
+
     if !output.status.success() {
         return Err(format!(
-            "Runtime setup failed ({}).\n{}\n{}",
+            "Runtime setup failed ({}).\n{}\n{}\nFull log: {}",
             output.status,
             stdout,
-            stderr
+            stderr,
+            log_path.display()
         ));
     }
     Ok(stdout.into_owned())
