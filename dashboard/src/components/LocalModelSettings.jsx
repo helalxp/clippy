@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Cpu, Download, FolderOpen, HardDrive, RefreshCw, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
@@ -6,6 +6,9 @@ const MODEL_SIZES = ['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-tu
 
 export default function LocalModelSettings() {
   const [data, setData] = useState(null);
+  const [verification, setVerification] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+  const hasLoaded = useRef(false);
   const [modelSize, setModelSize] = useState('small');
   const [modelPath, setModelPath] = useState('');
   const [busy, setBusy] = useState(false);
@@ -15,8 +18,11 @@ export default function LocalModelSettings() {
   const refresh = useCallback(async () => {
     const result = await apiJson('/api/local-models/whisper');
     setData(result);
-    setModelSize(result.selection?.model_size || 'small');
-    setModelPath(result.selection?.source === 'local' ? result.selection.model_path || '' : '');
+    if (!hasLoaded.current) {
+      setModelSize(result.selection?.model_size || 'small');
+      setModelPath(result.selection?.source === 'local' ? result.selection.model_path || '' : '');
+      hasLoaded.current = true;
+    }
   }, []);
 
   useEffect(() => {
@@ -62,6 +68,16 @@ export default function LocalModelSettings() {
     } catch (err) {
       setError(err.detail || err.message || 'Could not start the model download.');
     } finally { setBusy(false); }
+  };
+
+  const verifyModel = async () => {
+    setVerifying(true); setError(''); setMessage(''); setVerification(null);
+    try {
+      const result = await apiJson('/api/local-models/whisper/verify', { method: 'POST' });
+      setVerification(result);
+    } catch (err) {
+      setError(err.detail || err.message || 'Whisper model verification failed.');
+    } finally { setVerifying(false); }
   };
 
   const useLocalFolder = async () => {
@@ -120,23 +136,48 @@ export default function LocalModelSettings() {
         <select id="clippy-whisper-size" value={modelSize} onChange={(e) => setModelSize(e.target.value)} className="input-field w-full">
           {(data?.models || MODEL_SIZES.map((id) => ({ id, label: id }))).map((model) => (
             <option key={model.id} value={model.id}>
-              {model.label}{model.downloaded ? ' · downloaded' : ''}
+              {model.label}{model.selected ? ' · selected' : ''}{model.downloaded ? ' · downloaded' : ' · not downloaded'}
             </option>
           ))}
         </select>
         <p className="text-xs text-muted">
           {data?.models?.find((model) => model.id === modelSize)?.description || 'Choose the balance of speed, accuracy and memory use.'}
         </p>
+        <div className="rounded-input border border-rule bg-paper2 p-3 space-y-1">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-muted">Saved model selection</span>
+            <strong className="text-xs text-ink">
+              {!data?.selection?.selected
+                ? 'No saved selection'
+                : data.selection.source === 'local'
+                  ? 'Custom local model'
+                  : (data.selection.model_size || 'small').toUpperCase()}
+            </strong>
+          </div>
+          <div className="text-xs">
+            {data?.selection?.installed
+              ? <span className="text-ok">Model files found and structurally valid</span>
+              : data?.selection?.selected
+                ? <span className="text-warn">Selected, but model weights are not installed yet</span>
+                : <span className="text-muted">No model saved yet. Clippy currently falls back to Small.</span>}
+          </div>
+          {data?.selection?.source === 'local' && (
+            <p className="break-all text-[11px] text-muted">{data.selection.model_path}</p>
+          )}
+        </div>
         <p className="text-xs text-muted">
-          “Download &amp; use” installs the weights now. “Use selected size” saves your choice and lets
-          faster-whisper download the weights automatically the first time transcription needs them.
+          Saving a size records your choice. It does not claim the model is installed. Download it here,
+          or allow faster-whisper to fetch it the first time transcription runs.
         </p>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={downloadModel} disabled={busy || Boolean(activeDownload)} className="btn-primary px-4 py-2 text-xs">
             {activeDownload ? <><Loader2 size={14} className="animate-spin" /> Downloading…</> : <><Download size={14} /> Download &amp; use model</>}
           </button>
           <button type="button" onClick={saveCatalogModel} disabled={busy} className="btn-quiet px-4 py-2 text-xs">
-            Use selected size
+            Save selection
+          </button>
+          <button type="button" onClick={verifyModel} disabled={verifying || !data?.selection?.installed} className="btn-quiet px-4 py-2 text-xs">
+            {verifying ? <><Loader2 size={14} className="animate-spin" /> Testing model…</> : <><CheckCircle2 size={14} /> Test model load</>}
           </button>
         </div>
       </div>
@@ -170,7 +211,14 @@ export default function LocalModelSettings() {
       )}
       {completedDownload && (
         <div className="mt-4 text-xs text-ok flex items-center gap-2">
-          <CheckCircle2 size={14} /> Whisper {completedDownload.model_size} is downloaded and ready.
+          <CheckCircle2 size={14} /> Whisper {completedDownload.model_size} is downloaded, saved as the active selection, and ready for verification.
+        </div>
+      )}
+      {verification?.ok && (
+        <div className="mt-4 rounded-input border border-ok/30 bg-paper2 p-3 text-xs text-ok space-y-1">
+          <div className="flex items-center gap-2 font-medium"><CheckCircle2 size={14} /> Model loaded successfully</div>
+          <p>{verification.message}</p>
+          <p className="break-all text-muted">{verification.model_path}</p>
         </div>
       )}
       {failedDownload && (

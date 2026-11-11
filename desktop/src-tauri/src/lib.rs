@@ -6,7 +6,145 @@ use std::sync::Mutex;
 use supervisor::{ServiceStatus, Supervisor};
 use bootstrap::Bootstrap;
 use tauri::State;
-use std::process::Command;
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if url.len() > 2048 || url.chars().any(|ch| ch.is_control()) {
+        return Err("The external link is invalid.".to_string());
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:")) {
+        return Err("Only HTTP, HTTPS, and mail links can be opened externally.".to_string());
+    }
+
+    // Pass the URL as a process argument, never through cmd.exe or a shell.
+    Command::new("explorer.exe")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the link in your default browser: {error}"))
+}
+
+
+#[derive(serde::Serialize)]
+struct ClipDownloadTarget {
+    path: String,
+}
+
+fn clip_download_root() -> Result<PathBuf, String> {
+    let profile = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "Windows user profile directory is unavailable".to_string())?;
+    let root = profile.join("Downloads").join("Clippy");
+    fs::create_dir_all(&root)
+        .map_err(|e| format!("Cannot create Clippy download folder {}: {e}", root.display()))?;
+    root.canonicalize()
+        .map_err(|e| format!("Cannot resolve Clippy download folder: {e}"))
+}
+
+fn resolve_clip_download_path(raw: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(raw);
+    let file_name = candidate.file_name()
+        .ok_or_else(|| "Download file path is invalid".to_string())?;
+    let parent = candidate.parent()
+        .ok_or_else(|| "Download folder is invalid".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Download folder is unavailable: {e}"))?;
+    let root = clip_download_root()?;
+    if parent != root {
+        return Err("Downloads can only be written inside the Clippy download folder.".to_string());
+    }
+    if candidate.extension().and_then(|ext| ext.to_str()).map(|ext| ext.eq_ignore_ascii_case("mp4")) != Some(true) {
+        return Err("Only MP4 clip downloads are supported.".to_string());
+    }
+    let resolved = parent.join(file_name);
+    if fs::symlink_metadata(&resolved).map(|meta| meta.file_type().is_symlink()).unwrap_or(false) {
+        return Err("The requested download path is not a regular file.".to_string());
+    }
+    Ok(resolved)
+}
+
+#[tauri::command]
+fn begin_clip_download(filename: String) -> Result<ClipDownloadTarget, String> {
+    let root = clip_download_root()?;
+    let requested_stem = Path::new(&filename).file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("clip");
+    let mut stem: String = requested_stem.chars()
+        .filter(|ch| ch.is_alphanumeric() || *ch == '-' || *ch == '_')
+        .take(64)
+        .collect();
+    if stem.is_empty() {
+        stem = "clip".to_string();
+    }
+
+    for suffix in 1..=9999 {
+        let name = if suffix == 1 {
+            format!("{stem}.mp4")
+        } else {
+            format!("{stem} ({suffix}).mp4")
+        };
+        let path = root.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(ClipDownloadTarget { path: path.display().to_string() }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Cannot create download file {}: {error}", path.display())),
+        }
+    }
+    Err("Could not find an available filename for this clip.".to_string())
+}
+
+#[tauri::command]
+fn append_clip_download_chunk(path: String, bytes: Vec<u8>) -> Result<u64, String> {
+    let path = resolve_clip_download_path(&path)?;
+    let mut file = OpenOptions::new().append(true).open(&path)
+        .map_err(|e| format!("Cannot open download file {}: {e}", path.display()))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("Cannot write download file {}: {e}", path.display()))?;
+    file.metadata()
+        .map(|metadata| metadata.len())
+        .map_err(|e| format!("Cannot inspect download file: {e}"))
+}
+
+#[tauri::command]
+fn finish_clip_download(path: String) -> Result<String, String> {
+    let path = resolve_clip_download_path(&path)?;
+    let file = OpenOptions::new().write(true).open(&path)
+        .map_err(|e| format!("Cannot finalize download file {}: {e}", path.display()))?;
+    file.sync_all()
+        .map_err(|e| format!("Cannot flush download file {}: {e}", path.display()))?;
+    if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) == 0 {
+        return Err("The downloaded clip is empty.".to_string());
+    }
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn cancel_clip_download(path: String) -> Result<(), String> {
+    let path = resolve_clip_download_path(&path)?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|e| format!("Cannot remove incomplete download {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn reveal_clip_download(path: String) -> Result<(), String> {
+    let path = resolve_clip_download_path(&path)?;
+    Command::new("explorer.exe")
+        .arg(format!("/select,{}", path.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Cannot open the download folder: {e}"))
+}
 
 #[tauri::command]
 fn start_services(state: State<'_, Mutex<Supervisor>>) -> Result<ServiceStatus, String> {
@@ -250,7 +388,13 @@ pub fn run() {
             service_status,
             check_runtime,
             install_app_payload,
-            setup_runtime
+            setup_runtime,
+            open_external_url,
+            begin_clip_download,
+            append_clip_download_chunk,
+            finish_clip_download,
+            cancel_clip_download,
+            reveal_clip_download
         ])
         .run(tauri::generate_context!())
         .expect("error while running Clippy desktop application");

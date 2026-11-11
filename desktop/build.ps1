@@ -4,6 +4,8 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $dashboardDir = Join-Path $repoRoot "dashboard"
 $tauriDir = Join-Path $PSScriptRoot "src-tauri"
 
+& (Join-Path $PSScriptRoot "validate-version.ps1")
+
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     throw "Node.js/npm is required on the build machine."
 }
