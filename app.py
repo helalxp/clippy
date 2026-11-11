@@ -2861,7 +2861,7 @@ async def get_local_whisper_model():
             "label": details["label"],
             "description": details["description"],
             "downloaded": downloaded,
-            "selected": selected.get("source") == "catalog" and selected.get("model_size") == key,
+            "selected": selected.get("selected", False) and selected.get("source") == "catalog" and selected.get("model_size") == key,
             "status": "ready" if downloaded else "not_downloaded",
         })
     return {
