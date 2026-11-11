@@ -30,6 +30,18 @@ function Write-Stage([string]$Message) {
     try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false)) } catch { }
 }
 
+trap {
+    $Failure = $_
+    try {
+        Write-Stage ("SETUP FAILED: " + $Failure.Exception.Message)
+        Write-Stage ("Failure location: " + $Failure.InvocationInfo.PositionMessage)
+        Write-Stage ("Diagnostic log: " + $SetupLogPath)
+    } catch { }
+    break
+}
+
+Write-Stage "Runtime setup engine started."
+
 function Download-File([string]$Url, [string]$Destination) {
     if (Test-Path $Destination) {
         if ((Get-Item $Destination).Length -gt 0) {
