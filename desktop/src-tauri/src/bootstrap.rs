@@ -108,7 +108,12 @@ impl Bootstrap {
         let mut missing = self.validate_components()?;
         let manifest_valid = fs::read_to_string(&self.config.manifest_path)
             .ok()
-            .and_then(|content| serde_json::from_str::<RuntimeManifest>(&content).ok())
+            // Accept manifests produced by older PowerShell 5.1 installers too.
+            // New installers write BOM-less UTF-8, but this keeps upgrades compatible.
+            .and_then(|content| {
+                let json = content.trim_start_matches('\u{feff}');
+                serde_json::from_str::<RuntimeManifest>(json).ok()
+            })
             .map(|manifest| {
                 manifest.version == "1.0.0"
                     && ["python", "node", "ffmpeg"].iter()
