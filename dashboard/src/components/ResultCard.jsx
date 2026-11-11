@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette, Image as ImageIcon } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, Palette, Image as ImageIcon, FolderOpen } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -101,51 +101,109 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // their position to save a few seconds of buffering is a bad trade.
     const [hasPlayed, setHasPlayed] = useState(false);
 
-    // A delivered clip is tens of MB, and on a slow link the old silent
-    // fetch-then-save took minutes with nothing on screen, which reads as a dead
-    // button. Stream it instead and report progress.
-    const [downloadPct, setDownloadPct] = useState(null);
+    // Desktop downloads are streamed through native file writes so WebView2
+    // cannot silently swallow an <a download> click. Edited Remotion previews
+    // use blob: URLs and must be fetched directly, not passed through apiFetch's
+    // HTTP API URL normalizer.
+    const [downloadState, setDownloadState] = useState({
+        status: 'idle', percent: null, downloaded: 0, total: 0, path: '', error: '',
+    });
+
+    const formatDownloadSize = (bytes) => {
+        if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
 
     const downloadClip = async () => {
+        const invoke = window.__TAURI__?.core?.invoke;
+        let target = null;
+        let browserChunks = [];
+        let received = 0;
         try {
-            setDownloadPct(0);
-            const response = await apiFetch(currentVideoUrl);
-            if (!response.ok) throw new Error('Download failed');
+            setDownloadState({ status: 'preparing', percent: null, downloaded: 0, total: 0, path: '', error: '' });
+            const response = currentVideoUrl.startsWith('blob:')
+                ? await fetch(currentVideoUrl)
+                : await apiFetch(currentVideoUrl);
+            if (!response.ok) {
+                const detail = await response.text().catch(() => '');
+                throw new Error(detail || `Download request failed (HTTP ${response.status}).`);
+            }
+
             const total = Number(response.headers.get('content-length')) || 0;
-            let blob;
-            // No body reader (old browser) or no length to measure against: fall
-            // back to the plain path rather than lose the download.
-            if (!response.body || !total) {
-                blob = await response.blob();
-            } else {
+            const isDesktop = typeof invoke === 'function';
+            if (isDesktop) {
+                target = await invoke('begin_clip_download', { filename: `clip-${index + 1}.mp4` });
+            }
+            setDownloadState({
+                status: 'downloading', percent: total ? 0 : null,
+                downloaded: 0, total, path: target?.path || '', error: '',
+            });
+
+            const writeChunk = async (chunk) => {
+                // Keep IPC messages bounded. A 256 KiB chunk avoids passing a
+                // whole rendered MP4 through Tauri's JSON bridge at once.
+                for (let offset = 0; offset < chunk.length; offset += 256 * 1024) {
+                    const part = chunk.subarray(offset, Math.min(offset + 256 * 1024, chunk.length));
+                    if (isDesktop) {
+                        await invoke('append_clip_download_chunk', {
+                            path: target.path,
+                            bytes: Array.from(part),
+                        });
+                    } else {
+                        browserChunks.push(part);
+                    }
+                    received += part.length;
+                    setDownloadState({
+                        status: 'downloading',
+                        percent: total ? Math.min(99, Math.round((received / total) * 100)) : null,
+                        downloaded: received, total, path: target?.path || '', error: '',
+                    });
+                }
+            };
+
+            if (response.body?.getReader) {
                 const reader = response.body.getReader();
-                const chunks = [];
-                let received = 0;
                 for (;;) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    chunks.push(value);
-                    received += value.length;
-                    setDownloadPct(Math.min(99, Math.round((received / total) * 100)));
+                    await writeChunk(value);
                 }
-                blob = new Blob(chunks, { type: 'video/mp4' });
+            } else {
+                const buffer = new Uint8Array(await response.arrayBuffer());
+                await writeChunk(buffer);
             }
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = `clip-${index + 1}.mp4`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            // WebView2 may not begin consuming the object URL until after the
-            // click handler returns. Revoking it synchronously cancels the save.
-            window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+
+            if (isDesktop) {
+                const savedPath = await invoke('finish_clip_download', { path: target.path });
+                setDownloadState({
+                    status: 'complete', percent: 100, downloaded: received,
+                    total: total || received, path: savedPath, error: '',
+                });
+            } else {
+                const blob = new Blob(browserChunks, { type: 'video/mp4' });
+                const url = window.URL.createObjectURL(blob);
+                const anchor = document.createElement('a');
+                anchor.style.display = 'none';
+                anchor.href = url;
+                anchor.download = `clip-${index + 1}.mp4`;
+                document.body.appendChild(anchor);
+                anchor.click();
+                document.body.removeChild(anchor);
+                window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+                setDownloadState({
+                    status: 'complete', percent: 100, downloaded: received,
+                    total: total || received, path: 'your browser Downloads folder', error: '',
+                });
+            }
         } catch (err) {
+            if (target?.path && typeof invoke === 'function') {
+                await invoke('cancel_clip_download', { path: target.path }).catch(() => {});
+            }
             console.error('Download error:', err);
-            window.open(currentVideoUrl, '_blank');
-        } finally {
-            setDownloadPct(null);
+            setDownloadState({
+                status: 'error', percent: null, downloaded: received,
+                total: 0, path: '', error: err?.message || 'The clip could not be downloaded.',
+            });
         }
     };
     // Latest file that exists ON THE SERVER (blob: previews don't count).
@@ -1100,6 +1158,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     <button
                         onClick={(e) => {
                             e.preventDefault();
+                            if (downloadState.status === 'preparing' || downloadState.status === 'downloading') return;
                             // Free clips are watermarked — surface the upsell once
                             // before the first download, then get out of the way.
                             if (plan === 'free' && !watermarkNoticeDismissed(jobId)) {
@@ -1108,12 +1167,65 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             }
                             downloadClip();
                         }}
+                        disabled={downloadState.status === 'preparing' || downloadState.status === 'downloading'}
                         className={`${QUIET_BTN}${onEditClip ? ' col-span-2' : ''}`}
                     >
-                        <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
-                        {downloadPct === null ? 'download' : `downloading ${downloadPct}%`}
+                        {downloadState.status === 'preparing' || downloadState.status === 'downloading'
+                            ? <Loader2 size={16} className="animate-spin text-brass shrink-0" />
+                            : <Download size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
+                        {downloadState.status === 'preparing'
+                            ? 'preparing…'
+                            : downloadState.status === 'downloading'
+                                ? (downloadState.percent === null
+                                    ? `saving ${formatDownloadSize(downloadState.downloaded)}`
+                                    : `downloading ${downloadState.percent}%`)
+                                : downloadState.status === 'complete' ? 'downloaded' : 'download'}
                     </button>
                 </div>
+
+                {downloadState.status === 'downloading' && (
+                    <div className="mt-3 rounded-input border border-rule bg-paper2 px-3 py-2.5 text-xs" role="status" aria-live="polite">
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-ink2">Saving to Downloads / Clippy</span>
+                            <span className="text-muted tabular-nums">
+                                {downloadState.percent === null
+                                    ? formatDownloadSize(downloadState.downloaded)
+                                    : `${downloadState.percent}%`}
+                            </span>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-paper3">
+                            <div
+                                className={`h-full rounded-full bg-brass transition-all ${downloadState.percent === null ? 'w-1/3 animate-pulse' : ''}`}
+                                style={downloadState.percent === null ? undefined : { width: `${downloadState.percent}%` }}
+                            />
+                        </div>
+                    </div>
+                )}
+
+                {downloadState.status === 'complete' && (
+                    <div className="mt-3 rounded-input border border-rule bg-paper2 px-3 py-2.5 text-xs" role="status" aria-live="polite">
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 text-ok"><Check size={13} /> Download complete</div>
+                                <div className="mt-1 break-all text-muted">{downloadState.path}</div>
+                            </div>
+                            {typeof window.__TAURI__?.core?.invoke === 'function' && (
+                                <button
+                                    onClick={() => window.__TAURI__.core.invoke('reveal_clip_download', { path: downloadState.path })}
+                                    className="inline-flex shrink-0 items-center gap-1.5 text-brass hover:text-ink"
+                                >
+                                    <FolderOpen size={13} /> show in folder
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {downloadState.status === 'error' && (
+                    <div className="mt-3 rounded-input border border-danger/30 bg-paper2 px-3 py-2.5 text-xs text-danger" role="alert">
+                        Download failed: {downloadState.error}
+                    </div>
+                )}
             </div>
 
             {/* Descriptions Modal */}
