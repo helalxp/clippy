@@ -89,7 +89,7 @@ def _catalog_model_dir(model_size: str) -> Path:
     return models_root() / "whisper" / model_size
 
 
-def inspect_whisper_model(model_size: str | None = None) -> dict[str, Any]:
+def inspect_whisper_model() -> dict[str, Any]:
     """Describe the persisted selection and on-disk readiness without loading weights."""
     saved = _read_settings().get("whisper", {})
     if not isinstance(saved, dict):
@@ -100,10 +100,8 @@ def inspect_whisper_model(model_size: str | None = None) -> dict[str, Any]:
         size = "small"
     custom_path = saved.get("model_path")
     source = "local" if custom_path else "catalog"
+    configured = bool(custom_path or saved.get("model_size") in WHISPER_MODELS)
     candidate = Path(str(custom_path)).expanduser() if custom_path else _catalog_model_dir(size)
-    selected = model_size or size
-    if selected not in WHISPER_MODELS:
-        selected = size
 
     try:
         resolved = validate_whisper_model_path(str(candidate))
@@ -119,10 +117,11 @@ def inspect_whisper_model(model_size: str | None = None) -> dict[str, Any]:
         "model_size": size,
         "model_path": resolved_path if source == "local" or installed else None,
         "source": source,
-        "selected": True,
+        "selected": configured,
+        "configured": configured,
         "installed": installed,
         "available": installed,
-        "status": "ready" if installed else "selected_not_downloaded",
+        "status": ("ready" if installed else "selected_not_downloaded") if configured else "not_selected",
         "validation_error": validation_error,
     }
 
