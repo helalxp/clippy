@@ -51,7 +51,7 @@ export default function DesktopRuntimeGate({ children }) {
           </div>
         </div>
         {state.status === 'starting' ? (
-          <p className="text-sm text-muted">Checking and installing Clippy's private runtimes and Python dependencies. The first setup can take several minutes. If Windows requests permission to install a Microsoft runtime, approve it.</p>
+          <p className="text-sm text-muted">Installing Clippy's private runtimes and Python dependencies in the background. The first setup can take several minutes, and the window should remain responsive. Temporary installation files use the drive with the most free space. Detailed progress is saved to <code>%LOCALAPPDATA%\\Clippy\\logs\\runtime-setup.log</code>. If Windows requests permission to install a Microsoft runtime, approve it.</p>
         ) : (
           <>
             <div className="rounded-input border border-rule bg-paper2 p-4 mb-4">
