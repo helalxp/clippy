@@ -22,7 +22,7 @@ if ($bad.Count -gt 0) {
     throw ("Clippy version mismatch. VERSION=" + $canonical + [Environment]::NewLine + $details)
 }
 if ($ExpectedVersion) {
-    $expected = $ExpectedVersion.Trim().TrimStart('v')
+    $expected = $ExpectedVersion.Trim() -replace '^v', ''
     if ($expected -ne $canonical) { throw "Release tag '$expected' does not match VERSION '$canonical'." }
 }
 Write-Host "Clippy version $canonical is synchronized across all manifests." -ForegroundColor Green
