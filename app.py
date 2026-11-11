@@ -2861,6 +2861,8 @@ async def get_local_whisper_model():
             "label": details["label"],
             "description": details["description"],
             "downloaded": downloaded,
+            "selected": selected.get("source") == "catalog" and selected.get("model_size") == key,
+            "status": "ready" if downloaded else "not_downloaded",
         })
     return {
         "selection": selected,
@@ -2891,6 +2893,21 @@ async def select_local_whisper_model(request: Request):
         return {"ok": True, "selection": selection}
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/local-models/whisper/verify")
+async def verify_local_whisper_model():
+    """Load the saved model once on CPU to verify the actual runtime and weights."""
+    from clippy_local_models import verify_whisper_model_load
+
+    try:
+        return verify_whisper_model_load()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        # Surface a useful diagnostic to the settings UI. The exception is
+        # bounded to avoid returning an unbounded native stack trace.
+        raise HTTPException(status_code=422, detail=f"Whisper model verification failed: {str(exc)[:700]}")
 
 
 @app.post("/api/local-models/whisper/download")

@@ -11,8 +11,9 @@ export default function DesktopRuntimeGate({ children }) {
   const invoke = tauri?.core?.invoke;
   const isDesktop = typeof invoke === 'function';
   const [state, setState] = useState({
-    status: isDesktop ? 'starting' : 'ready',
-    stage: 'Preparing your local workspace…',
+    status: isDesktop ? 'checking' : 'ready',
+    phase: 'startup',
+    stage: 'Checking your Clippy installation…',
     error: '',
     logPath: LOG_PATH,
   });
@@ -20,21 +21,55 @@ export default function DesktopRuntimeGate({ children }) {
 
   const start = useCallback(async () => {
     if (!isDesktop) return;
-    setState((current) => ({ ...current, status: 'starting', stage: 'Preparing Clippy…', error: '' }));
+    setState((current) => ({
+      ...current,
+      status: 'checking',
+      phase: 'startup',
+      stage: 'Checking your Clippy installation…',
+      error: '',
+    }));
+
     try {
+      // The payload check is cheap and also applies a bundled app update when
+      // its SHA-256 changes. Runtime validation must happen AFTER this step,
+      // because it validates the requirements shipped in that payload.
       await invoke('install_app_payload');
-      setState((current) => ({ ...current, stage: 'Checking installed components…' }));
-      await invoke('setup_runtime');
-      setState((current) => ({ ...current, stage: 'Validating the runtime manifest…' }));
-      const runtimeStatus = await invoke('check_runtime');
-      if (runtimeStatus?.error) throw new Error(runtimeStatus.error);
-      setState((current) => ({ ...current, stage: 'Starting local services…' }));
+
+      let runtimeStatus = await invoke('check_runtime');
+      if (runtimeStatus?.error) {
+        setState((current) => ({
+          ...current,
+          status: 'starting',
+          phase: 'setup',
+          stage: 'Preparing missing or outdated dependencies…',
+        }));
+        await invoke('setup_runtime');
+        runtimeStatus = await invoke('check_runtime');
+      }
+
+      if (runtimeStatus?.error) {
+        throw new Error(runtimeStatus.error);
+      }
+
+      setState((current) => ({
+        ...current,
+        status: 'starting',
+        phase: 'startup',
+        stage: 'Starting Clippy services…',
+      }));
       await invoke('start_services');
-      setState((current) => ({ ...current, status: 'ready', stage: 'Ready', error: '' }));
+      setState((current) => ({
+        ...current,
+        status: 'ready',
+        phase: 'startup',
+        stage: 'Ready',
+        error: '',
+      }));
     } catch (error) {
       setState((current) => ({
         ...current,
         status: 'setup-required',
+        phase: current.phase === 'startup' ? 'setup' : current.phase,
         stage: 'Clippy could not finish preparing this computer.',
         error: typeof error === 'string' ? error : error?.message || String(error),
       }));
@@ -51,6 +86,7 @@ export default function DesktopRuntimeGate({ children }) {
           const payload = event.payload || {};
           setState((current) => ({
             ...current,
+            phase: 'setup',
             stage: payload.stage || current.stage,
             logPath: payload.logPath || current.logPath,
           }));
@@ -70,6 +106,7 @@ export default function DesktopRuntimeGate({ children }) {
   if (!isDesktop || state.status === 'ready') return children;
 
   const failed = state.status === 'setup-required';
+  const firstRun = state.phase === 'setup';
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#10100f] text-[#f2eee5] flex items-center justify-center p-5 sm:p-8">
@@ -84,10 +121,12 @@ export default function DesktopRuntimeGate({ children }) {
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-amber-300/20 bg-amber-300/10 text-xl font-semibold text-amber-200">C</div>
             <div>
               <div className="text-lg font-semibold tracking-tight">Clippy</div>
-              <div className="text-[10px] uppercase tracking-[0.24em] text-white/35">First-run setup</div>
+              <div className="text-[10px] uppercase tracking-[0.24em] text-white/35">
+                {firstRun ? 'First-run setup' : 'Desktop startup'}
+              </div>
             </div>
             <div className="ml-auto rounded-full border border-white/10 px-3 py-1 text-[10px] uppercase tracking-widest text-white/45">
-              {failed ? 'Action needed' : 'Preparing'}
+              {failed ? 'Action needed' : firstRun ? 'Preparing' : 'Starting'}
             </div>
           </div>
 
@@ -95,10 +134,12 @@ export default function DesktopRuntimeGate({ children }) {
             <div className="mb-3 flex items-center gap-3">
               {!failed && <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-amber-300 shadow-[0_0_18px_rgba(252,211,77,.8)]" />}
               {failed && <span className="h-2.5 w-2.5 rounded-full bg-rose-400" />}
-              <span className="text-xs font-medium uppercase tracking-[0.18em] text-amber-200/80">{failed ? 'Setup paused' : 'Setting up your workspace'}</span>
+              <span className="text-xs font-medium uppercase tracking-[0.18em] text-amber-200/80">
+                {failed ? 'Setup paused' : firstRun ? 'Setting up your workspace' : 'Launching your workspace'}
+              </span>
             </div>
             <h1 className="mb-3 text-2xl font-semibold leading-tight tracking-tight sm:text-3xl">
-              {failed ? 'We need to fix one thing.' : 'Getting Clippy ready.'}
+              {failed ? 'We need to fix one thing.' : firstRun ? 'Getting Clippy ready.' : 'Starting Clippy.'}
             </h1>
             <p className="min-h-12 text-sm leading-6 text-white/55">{state.stage}</p>
           </div>
@@ -108,17 +149,25 @@ export default function DesktopRuntimeGate({ children }) {
               <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
                 <div className="h-full w-1/3 animate-[setup-progress_2.2s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-amber-700 to-amber-200" />
               </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                {['Private runtimes', 'AI dependencies', 'Local services'].map((label, index) => (
-                  <div key={label} className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-2 py-3">
-                    <div className="mb-1 text-[10px] text-amber-200/70">0{index + 1}</div>
-                    <div className="text-[11px] text-white/55">{label}</div>
+              {firstRun ? (
+                <>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    {['Private runtimes', 'AI dependencies', 'Local services'].map((label, index) => (
+                      <div key={label} className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-2 py-3">
+                        <div className="mb-1 text-[10px] text-amber-200/70">0{index + 1}</div>
+                        <div className="text-[11px] text-white/55">{label}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <p className="pt-2 text-xs leading-5 text-white/35">
-                First setup can take several minutes. Clippy is installing in the background, without opening a command window. You can follow the live stage above.
-              </p>
+                  <p className="pt-2 text-xs leading-5 text-white/35">
+                    Clippy is preparing the required runtimes in the background, without opening a command window.
+                  </p>
+                </>
+              ) : (
+                <p className="pt-2 text-xs leading-5 text-white/35">
+                  Your installed components are being checked. No dependency downloads are performed when everything is already valid.
+                </p>
+              )}
             </div>
           ) : (
             <div className="space-y-4">

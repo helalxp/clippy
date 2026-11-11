@@ -9,6 +9,24 @@ use tauri::State;
 use std::process::Command;
 
 #[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if url.len() > 2048 || url.chars().any(|ch| ch.is_control()) {
+        return Err("The external link is invalid.".to_string());
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:")) {
+        return Err("Only HTTP, HTTPS, and mail links can be opened externally.".to_string());
+    }
+
+    // Pass the URL as a process argument, never through cmd.exe or a shell.
+    Command::new("explorer.exe")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the link in your default browser: {error}"))
+}
+
+#[tauri::command]
 fn start_services(state: State<'_, Mutex<Supervisor>>) -> Result<ServiceStatus, String> {
     state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.start()
 }
@@ -250,7 +268,8 @@ pub fn run() {
             service_status,
             check_runtime,
             install_app_payload,
-            setup_runtime
+            setup_runtime,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Clippy desktop application");

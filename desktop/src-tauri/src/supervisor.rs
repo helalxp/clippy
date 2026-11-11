@@ -91,6 +91,16 @@ impl RuntimePaths {
     }
 }
 
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // Child handles do not terminate their processes when dropped. Stop
+        // both local services when the desktop shell exits, otherwise the
+        // next launch can inherit occupied ports and attach to stale services.
+        stop_child(&mut self.renderer);
+        stop_child(&mut self.backend);
+    }
+}
+
 impl Supervisor {
     pub fn start(&mut self) -> Result<ServiceStatus, String> {
         if self.backend.is_some() || self.renderer.is_some() {

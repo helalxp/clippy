@@ -109,7 +109,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const downloadClip = async () => {
         try {
             setDownloadPct(0);
-            const response = await fetch(currentVideoUrl);
+            const response = await apiFetch(currentVideoUrl);
             if (!response.ok) throw new Error('Download failed');
             const total = Number(response.headers.get('content-length')) || 0;
             let blob;
@@ -137,8 +137,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             a.download = `clip-${index + 1}.mp4`;
             document.body.appendChild(a);
             a.click();
-            window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
+            // WebView2 may not begin consuming the object URL until after the
+            // click handler returns. Revoking it synchronously cancels the save.
+            window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
         } catch (err) {
             console.error('Download error:', err);
             window.open(currentVideoUrl, '_blank');
