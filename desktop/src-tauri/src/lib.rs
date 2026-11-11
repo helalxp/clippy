@@ -136,14 +136,20 @@ fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
 
 
 #[tauri::command]
-async fn setup_runtime() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(setup_runtime_blocking)
+async fn setup_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || setup_runtime_blocking(app))
         .await
         .map_err(|e| format!("Runtime setup worker failed: {e}"))?
 }
 
-fn setup_runtime_blocking() -> Result<String, String> {
-    use std::io::Write;
+fn setup_runtime_blocking(app: tauri::AppHandle) -> Result<String, String> {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::Stdio,
+        sync::mpsc,
+        thread,
+    };
+    use tauri::Emitter;
 
     let local = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
@@ -158,37 +164,80 @@ fn setup_runtime_blocking() -> Result<String, String> {
     std::fs::create_dir_all(&log_dir)
         .map_err(|e| format!("Cannot create runtime setup log directory: {e}"))?;
     let log_path = log_dir.join("runtime-setup.log");
-
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&script)
-        .output()
-        .map_err(|e| format!("Could not launch the runtime installer: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
     let mut log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
+        .create(true).append(true).open(&log_path)
         .map_err(|e| format!("Cannot open runtime setup log {}: {e}", log_path.display()))?;
-    writeln!(log, "\n===== Runtime setup invocation =====")
-        .map_err(|e| format!("Cannot write runtime setup log: {e}"))?;
-    log.write_all(stdout.as_bytes())
-        .map_err(|e| format!("Cannot write runtime setup log: {e}"))?;
-    log.write_all(stderr.as_bytes())
+    writeln!(log, "\n===== Clippy in-app runtime setup: {} =====", chrono_free_timestamp())
         .map_err(|e| format!("Cannot write runtime setup log: {e}"))?;
 
-    if !output.status.success() {
-        return Err(format!(
-            "Runtime setup failed ({}).\n{}\n{}\nFull log: {}",
-            output.status,
-            stdout,
-            stderr,
-            log_path.display()
-        ));
+    let mut command = Command::new("powershell.exe");
+    command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    Ok(stdout.into_owned())
+
+    let mut child = command.spawn()
+        .map_err(|e| format!("Could not start the private runtime setup engine: {e}"))?;
+    let stdout = child.stdout.take().ok_or("Could not capture setup output")?;
+    let stderr = child.stderr.take().ok_or("Could not capture setup errors")?;
+    let (tx, rx) = mpsc::channel::<(String, String)>();
+    // ChildStdout and ChildStderr are distinct types, so drain them on
+    // separate reader threads. Both must be drained concurrently to avoid
+    // deadlocking when either pipe fills.
+    let stdout_tx = tx.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if stdout_tx.send(("stdout".to_string(), line)).is_err() { break; }
+        }
+    });
+    let stderr_tx = tx.clone();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().flatten() {
+            if stderr_tx.send(("stderr".to_string(), line)).is_err() { break; }
+        }
+    });
+    drop(tx);
+
+    let mut recent = Vec::new();
+    for (stream_name, line) in rx {
+        let _ = writeln!(log, "[{stream_name}] {line}");
+        let _ = log.flush();
+        if recent.len() >= 80 { recent.remove(0); }
+        recent.push(line.clone());
+        let stage = line.split("[Clippy setup] ").nth(1).unwrap_or(&line).to_string();
+        let _ = app.emit("clippy://runtime-setup-progress", serde_json::json!({
+            "stage": stage,
+            "stream": stream_name,
+            "logPath": log_path.to_string_lossy()
+        }));
+    }
+
+    let status = child.wait().map_err(|e| format!("Could not finish runtime setup: {e}"))?;
+    if !status.success() {
+        let details = recent.join("\n");
+        let _ = app.emit("clippy://runtime-setup-progress", serde_json::json!({
+            "stage": "Setup failed. Open diagnostics for details.",
+            "failed": true,
+            "logPath": log_path.to_string_lossy()
+        }));
+        return Err(format!("Runtime setup failed ({status}).\n{details}\nFull diagnostic log: {}", log_path.display()));
+    }
+    let _ = app.emit("clippy://runtime-setup-progress", serde_json::json!({
+        "stage": "Runtime installation complete. Verifying components…",
+        "complete": true,
+        "logPath": log_path.to_string_lossy()
+    }));
+    Ok(format!("Runtime setup completed. Log: {}", log_path.display()))
+}
+
+fn chrono_free_timestamp() -> String {
+    // Avoid another dependency; the log header is informational.
+    format!("{:?}", std::time::SystemTime::now())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

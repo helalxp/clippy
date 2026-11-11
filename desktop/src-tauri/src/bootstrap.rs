@@ -12,9 +12,19 @@ pub struct BootstrapConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeComponent {
+    pub version: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeManifest {
     pub version: String,
-    pub components: std::collections::HashMap<String, serde_json::Value>,
+    pub schema: u32,
+    pub state: String,
+    pub requirements_sha256: String,
+    pub components: std::collections::HashMap<String, RuntimeComponent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,42 +115,64 @@ impl Bootstrap {
     }
 
     pub fn get_status(&self) -> Result<BootstrapStatus, String> {
-        let mut missing = self.validate_components()?;
-        let manifest_valid = fs::read_to_string(&self.config.manifest_path)
-            .ok()
-            // Accept manifests produced by older PowerShell 5.1 installers too.
-            // New installers write BOM-less UTF-8, but this keeps upgrades compatible.
+        let mut issues = self.validate_components()?;
+        let manifest_path = &self.config.manifest_path;
+        let app_root = manifest_path.parent().unwrap_or_else(|| Path::new(".")).join("app").join("current");
+        let requirements_path = app_root.join("requirements.txt");
+
+        let manifest_result = fs::read_to_string(manifest_path)
+            .map_err(|e| format!("Cannot read runtime manifest at {}: {e}", manifest_path.display()))
             .and_then(|content| {
                 let json = content.trim_start_matches('\u{feff}');
-                serde_json::from_str::<RuntimeManifest>(json).ok()
+                serde_json::from_str::<RuntimeManifest>(json)
+                    .map_err(|e| format!("Runtime manifest JSON is malformed: {e}"))
             })
-            .map(|manifest| {
-                manifest.version == "1.0.0"
-                    && ["python", "node", "ffmpeg"].iter()
-                        .all(|component| manifest.components.contains_key(*component))
-            })
-            .unwrap_or(false);
-        if !manifest_valid {
-            missing.push("Runtime manifest is missing or invalid".to_string());
+            .and_then(|manifest| {
+                if manifest.version != "1.0.0" || manifest.schema != 1 {
+                    return Err(format!("Unsupported runtime manifest version/schema: {}/{}", manifest.version, manifest.schema));
+                }
+                for name in ["python", "node", "ffmpeg"] {
+                    let component = manifest.components.get(name)
+                        .ok_or_else(|| format!("Runtime manifest is missing component '{name}'"))?;
+                    if !component.installed || component.version.trim().is_empty() {
+                        return Err(format!("Runtime manifest component '{name}' is not marked installed"));
+                    }
+                }
+                let requirements = fs::read(&requirements_path)
+                    .map_err(|e| format!("Cannot read bundled requirements at {}: {e}", requirements_path.display()))?;
+                use sha2::{Digest, Sha256};
+                let actual = format!("{:x}", Sha256::digest(&requirements));
+                if actual != manifest.requirements_sha256.to_ascii_lowercase() {
+                    return Err("Runtime manifest requirements hash does not match the installed application payload".to_string());
+                }
+                let expected_state = format!(
+                    "python={};node={};ffmpeg={};requirements={}",
+                    manifest.components["python"].version,
+                    manifest.components["node"].version,
+                    manifest.components["ffmpeg"].version,
+                    actual
+                );
+                if manifest.state != expected_state {
+                    return Err("Runtime manifest state does not match its component versions and requirements hash".to_string());
+                }
+                Ok(())
+            });
+
+        if let Err(error) = manifest_result {
+            issues.push(error);
         }
-        let progress = if missing.is_empty() { 100.0 } else { 0.0 };
 
-        // Detect GPU status
         let gpu_info = self.detect_gpu_status();
-
+        let progress = if issues.is_empty() { 100.0 } else { 0.0 };
         Ok(BootstrapStatus {
             stage: "validation".to_string(),
             progress,
-            message: if missing.is_empty() {
-                "All runtime components are installed and functional.".to_string()
+            message: if issues.is_empty() {
+                "All runtime components and the runtime manifest are valid.".to_string()
             } else {
-                format!("Missing components: {}", missing.join(", "))
+                format!("Runtime validation needs attention: {}", issues.join("; "))
             },
-            error: if missing.is_empty() {
-                None
-            } else {
-                Some(missing.join("; "))
-            },
+            error: if issues.is_empty() { None } else { Some(issues.join("; ")) },
             gpu: gpu_info,
         })
     }
