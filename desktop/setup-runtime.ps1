@@ -121,11 +121,19 @@ $RuntimeFreeBytes = (Get-PSDrive -Name $DriveLetter).Free
 $ScratchFreeBytes = $ScratchDrive.AvailableFreeSpace
 $MinimumRuntimeFreeBytes = 10GB
 $MinimumScratchFreeBytes = 12GB
-if ($RuntimeFreeBytes -lt $MinimumRuntimeFreeBytes) {
-    throw "Clippy needs at least 10 GB free on the runtime drive ($DriveLetter) for installed components. Available: $([math]::Round($RuntimeFreeBytes / 1GB, 1)) GB."
-}
-if ($ScratchFreeBytes -lt $MinimumScratchFreeBytes) {
-    throw "Clippy needs at least 12 GB free on scratch drive $($ScratchDrive.Name) for temporary CUDA/Python installation files. Available: $([math]::Round($ScratchFreeBytes / 1GB, 1)) GB."
+$ScratchDriveLetter = $ScratchDrive.Name.Substring(0, 1)
+if ($ScratchDriveLetter -eq $DriveLetter) {
+    $CombinedMinimumBytes = $MinimumRuntimeFreeBytes + $MinimumScratchFreeBytes
+    if ($RuntimeFreeBytes -lt $CombinedMinimumBytes) {
+        throw "Clippy needs at least 22 GB free on drive $DriveLetter when runtime and temporary files share a drive. Available: $([math]::Round($RuntimeFreeBytes / 1GB, 1)) GB."
+    }
+} else {
+    if ($RuntimeFreeBytes -lt $MinimumRuntimeFreeBytes) {
+        throw "Clippy needs at least 10 GB free on the runtime drive ($DriveLetter) for installed components. Available: $([math]::Round($RuntimeFreeBytes / 1GB, 1)) GB."
+    }
+    if ($ScratchFreeBytes -lt $MinimumScratchFreeBytes) {
+        throw "Clippy needs at least 12 GB free on scratch drive $($ScratchDrive.Name) for temporary CUDA/Python installation files. Available: $([math]::Round($ScratchFreeBytes / 1GB, 1)) GB."
+    }
 }
 
 # Python and native wheels require the Microsoft Visual C++ runtime.
