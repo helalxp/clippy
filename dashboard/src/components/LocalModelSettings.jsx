@@ -147,15 +147,19 @@ export default function LocalModelSettings() {
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-muted">Saved model selection</span>
             <strong className="text-xs text-ink">
-              {data?.selection?.source === 'local'
-                ? 'Custom local model'
-                : (data?.selection?.model_size || 'small').toUpperCase()}
+              {!data?.selection?.selected
+                ? 'No saved selection'
+                : data.selection.source === 'local'
+                  ? 'Custom local model'
+                  : (data.selection.model_size || 'small').toUpperCase()}
             </strong>
           </div>
           <div className="text-xs">
             {data?.selection?.installed
               ? <span className="text-ok">Model files found and structurally valid</span>
-              : <span className="text-warn">Selected, but model weights are not installed yet</span>}
+              : data?.selection?.selected
+                ? <span className="text-warn">Selected, but model weights are not installed yet</span>
+                : <span className="text-muted">No model saved yet. Clippy currently falls back to Small.</span>}
           </div>
           {data?.selection?.source === 'local' && (
             <p className="break-all text-[11px] text-muted">{data.selection.model_path}</p>
