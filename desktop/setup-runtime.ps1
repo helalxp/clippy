@@ -27,16 +27,17 @@ $null = New-Item -ItemType Directory -Path $LogDir -Force
 function Write-Stage([string]$Message) {
     $Line = "[{0}] [Clippy setup] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
     Write-Output $Line
-    try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false))) } catch { }
-}
-
-trap {
-    Write-Stage ("FATAL ERROR: " + $_.Exception.Message)
-    break
+    try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false)) } catch { }
 }
 
 function Download-File([string]$Url, [string]$Destination) {
-    if (Test-Path $Destination) { Remove-Item $Destination -Force }
+    if (Test-Path $Destination) {
+        if ((Get-Item $Destination).Length -gt 0) {
+            Write-Stage "Reusing cached $([IO.Path]::GetFileName($Destination))."
+            return
+        }
+        Remove-Item $Destination -Force
+    }
     Write-Stage "Downloading $([IO.Path]::GetFileName($Destination))..."
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
     if (-not (Test-Path $Destination) -or (Get-Item $Destination).Length -lt 1) {
@@ -182,7 +183,7 @@ if (-not (Test-Path $NodeExe)) {
     if (-not $Line) { throw "Official Node.js checksum file does not contain $NodeArchiveName." }
     $Expected = ($Line -split "\s+")[0]
     Assert-Sha256 $NodeZip $Expected
-    $Extract = Join-Path $Downloads "node-extract"
+    $Extract = Join-Path $ScratchRoot "node-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
     Expand-Archive -Path $NodeZip -DestinationPath $Extract -Force
     $ExtractedRoot = Join-Path $Extract "node-v$NodeVersion-win-x64"
@@ -205,7 +206,7 @@ if (-not (Test-Path $FfmpegExe)) {
     $HashText = Get-Content $FfmpegHashFile -Raw
     if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
     Assert-Sha256 $FfmpegZip $Matches[1]
-    $Extract = Join-Path $Downloads "ffmpeg-extract"
+    $Extract = Join-Path $ScratchRoot "ffmpeg-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
     Expand-Archive -Path $FfmpegZip -DestinationPath $Extract -Force
     $FfmpegBinary = Get-ChildItem $Extract -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
@@ -288,5 +289,6 @@ New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | O
 $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
 # Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
 # serde_json expects plain JSON, so write UTF-8 explicitly without a BOM.
-[System.IO.File]::WriteAllText($ManifestPath, $ManifestJson, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($ManifestPath, $ManifestJson, [System.Text.UTF8Encoding]::new($false))
+try { Remove-Item $ScratchRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 Write-Stage "Runtime setup completed successfully."
