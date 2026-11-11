@@ -124,3 +124,17 @@ def test_verify_whisper_model_load_refuses_uninstalled_catalog_model(tmp_path, m
 
     with pytest.raises(FileNotFoundError, match="selected but its model files"):
         models.verify_whisper_model_load()
+
+
+def test_default_whisper_fallback_is_not_misreported_as_a_saved_selection(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+
+    selection = models.get_whisper_selection()
+
+    assert selection["model_size"] == "small"
+    assert selection["selected"] is False
+    assert selection["configured"] is False
+    assert selection["status"] == "not_selected"
+    # The pipeline retains a safe default, but the UI must not call it a saved choice.
+    assert models.whisper_model_argument() == "small"
