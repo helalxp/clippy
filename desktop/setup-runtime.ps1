@@ -62,6 +62,10 @@ $ScratchDrive = [System.IO.DriveInfo]::GetDrives() |
     Select-Object -First 1
 if (-not $ScratchDrive) { throw "No writable fixed drive is available for setup temporary files." }
 $ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ("ClippySetupTemp-" + $env:USERNAME)
+# Remove leftovers from an interrupted previous run before calculating free space.
+if (Test-Path $ScratchRoot) {
+    Remove-Item $ScratchRoot -Recurse -Force -ErrorAction Stop
+}
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
