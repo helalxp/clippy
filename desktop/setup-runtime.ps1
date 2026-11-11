@@ -9,6 +9,8 @@ $PythonDir = Join-Path $Runtime "python"
 $NodeDir = Join-Path $Runtime "node"
 $FfmpegDir = Join-Path $Runtime "ffmpeg\bin"
 $ManifestPath = Join-Path $Root "runtime-manifest.json"
+$LogDir = Join-Path $Root "logs"
+$SetupLogPath = Join-Path $LogDir "runtime-setup.log"
 
 $PythonVersion = "3.12.10"
 $PythonInstallerUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
@@ -21,8 +23,16 @@ $FfmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$FfmpegArchiveName"
 $FfmpegChecksumUrl = "$FfmpegArchiveUrl.sha256"
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
+$null = New-Item -ItemType Directory -Path $LogDir -Force
 function Write-Stage([string]$Message) {
-    Write-Output "[Clippy setup] $Message"
+    $Line = "[{0}] [Clippy setup] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
+    Write-Output $Line
+    try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false))) } catch { }
+}
+
+trap {
+    Write-Stage ("FATAL ERROR: " + $_.Exception.Message)
+    break
 }
 
 function Download-File([string]$Url, [string]$Destination) {
@@ -42,6 +52,20 @@ function Assert-Sha256([string]$Path, [string]$Expected) {
 }
 
 New-Item -ItemType Directory -Path $Runtime, $Downloads -Force | Out-Null
+
+# Put temporary extraction and package-install files on the roomiest fixed drive.
+# The managed runtime remains under LOCALAPPDATA; only scratch data is redirected.
+$ScratchDrive = [System.IO.DriveInfo]::GetDrives() |
+    Where-Object { $_.IsReady -and $_.DriveType -eq [System.IO.DriveType]::Fixed } |
+    Sort-Object AvailableFreeSpace -Descending |
+    Select-Object -First 1
+if (-not $ScratchDrive) { throw "No writable fixed drive is available for setup temporary files." }
+$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName "ClippySetupTemp"
+New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
+$env:TEMP = $ScratchRoot
+$env:TMP = $ScratchRoot
+$env:PIP_CACHE_DIR = Join-Path $ScratchRoot "pip-cache"
+Write-Stage ("Using " + $ScratchRoot + " for temporary setup files; managed runtimes remain in " + $Root)
 foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
@@ -92,10 +116,15 @@ if (Test-Path $ManifestPath) {
 }
 
 $DriveLetter = [IO.Path]::GetPathRoot($Root).Substring(0, 1)
-$FreeBytes = (Get-PSDrive -Name $DriveLetter).Free
-$MinimumFreeBytes = 8GB
-if ($FreeBytes -lt $MinimumFreeBytes) {
-    throw "Clippy setup needs at least 8 GB free on drive $DriveLetter. Available: $([math]::Round($FreeBytes / 1GB, 1)) GB."
+$RuntimeFreeBytes = (Get-PSDrive -Name $DriveLetter).Free
+$ScratchFreeBytes = $ScratchDrive.AvailableFreeSpace
+$MinimumRuntimeFreeBytes = 10GB
+$MinimumScratchFreeBytes = 12GB
+if ($RuntimeFreeBytes -lt $MinimumRuntimeFreeBytes) {
+    throw "Clippy needs at least 10 GB free on the runtime drive ($DriveLetter) for installed components. Available: $([math]::Round($RuntimeFreeBytes / 1GB, 1)) GB."
+}
+if ($ScratchFreeBytes -lt $MinimumScratchFreeBytes) {
+    throw "Clippy needs at least 12 GB free on scratch drive $($ScratchDrive.Name) for temporary CUDA/Python installation files. Available: $([math]::Round($ScratchFreeBytes / 1GB, 1)) GB."
 }
 
 # Python and native wheels require the Microsoft Visual C++ runtime.
@@ -202,13 +231,13 @@ if ($Nvidia) {
     }
 }
 Write-Stage "Installing pinned PyTorch and application Python dependencies. This can take several minutes."
-& $PythonExe -m pip install --disable-pip-version-check --upgrade pip
+& $PythonExe -m pip install --disable-pip-version-check --no-cache-dir --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "Could not prepare pip in the managed Python runtime." }
-& $PythonExe -m pip install --disable-pip-version-check "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
+& $PythonExe -m pip install --disable-pip-version-check --no-cache-dir "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
 if ($LASTEXITCODE -ne 0 -and $TorchIndex -match "cu126") {
     Write-Stage "CUDA wheel installation failed; falling back to the official CPU PyTorch wheels."
     $TorchIndex = "https://download.pytorch.org/whl/cpu"
-    & $PythonExe -m pip install --disable-pip-version-check "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
+    & $PythonExe -m pip install --disable-pip-version-check --no-cache-dir "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
 }
 if ($LASTEXITCODE -ne 0) { throw "PyTorch installation failed from $TorchIndex." }
 
@@ -216,7 +245,7 @@ $FilteredRequirements = Join-Path $Downloads "requirements-runtime.txt"
 Get-Content (Join-Path $App "requirements.txt") |
     Where-Object { $_ -notmatch "^\s*(torch|torchvision)\s*==" } |
     Set-Content -Path $FilteredRequirements -Encoding ASCII
-& $PythonExe -m pip install --disable-pip-version-check -r $FilteredRequirements
+& $PythonExe -m pip install --disable-pip-version-check --no-cache-dir -r $FilteredRequirements
 if ($LASTEXITCODE -ne 0) { throw "Application Python dependency installation failed." }
 
 Write-Stage "Verifying backend imports..."
@@ -243,7 +272,7 @@ try {
 }
 
 New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | Out-Null
-@{
+@$Manifest = @{
     version = "1.0.0"
     components = @{
         python = @{ version = $PythonVersion; installed = $true }
@@ -255,6 +284,9 @@ New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | O
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
     requirementsSha256 = $RequirementsHash
     gpuMode = if ($TorchIndex -match "cu126") { "cuda126" } else { "cpu" }
-} | ConvertTo-Json -Depth 5 | Set-Content -Path $ManifestPath -Encoding UTF8
-
+}
+$ManifestJson = $Manifest | ConvertTo-Json -Depth 5
+# Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
+# serde_json expects plain JSON, so write UTF-8 explicitly without a BOM.
+[System.IO.File]::WriteAllText($ManifestPath, $ManifestJson, (New-Object System.Text.UTF8Encoding($false)))
 Write-Stage "Runtime setup completed successfully."
