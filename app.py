@@ -4753,6 +4753,9 @@ async def upload_template_asset(template_id: str, request: Request):
     raw_expected_revision = form.get("expected_revision")
     if not hasattr(upload, "read") or not hasattr(upload, "filename"):
         raise HTTPException(status_code=422, detail="A file field is required")
+    uploaded_size = getattr(upload, "size", None)
+    if isinstance(uploaded_size, int) and uploaded_size > max_asset_bytes:
+        raise HTTPException(status_code=413, detail="Template asset exceeds the 20 MB limit")
     if not isinstance(raw_expected_revision, str) or not raw_expected_revision.isdecimal():
         raise HTTPException(status_code=422, detail="expected_revision must be a positive integer")
     expected_revision = int(raw_expected_revision)
@@ -4838,6 +4841,25 @@ async def upload_template_asset(template_id: str, request: Request):
         "asset": asset.model_dump(mode="json"),
         "template_revision": updated.revision,
     }
+
+
+@app.get("/api/templates/{template_id}/assets/{asset_id}")
+async def get_template_asset(template_id: str, asset_id: str, request: Request):
+    """Serve a verified image asset from the current owner's template library."""
+    from template_system.storage import TemplateAssetNotFound, TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        asset, path = await asyncio.to_thread(storage.get_asset, template_id, asset_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateAssetNotFound:
+        raise HTTPException(status_code=404, detail="Template asset not found")
+    return FileResponse(
+        path,
+        media_type=asset.media_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.delete("/api/templates/{template_id}/assets/{asset_id}")
