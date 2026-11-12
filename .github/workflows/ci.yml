@@ -2,10 +2,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/template-reference-system]
   pull_request:
 
 jobs:
+  template-system-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install focused test dependencies
+        run: python -m pip install pytest "pydantic>=2.7,<3"
+      - name: Test template contracts and local storage
+        run: python -m pytest tests/test_template_system_contracts.py tests/test_template_system_storage.py -v
+
   backend-tests:
     runs-on: ubuntu-latest
     steps:
