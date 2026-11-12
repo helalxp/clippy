@@ -79,3 +79,44 @@ jobs:
           } finally {
             Pop-Location
           }
+
+      - name: Measure installer and embedded application payload
+        id: build-size
+        shell: pwsh
+        run: |
+          $installerFiles = @(Get-ChildItem "./desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe")
+          if ($installerFiles.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installerFiles.Count)."
+          }
+          $installer = $installerFiles[0]
+          $payload = Get-Item "./desktop/src-tauri/resources/app-payload.zip"
+          $installerMB = [math]::Round($installer.Length / 1MB, 2)
+          $payloadMB = [math]::Round($payload.Length / 1MB, 2)
+          $installerHash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $report = @(
+            "Clippy Windows build size report"
+            "Commit: $env:GITHUB_SHA"
+            "Version: $((Get-Content ./VERSION -Raw).Trim())"
+            "Installer: $($installer.Name)"
+            "Installer bytes: $($installer.Length)"
+            "Installer MiB: $installerMB"
+            "Installer SHA-256: $installerHash"
+            "Embedded application payload bytes: $($payload.Length)"
+            "Embedded application payload MiB: $payloadMB"
+            "Note: first-run Python, PyTorch, Node, FFmpeg, and Remotion browser downloads are not included in this installer size."
+          )
+          $reportPath = Join-Path $env:RUNNER_TEMP "clippy-build-size-report.txt"
+          $report | Set-Content -LiteralPath $reportPath -Encoding utf8
+          $report | ForEach-Object { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $_ }
+          "report_path=$reportPath" >> $env:GITHUB_OUTPUT
+          Write-Host ($report -join [Environment]::NewLine)
+
+      - name: Retain installer for manual size and smoke testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-windows-installer-${{ github.run_number }}
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            ${{ runner.temp }}/clippy-build-size-report.txt
+          if-no-files-found: error
+          retention-days: 7
