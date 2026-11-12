@@ -179,7 +179,7 @@ def test_adapter_refuses_to_silently_drop_subtitle_streams(tmp_path):
     subtitle = tmp_path / "captions.srt"
     output = tmp_path / "output.mp4"
     subtitle.write_text(
-        "1\\n00:00:00,000 --> 00:00:01,500\\nfixture subtitle\\n",
+        "1\n00:00:00,000 --> 00:00:01,500\nfixture subtitle\n",
         encoding="utf-8",
     )
     command = [
