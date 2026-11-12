@@ -294,11 +294,23 @@ class LocalTemplateStorage:
             self._atomic_write_manifest(template_dir, document)
         return document
 
-    def delete(self, template_id: str) -> None:
+    def delete(
+        self,
+        template_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> None:
+        """Delete a template, optionally requiring the caller's observed revision."""
         template_dir = self._template_dir(template_id)
         with self._root_lock, self._synchronized("_library"), self._synchronized(template_id):
             if not template_dir.exists():
                 raise TemplateNotFound(template_id)
             if template_dir.is_symlink() or not template_dir.is_dir():
                 raise TemplateIntegrityError("refusing to delete an unsafe template path")
+            if expected_revision is not None:
+                current = self._read_document(template_dir)
+                if current.revision != expected_revision:
+                    raise TemplateRevisionConflict(
+                        f"expected revision {expected_revision}, found {current.revision}"
+                    )
             shutil.rmtree(template_dir)
