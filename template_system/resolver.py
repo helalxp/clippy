@@ -75,7 +75,7 @@ def resolve_recipe(
     clip_overrides: Mapping[str, Any] | None = None,
     locks: Mapping[str, Any] | None = None,
 ) -> ResolvedRecipe:
-    """Resolve an immutable effective recipe using documented precedence.
+    """Resolve a validated effective recipe using documented precedence.
 
     Precedence, lowest to highest:
       defaults -> template -> revision -> job -> AI adaptation -> clip overrides
