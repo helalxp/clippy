@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from template_system.analysis import FrameSample
+from template_system.analysis import FrameSample, MediaProbe, ReferenceAnalysisResult
 from template_system.interpretation import (
     InterpretationError,
+    build_template_draft,
     InterpretationClaim,
     InterpretationEvidence,
     TemplateInterpretation,
@@ -22,6 +23,7 @@ from template_system.interpretation import (
     InterpretationSynthesisError,
 )
 from template_system.models import TemplateAsset, TemplateRecipe
+from template_system.storage import LocalTemplateStorage
 
 
 def make_frame(root: Path, name: str, timestamp_ms: int, color=(220, 40, 40)):
@@ -423,3 +425,103 @@ def test_human_review_rejects_naive_timestamp():
             reviewed_by="local-user",
             reviewed_at=datetime(2026, 11, 12),
         )
+
+
+
+def test_build_template_draft_persists_claims_evidence_recipe_and_capabilities(tmp_path):
+    frame_bytes = make_frame(tmp_path, "frame.png", 1250)[0]
+    payload = (tmp_path / "frame.png").read_bytes()
+    sample = FrameSample(
+        timestamp_ms=1250,
+        relative_path="frame_001_0000001250ms.png",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        width=80,
+        height=80,
+    )
+    probe = MediaProbe(
+        source_name="reference.mp4",
+        source_fingerprint="a" * 64,
+        file_size_bytes=500,
+        duration_seconds=3.0,
+        width=1920,
+        height=1080,
+        frame_rate=30.0,
+        pixel_aspect_ratio=1.0,
+        video_codec="h264",
+        pixel_format="yuv420p",
+        has_audio=False,
+        audio_codec=None,
+        audio_channels=None,
+        audio_sample_rate=None,
+        rotation_degrees=0,
+    )
+    analysis_result = ReferenceAnalysisResult(
+        probe=probe,
+        scene_boundaries_seconds=(1.25,),
+        samples=(sample,),
+        coverage={
+            "media_probe": 1.0,
+            "scene_detection": 1.0,
+            "frame_sampling": 1.0,
+            "visual_measurements": 0.0,
+        },
+        limitations=("visual metrics not run in this unit fixture",),
+        status="partial",
+    )
+    interpretation = TemplateInterpretation(
+        provider_id="fake-vision",
+        model_id="fixture",
+        claims=[InterpretationClaim(
+            property_path="captions.enabled",
+            value=True,
+            confidence="high",
+            source="visual_observation",
+            evidence=[InterpretationEvidence(
+                asset_id="reference_frame_001",
+                timestamp_ms=1250,
+            )],
+            rationale="A caption line is visible in the sampled reference frame.",
+        )],
+    )
+
+    draft = build_template_draft(
+        analysis_result,
+        interpretation,
+        TemplateRecipe(),
+        template_id="tpl_drafttest01",
+        name="Reference draft",
+    )
+
+    assert draft.analysis.status == "partial"
+    assert draft.interpretation.claims[0].status == "pending"
+    assert draft.recipe.captions.enabled == TemplateRecipe().captions.enabled
+    assert len(draft.capabilities) == 3
+    claim_evidence = next(
+        item for item in draft.analysis.evidence
+        if item.property_path == "captions.enabled"
+    )
+    assert claim_evidence.asset_id == "reference_frame_001"
+
+    storage = LocalTemplateStorage(tmp_path / "library")
+    storage.create(draft, asset_payloads={"reference_frame_001": payload})
+    persisted = storage.get(draft.id)
+    assert persisted.interpretation.claims[0].status == "pending"
+    assert persisted.capabilities == draft.capabilities
+
+    accepted = review_interpretation_claim(
+        interpretation,
+        "captions.enabled",
+        decision="accepted",
+        reviewed_by="local-user",
+        reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
+    )
+    approved_draft = build_template_draft(
+        analysis_result,
+        accepted,
+        TemplateRecipe(),
+        template_id="tpl_draftapproved1",
+        name="Approved reference draft",
+    )
+    assert approved_draft.recipe.captions.enabled is True
+    assert approved_draft.interpretation.claims[0].reviewed_by == "local-user"
