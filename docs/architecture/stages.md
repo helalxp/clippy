@@ -182,8 +182,8 @@ Verification:
 - [x] Full-backend API integration tests verify clean-source selection, metadata and in-memory updates, provenance persistence, managed-mode storage gate, and cleanup after simulated metadata-write failure.
 
 Implemented in this update:
-- Shared per-job edit serialization now covers background, watermark, subtitle-add, subtitle-remove, and hook routes in addition to the existing rerender, reframe, and template-apply lock scopes.
-- Added focused concurrency tests proving same-job edits serialize, different jobs proceed independently, and form-style endpoints resolve their job ID.
+- Shared per-job edit serialization now covers background, watermark, effects-generation, subtitle-add, subtitle-remove, hook, and translation routes in addition to the existing rerender, reframe, and template-apply lock scopes.
+- Added focused concurrency tests proving same-job edits serialize, different jobs proceed independently, form-style endpoints resolve their job ID, and all seven decorated routes remain registered with the lock wrapper.
 
 Remaining:
 - [ ] Audit any other metadata-mutating routes and add lock coverage where required.
@@ -291,4 +291,4 @@ Acceptance:
 
 ### Stage 5 update: shared edit locking
 
-The background, watermark, subtitle-add, subtitle-remove, and hook endpoints now acquire the same per-job lock used by rerender, reframe, and template application. The lock encloses the complete operation so metadata is read only after acquiring it and derivative generation cannot interleave with another edit to the same job. Different jobs remain concurrent. Focused tests cover same-job serialization, cross-job independence, and form-style endpoint arguments. CI validation is pending for commit `733bec520a7759a5dd92a0d6a194bca4078e8027`.
+The background, watermark, effects-generation, subtitle-add, subtitle-remove, hook, and translation endpoints now acquire the same per-job lock used by rerender, reframe, and template application. The lock encloses the complete operation so metadata is read only after acquiring it and derivative generation cannot interleave with another edit to the same job. Different jobs remain concurrent. Focused tests cover same-job serialization, cross-job independence, form-style endpoint arguments, and route registration for all seven decorated endpoints. CI validation is pending for the code commits `733bec520a7759a5dd92a0d6a194bca4078e8027`.
