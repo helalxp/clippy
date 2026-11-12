@@ -15,6 +15,7 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, ValidationError, model_validator
 
 from .analysis import FrameSample
+from .capabilities import CompatibilityReport, RendererBackend, check_compatibility
 from .models import AdaptationProposal, ContractModel, TemplateAsset, TemplateRecipe
 from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement
@@ -131,6 +132,7 @@ class DraftRecipeSynthesis:
     pending_paths: tuple[str, ...]
     rejected_paths: tuple[str, ...]
     limitations: tuple[str, ...]
+    compatibility_reports: tuple[CompatibilityReport, ...]
 
 
 class InterpretationError(RuntimeError):
@@ -344,6 +346,10 @@ def synthesize_draft_recipe(
         pending_paths=tuple(pending),
         rejected_paths=tuple(rejected),
         limitations=tuple(interpretation.limitations),
+        compatibility_reports=tuple(
+            check_compatibility(recipe, backend)
+            for backend in ("python_ffmpeg", "remotion_preview", "remotion_render")
+        ),
     )
 
 
