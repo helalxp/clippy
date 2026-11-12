@@ -232,11 +232,11 @@ Acceptance:
 | 0. Audit | Complete |
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
 | 2. Local persistence | Complete; focused CI green |
-| 3. Deterministic analysis | In progress; staging, probing, sampling, and evidence conversion implemented |
+| 3. Deterministic analysis | In progress; staging, probing, sampling, visual measurements, evidence conversion, progress/cancellation hooks implemented |
 | 4. Python/FFmpeg adapter | Planned |
 | 5. Remotion parity | Planned |
 | 6. API and UI | Planned |
 | 7. Migration and lifecycle | Planned |
 | 8. Release readiness | Planned |
 
-**Immediate next action:** finish Stage 3 by adding explicit progress/cancellation boundaries, deterministic color/layout/motion measurements, and representative media fixtures that validate the scene/sample pipeline. The focused template CI job now includes analysis tests; the separate full backend job remains red and must be triaged independently. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** validate the full ingest-to-evidence pipeline with representative real-media fixtures, measure scene-boundary and visual-metric quality, and wire the progress/cancellation hooks into an actual analysis job lifecycle. The focused template CI job now includes analysis tests; the separate full backend job remains red and must be triaged independently. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
