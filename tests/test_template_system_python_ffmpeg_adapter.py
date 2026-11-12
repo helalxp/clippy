@@ -267,3 +267,16 @@ def test_manual_crop_anchor_changes_the_visible_source_region(tmp_path):
     right_center = extract_output_frame(right_output).getpixel((180, 320))
     assert left_center[0] > 170 and left_center[2] < 100
     assert right_center[2] > 150 and right_center[0] < 100
+
+
+
+def test_adapter_never_modifies_the_clean_source_file(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "derived.mp4"
+    make_source_video(source)
+    original_bytes = source.read_bytes()
+
+    PythonFFmpegAdapter(timeout_seconds=120).render(source, output, recipe_for())
+
+    assert source.read_bytes() == original_bytes
+    assert output.is_file()
