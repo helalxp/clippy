@@ -20,6 +20,8 @@ from .interpretation import (
     InterpretationError,
     InterpretationEvidence,
     InterpretationSynthesisError,
+    InterpretationFrame,
+    ProviderInterpretationPayload,
     TemplateInterpretation,
     interpret_reference,
     interpretation_to_proposals,
@@ -27,6 +29,7 @@ from .interpretation import (
     synthesize_draft_recipe,
 )
 from .models import TemplateDocument, TemplateRecipe
+from .providers import GeminiProviderError, GeminiVisionInterpreter
 from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_visual_samples
 from .storage import (
@@ -41,11 +44,15 @@ from .storage import (
 __all__ = [
     "FrameSample",
     "FrameVisualMeasurement",
+    "GeminiProviderError",
+    "GeminiVisionInterpreter",
     "DraftRecipeSynthesis",
     "InterpretationClaim",
     "InterpretationError",
     "InterpretationEvidence",
     "InterpretationSynthesisError",
+    "InterpretationFrame",
+    "ProviderInterpretationPayload",
     "LocalTemplateStorage",
     "MediaProbe",
     "ReferenceAnalysisCancelled",
