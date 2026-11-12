@@ -4674,7 +4674,10 @@ async def update_template(
     if not isinstance(raw_document, dict):
         raise HTTPException(status_code=422, detail="template must be an object")
     try:
-        document = TemplateDocument.model_validate(raw_document)
+        document_data = dict(raw_document)
+        document_data["revision"] = expected_revision + 1
+        document_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        document = TemplateDocument.model_validate(document_data)
         if document.id != template_id:
             raise HTTPException(status_code=422, detail="Template id does not match the URL")
         updated = await asyncio.to_thread(
@@ -4696,13 +4699,28 @@ async def update_template(
 @app.delete("/api/templates/{template_id}")
 async def delete_template(template_id: str, request: Request):
     """Delete one template and its owned assets from the current library."""
-    from template_system.storage import TemplateNotFound
+    from template_system.storage import TemplateNotFound, TemplateRevisionConflict
 
     storage = await _template_library_for_request(request)
+    raw_expected_revision = request.query_params.get("expected_revision")
+    if not raw_expected_revision or not raw_expected_revision.isdecimal():
+        raise HTTPException(
+            status_code=422,
+            detail="expected_revision query parameter must be a positive integer",
+        )
+    expected_revision = int(raw_expected_revision)
+    if expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be positive")
     try:
-        await asyncio.to_thread(storage.delete, template_id)
+        await asyncio.to_thread(
+            storage.delete,
+            template_id,
+            expected_revision=expected_revision,
+        )
     except TemplateNotFound:
         raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"success": True, "template_id": template_id}
