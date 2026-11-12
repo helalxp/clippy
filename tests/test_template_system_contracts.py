@@ -84,7 +84,8 @@ def test_recipe_resolution_obeys_documented_precedence():
     assert resolved.recipe.captions.enabled is True
     assert resolved.recipe.captions.font_color == "#FFFF00"
     assert resolved.recipe.captions.font_size_ratio == 0.04
-    assert resolved.adaptation_decisions[0].accepted is True
+    assert resolved.adaptation_decisions[0].accepted is False
+    assert "clip override" in resolved.adaptation_decisions[0].reason
     assert len(resolved.recipe_hash) == 64
 
 
