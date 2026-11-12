@@ -90,6 +90,13 @@ class InterpretationClaim(ContractModel):
         return self
 
 
+class ProviderInterpretationPayload(ContractModel):
+    """Provider response schema without caller-owned provider/model metadata."""
+    summary: str = Field(default="", max_length=1200)
+    claims: list[InterpretationClaim] = Field(default_factory=list, max_length=256)
+    limitations: list[str] = Field(default_factory=list, max_length=100)
+
+
 class TemplateInterpretation(ContractModel):
     interpretation_type: Literal["clippy.template_interpretation"] = Field(
         default="clippy.template_interpretation", alias="schema"
