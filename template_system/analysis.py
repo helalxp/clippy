@@ -13,7 +13,7 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Sequence
@@ -347,6 +347,8 @@ def extract_sample_frames(
         raise ValueError("one to 64 frame timestamps are required")
 
     destination = Path(output_dir).expanduser()
+    if destination.is_symlink():
+        raise ReferenceAnalysisError("frame output directory must not be a symbolic link")
     destination.mkdir(parents=True, exist_ok=True)
     destination = destination.resolve(strict=True)
     if not destination.is_dir():
@@ -431,14 +433,18 @@ def analyze_reference_video(
     )
     samples: list[FrameSample] = []
     sample_failures = 0
+    frame_dir = Path(output_dir).expanduser().resolve()
     for index, timestamp in enumerate(timestamps, start=1):
         try:
             extracted = extract_sample_frames(
-                video_path, [timestamp], output_dir,
+                video_path, [timestamp], frame_dir,
                 ffmpeg_bin=ffmpeg_bin,
             )
             sample = extracted[0]
-            # Give files a stable sequential name independent of the single-frame call.
+            stable_name = f"frame_{index:03d}_{sample.timestamp_ms:010d}ms.png"
+            if sample.relative_path != stable_name:
+                os.replace(frame_dir / sample.relative_path, frame_dir / stable_name)
+                sample = replace(sample, relative_path=stable_name)
             samples.append(sample)
         except ReferenceAnalysisError as exc:
             sample_failures += 1
