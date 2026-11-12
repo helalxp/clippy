@@ -253,6 +253,10 @@ def test_synthesis_applies_only_accepted_or_corrected_claims():
     assert result.accepted_paths == ("captions.enabled",)
     assert result.pending_paths == ("captions.font_size_ratio",)
     assert result.rejected_paths == ("background.mode",)
+    reports = {report.backend: report for report in result.compatibility_reports}
+    assert set(reports) == {"python_ffmpeg", "remotion_preview", "remotion_render"}
+    assert reports["python_ffmpeg"].status == "partial"
+    assert reports["remotion_preview"].status == "partial"
 
 
 def test_resolver_proposals_include_only_accepted_or_corrected_claims():
