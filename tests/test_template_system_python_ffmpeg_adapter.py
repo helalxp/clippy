@@ -171,3 +171,28 @@ def test_adapter_preserves_audio_streams(tmp_path):
     )
 
     assert result.has_audio is True
+
+
+
+def test_adapter_refuses_to_silently_drop_subtitle_streams(tmp_path):
+    source = tmp_path / "source-with-subtitles.mp4"
+    subtitle = tmp_path / "captions.srt"
+    output = tmp_path / "output.mp4"
+    subtitle.write_text(
+        "1\\n00:00:00,000 --> 00:00:01,500\\nfixture subtitle\\n",
+        encoding="utf-8",
+    )
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=2",
+        "-i", str(subtitle), "-map", "0:v:0", "-map", "1:s:0",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:s", "mov_text",
+        "-shortest", str(source),
+    ]
+    built = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert built.returncode == 0, built.stderr
+
+    with pytest.raises(Exception, match="subtitle"):
+        PythonFFmpegAdapter().render(source, output, recipe_for())
+
+    assert not output.exists()
