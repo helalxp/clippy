@@ -29,7 +29,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Not yet implemented
 
-- [~] Local template storage, atomic writes, per-template locking, revision compare-and-swap, and asset integrity verification implemented; storage tests are committed but not yet executed.
+- [~] Local template storage, atomic writes, per-template thread and OS-backed file locks, revision compare-and-swap, and asset integrity verification implemented; storage tests are committed but not yet executed.
 - [ ] Migration of the legacy v1 reference-template manifest.
 - [ ] Reference-video ingest, media probing, temporal sampling, evidence capture, and staged analysis jobs.
 - [ ] Deterministic visual measurements and optional structured vision interpretation.
@@ -49,7 +49,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Recipe resolver | `template_system/resolver.py` | Implemented; focused tests pass |
 | Public exports | `template_system/__init__.py` | Implemented |
 | Contract tests | `tests/test_template_system_contracts.py` | 18/18 passed in user-run focused test |
-| Storage | `template_system/storage.py` | Implemented; 16 tests added, execution pending |
+| Storage | `template_system/storage.py` | Implemented; 18 tests added, execution pending |
 | Analysis | Not implemented | Pending |
 | Python/FFmpeg adapter | Not implemented | Pending |
 | Remotion adapters/parity | Not implemented | Pending |
