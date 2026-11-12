@@ -32,7 +32,7 @@ from .interpretation import (
     review_interpretation_claim,
     synthesize_draft_recipe,
 )
-from .models import TemplateDocument, TemplateRecipe
+from .models import RendererCapabilityFinding, RendererCompatibilityDocument, TemplateDocument, TemplateRecipe
 from .providers import GeminiProviderError, GeminiVisionInterpreter
 from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_visual_samples
