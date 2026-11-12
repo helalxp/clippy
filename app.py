@@ -50,6 +50,14 @@ TEMPLATE_LIBRARY_DIR = os.path.abspath(os.path.expanduser(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "template_library"),
     )
 ))
+try:
+    _template_output_common = os.path.commonpath([
+        TEMPLATE_LIBRARY_DIR, os.path.abspath(OUTPUT_DIR)
+    ])
+except ValueError:
+    _template_output_common = None
+if _template_output_common == os.path.abspath(OUTPUT_DIR):
+    raise RuntimeError("TEMPLATE_LIBRARY_DIR must not be inside OUTPUT_DIR")
 
 # Configuration
 # Default to 1 if not set, but user can set higher for powerful servers
