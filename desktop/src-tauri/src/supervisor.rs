@@ -53,12 +53,10 @@ impl RuntimePaths {
             .unwrap_or_else(|| local.join("Clippy"));
         let app = root.join("app").join("current");
         let runtime = root.join("runtime");
-        let python = env::var_os("CLIPPY_PYTHON_EXE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| runtime.join("python").join("python.exe"));
-        let node = env::var_os("CLIPPY_NODE_EXE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| runtime.join("node").join("node.exe"));
+        // These executable paths are owned by the installation. Do not let
+        // ambient environment overrides redirect Clippy to system Python/Node.
+        let python = runtime.join("python").join("python.exe");
+        let node = runtime.join("node").join("node.exe");
         let ffmpeg = runtime.join("ffmpeg").join("bin");
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
