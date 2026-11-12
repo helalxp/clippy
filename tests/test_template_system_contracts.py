@@ -202,3 +202,17 @@ def test_font_reference_must_point_to_a_font_asset():
                 "captions": {"font_asset_id": "logo"}
             },
         })
+
+
+def test_empty_clip_override_does_not_block_adaptation():
+    resolved = resolve_recipe(
+        adaptations=[{
+            "path": "captions.font_color",
+            "value": "#123456",
+            "reason": "Adapt to source palette",
+        }],
+        clip_overrides={"captions": {}},
+    )
+
+    assert resolved.recipe.captions.font_color == "#123456"
+    assert resolved.adaptation_decisions[0].accepted is True
