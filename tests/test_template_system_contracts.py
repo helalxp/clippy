@@ -184,3 +184,21 @@ def test_requested_feature_is_reported_as_approximate_or_unsupported():
     assert report.status == "incompatible"
     assert {item.feature for item in report.approximate} == {"captions"}
     assert {item.feature for item in report.unsupported} == {"background"}
+
+
+def test_font_reference_must_point_to_a_font_asset():
+    with pytest.raises(ValidationError):
+        TemplateDocument.model_validate({
+            "id": "tpl_12345678",
+            "name": "Wrong font asset",
+            "assets": [{
+                "id": "logo",
+                "path": "assets/logo.png",
+                "media_type": "image/png",
+                "size_bytes": 100,
+                "sha256": "b" * 64,
+            }],
+            "recipe": {
+                "captions": {"font_asset_id": "logo"}
+            },
+        })
