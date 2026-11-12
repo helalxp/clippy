@@ -2,8 +2,8 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system-clean`  
-**Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis and Stage 5 Python/FFmpeg adapter plus local clip-application API are in progress.  
-**Last implementation update:** 2026-11-12 (shared edit-lock code committed; CI validation pending)
+**Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis is implemented with provider-quality gates pending; Stage 5 Python/FFmpeg application and local template-library API are in progress.  
+**Last implementation update:** 2026-11-12 (local template-library CRUD API and lifecycle tests committed; CI validation pending)
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
 
@@ -26,7 +26,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - [x] Conversion of measured results into canonical `TemplateAnalysis`, `TemplateAsset`, and evidence records.
 - [x] Progress callbacks and cancellation checks at safe staging/analysis boundaries.
 - [x] Real FFmpeg/FFprobe integration fixture verifies the full local path from staging through analysis and persistent template assets.
-- [x] Focused template CI: **69 passed, 0 failed** on 2026-11-12.
+- [x] Focused template CI: **115 passed, 0 failed** in run `43304254324` before the latest CRUD API additions.
 
 ### Not yet implemented
 
@@ -36,7 +36,8 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - [x] Shared per-job edit locking covers background, watermark, effects generation, subtitle add/remove, hook, and translation routes; rerender, reframe, template apply, and general edit retain their explicit lock scopes. Concurrency and route-registration tests are committed, pending CI execution.
 - [~] Remaining Python/FFmpeg features include template-driven captions, hooks/titles, overlays, and tracking; these must be implemented and capability-tested individually.
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
-- [~] Local clip-application API exists, but template library CRUD/import/upload APIs, durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
+- [x] Local template-library list/create/read/update/delete APIs with owner-scoped storage and optimistic revision checks. Create currently accepts asset-free templates only.
+- [~] Template asset upload/import, durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
 - [ ] Migration of the legacy v1 reference-template manifest.
 - [ ] Versioned import/export package and complete template lifecycle operations.
 - [ ] Managed/cloud storage. This remains out of scope until tenant isolation and authorization are designed.
@@ -90,17 +91,14 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - Interpretation/review/synthesis tests: 17 passed.
 - Gemini adapter tests: 4 passed with a fake client; no live external request was made.
 - Python/FFmpeg adapter tests: 17 passed, including real cover/contain/background renders, audio preservation, subtitle-stream rejection, pixel-level crop/background checks, cancellation, and clean-source protection.
-- **Total: 109 passed in the focused GitHub Actions job.**
+- **Total: 115 passed in the focused GitHub Actions job** before the latest four CRUD API tests were added.
 - Frontend build job: passed.
 
 ### Full backend suite
 
-The full backend job is not green. The latest full-suite run after adding the local apply API tests reported **1,317 passed, 50 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
+The last completed clean-branch full backend run was GitHub Actions run `43304254324`: **1,323 passed, 50 skipped, 0 failed**. The focused template/API/edit-lock job passed **115 tests**, and the frontend production build passed.
 
-1. `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`: test expects `(20.0, 30.0)`, current result is `(20.0, 25.0)`.
-2. `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`: injected watermark lambda does not accept the `backdrop_type` and `backdrop_color` keyword arguments now passed by `recut.perform_recut`.
-
-These are not failures in the template-specific test job. They remain separate repository cleanup items and are not silently counted as green.
+The four template-library CRUD tests were added after that run in commits `c208028afa3e453efa27eeed09c071dc42ba3b3a` and `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Their CI result has not yet been observed. Do not treat the previous green run as validation of these later changes.
 
 ### Scope boundary
 
@@ -125,7 +123,7 @@ The provider-neutral interpretation contract and optional Gemini vision adapter 
 - remain a proposal until accepted or corrected;
 - never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The latest completed focused suite passed 109 tests. The local apply API and managed-mode storage-gate tests also passed within the full backend run. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter plus a storage-backed application service. The service resolves overrides and locks, applies the supported subset, and returns recipe hash, template revision, source/output fingerprints, compatibility, and adaptation provenance. It is now wired through `POST /api/template/apply`: the route checks job ownership, serializes against rerender/reframe, starts from the clean canonical clip, atomically updates metadata, updates in-memory clip state, and archives the new delivery. End-to-end local API and managed-mode storage-gate tests passed in the full backend run. The library is rooted independently through `TEMPLATE_LIBRARY_DIR` and is rejected if configured inside ephemeral `OUTPUT_DIR`. Managed/cloud application is deliberately disabled until durable per-user storage, tenant isolation, backup, and deletion semantics are approved and implemented. Captions, hooks, overlays, and tracking remain unsupported.
+Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The latest completed focused suite passed 115 tests before the CRUD API tests were added. The local apply API and managed-mode storage-gate tests also passed within the full backend run. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter plus a storage-backed application service. The service resolves overrides and locks, applies the supported subset, and returns recipe hash, template revision, source/output fingerprints, compatibility, and adaptation provenance. It is now wired through `POST /api/template/apply`: the route checks job ownership, serializes against rerender/reframe, starts from the clean canonical clip, atomically updates metadata, updates in-memory clip state, and archives the new delivery. End-to-end local API and managed-mode storage-gate tests passed in the full backend run. The library is rooted independently through `TEMPLATE_LIBRARY_DIR` and is rejected if configured inside ephemeral `OUTPUT_DIR`. Managed/cloud application and library management are deliberately disabled until durable per-user storage, tenant isolation, backup, and deletion semantics are approved and implemented. The local library now exposes list/create/read/update/delete endpoints under `/api/templates`; create currently rejects manifests with assets until a safe upload API is implemented. Captions, hooks, overlays, and tracking remain unsupported by the Python/FFmpeg adapter.
 
 ## 8. Next vertical slice
 
@@ -184,4 +182,20 @@ Clean-branch validation passed in GitHub Actions run `43304254324` on 2026-11-12
 - Frontend production build: **passed**
 - Overall workflow: **passed**
 
-The previous `feature/template-reference-system` branch was 205 commits ahead of main and its tree included desktop-installer files outside this feature. It was left untouched. The isolated clean branch contains the template implementation and its two baseline test fixes in one commit, and is exactly one commit ahead of main at the time of this verification.
+The previous `feature/template-reference-system` branch was 205 commits ahead of main and its tree included desktop-installer files outside this feature. It was left untouched. The clean branch was created directly from main to isolate template work. It has since received implementation, validation-documentation, and local library API commits; compare the branch with main for its current ahead count.
+
+
+## Latest implementation update: local template-library CRUD API
+
+- Added owner-isolated local endpoints: `GET /api/templates`, `POST /api/templates`, `GET /api/templates/{template_id}`, `PUT /api/templates/{template_id}`, and `DELETE /api/templates/{template_id}`.
+- Each request resolves the same hashed owner scope used by template application. Local installations without an account use a dedicated local-installation scope.
+- Filesystem operations run in worker threads; the storage layer retains cross-process locks and atomic manifest writes.
+- Updates require an explicit `expected_revision` and a document revision increment. Stale writes return HTTP 409.
+- Managed mode returns HTTP 503 until durable per-user storage and lifecycle guarantees exist.
+- Create currently accepts asset-free manifests only. Asset-bearing manifests return HTTP 422 rather than creating records whose referenced files do not exist.
+- Added four API tests for CRUD, owner isolation, revision conflicts, asset gating, and managed-mode gating.
+- Implementation commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`.
+- API test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`.
+- CI status for these commits: pending verification. The prior green CI run validates the preceding code tree only.
+
+Next: validate the new API tests in GitHub Actions, then add a bounded asset upload/import API with MIME, size, checksum, opaque-ID, and path validation. After that, connect existing clip transcript and caption-style data to canonical template caption styling without duplicating the current subtitle engine.
