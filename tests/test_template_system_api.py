@@ -182,3 +182,148 @@ def test_template_apply_api_blocks_managed_mode_without_durable_user_storage(mon
 
     assert raised.value.status_code == 503
     assert "durable per-user storage" in raised.value.detail
+
+
+def test_template_library_api_supports_owner_scoped_crud_and_revision_checks(
+    tmp_path, monkeypatch
+):
+    import app as app_module
+    from fastapi import HTTPException
+    from template_system.models import TemplateDocument, TemplateRecipe
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _request_owner_id)
+    request = SimpleNamespace(owner_id="creator-a")
+
+    original = TemplateDocument(
+        id="tpl_library_crud01",
+        name="Initial template",
+        recipe=TemplateRecipe.model_validate({"canvas": {"width": 720}}),
+    )
+    created = asyncio.run(
+        app_module.create_template(original.to_storage_dict(), request)
+    )
+    assert created["template"]["id"] == original.id
+    assert created["template"]["revision"] == 1
+
+    listed = asyncio.run(app_module.list_templates(request))
+    assert [item["id"] for item in listed["templates"]] == [original.id]
+
+    fetched = asyncio.run(app_module.get_template(original.id, request))
+    assert fetched["template"]["name"] == "Initial template"
+
+    changed = original.model_copy(
+        update={
+            "revision": 2,
+            "name": "Updated template",
+            "recipe": TemplateRecipe.model_validate({"canvas": {"width": 900}}),
+        }
+    )
+    updated = asyncio.run(
+        app_module.update_template(
+            original.id,
+            {
+                "expected_revision": 1,
+                "template": changed.to_storage_dict(),
+            },
+            request,
+        )
+    )
+    assert updated["template"]["revision"] == 2
+    assert updated["template"]["name"] == "Updated template"
+    assert updated["template"]["recipe"]["canvas"]["width"] == 900
+
+    with pytest.raises(HTTPException) as stale:
+        asyncio.run(
+            app_module.update_template(
+                original.id,
+                {
+                    "expected_revision": 1,
+                    "template": changed.to_storage_dict(),
+                },
+                request,
+            )
+        )
+    assert stale.value.status_code == 409
+
+    deleted = asyncio.run(app_module.delete_template(original.id, request))
+    assert deleted == {"success": True, "template_id": original.id}
+    with pytest.raises(HTTPException) as missing:
+        asyncio.run(app_module.get_template(original.id, request))
+    assert missing.value.status_code == 404
+
+
+def test_template_library_api_isolates_templates_between_owners(tmp_path, monkeypatch):
+    import app as app_module
+    from fastapi import HTTPException
+    from template_system.models import TemplateDocument
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _request_owner_id)
+
+    document = TemplateDocument(
+        id="tpl_owner_isolation01",
+        name="Private template",
+    )
+    owner_a = SimpleNamespace(owner_id="owner-a")
+    owner_b = SimpleNamespace(owner_id="owner-b")
+    asyncio.run(app_module.create_template(document.to_storage_dict(), owner_a))
+
+    with pytest.raises(HTTPException) as hidden:
+        asyncio.run(app_module.get_template(document.id, owner_b))
+    assert hidden.value.status_code == 404
+    assert asyncio.run(app_module.list_templates(owner_b))["templates"] == []
+
+
+def test_template_library_api_rejects_asset_manifests_until_upload_api_exists(
+    tmp_path, monkeypatch
+):
+    import app as app_module
+    from fastapi import HTTPException
+    from template_system.models import TemplateDocument, TemplateAsset
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _request_owner_id)
+
+    payload = TemplateDocument(
+        id="tpl_asset_gate01",
+        name="Asset-bearing template",
+        assets=[
+            TemplateAsset(
+                id="asset_logo",
+                path="assets/logo.png",
+                media_type="image/png",
+                size_bytes=1,
+                sha256="0" * 64,
+                width=1,
+                height=1,
+            )
+        ],
+    ).to_storage_dict()
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(
+            app_module.create_template(payload, SimpleNamespace(owner_id="owner-a"))
+        )
+    assert rejected.value.status_code == 422
+    assert "asset upload is not available" in rejected.value.detail.lower()
+
+
+def test_template_library_api_is_disabled_in_managed_mode(monkeypatch):
+    import app as app_module
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+    with pytest.raises(HTTPException) as blocked:
+        asyncio.run(app_module.list_templates(SimpleNamespace(owner_id="owner-a")))
+    assert blocked.value.status_code == 503
+
+
+async def _request_owner_id(request):
+    return request.owner_id
