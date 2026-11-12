@@ -132,7 +132,7 @@ def measure_visual_samples(
         luminance = ImageStat.Stat(gray)
         hsv = rgb.convert("HSV")
         saturation = ImageStat.Stat(hsv).mean[1] / 255.0
-        pixels = list(gray.getdata())
+        pixels = gray.tobytes()
         width, height = gray.size
         edge_count = 0
         edge_total = max(1, (width - 1) * (height - 1))
