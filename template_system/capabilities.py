@@ -96,8 +96,15 @@ def registered_capabilities(backend: RendererBackend) -> tuple[FeatureCapability
 
 def _requested_features(recipe: TemplateRecipe) -> set[str]:
     requested = {"canvas"}
-    # Framing is always part of the output decision, including automatic framing.
-    requested.add("framing")
+    # The renderer default is not a template override. Report framing only when
+    # the template asks for behavior beyond the existing centered/automatic path.
+    if (
+        recipe.framing.mode != "auto"
+        or recipe.framing.subject_tracking
+        or recipe.framing.anchor_x != 0.5
+        or recipe.framing.anchor_y != 0.5
+    ):
+        requested.add("framing")
     if recipe.captions.enabled:
         requested.add("captions")
     if recipe.hook.enabled:
