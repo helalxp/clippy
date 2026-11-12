@@ -137,3 +137,18 @@ Only the bounded sampled PNG evidence and deterministic measurements are passed 
 ## 9. Change log
 
 - **2026-11-12:** Restored this tracker and `stages.md` on the online feature branch. Stages 0–3 are evidenced; Stage 4 interpretation and Stage 5 FFmpeg application work are in progress. Focused CI reached 107 passing tests, including real FFmpeg ingest, pixel-level output checks, and stored-template application-service tests. Added source-overwrite regression tests, pending CI. Recorded the two known full-backend baseline failures separately.
+
+
+## Latest implementation update: shared clip-edit serialization
+
+Commit: `733bec520a7759a5dd92a0d6a194bca4078e8027`
+
+- Added a reusable async endpoint decorator that resolves the job identifier from either a request model or form-style keyword argument and acquires the existing per-job edit lock.
+- Applied it to background, watermark, subtitle-add, subtitle-remove, and hook routes.
+- Rerender, reframe, and template application retain their existing explicit lock scopes. They are not decorated, avoiding re-entrant deadlocks.
+- The lock covers each decorated endpoint's complete operation, including metadata reads, derivative generation, and metadata writes. Edits to different jobs remain independent.
+- Added concurrency tests for same-job serialization, cross-job independence, and form-style job ID extraction in `tests/test_template_system_edit_locking.py`.
+
+Verification status: implementation and tests are committed; CI validation is pending. Do not treat this as verified until the focused and full backend workflows complete.
+
+Next: complete CI validation, inspect every remaining metadata-mutating route for lock coverage, then implement caption styling and hook/title template adapters with explicit capability reports and real FFmpeg fixtures. The existing hook endpoint is now race-serialized, but template-driven hook rendering is still unsupported.
