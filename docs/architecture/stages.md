@@ -228,7 +228,7 @@ Deliverables:
 - Apply to one clip or batch, adaptation review, clip overrides, and explicit locks.
 
 Acceptance:
-- [~] Local CRUD API is implemented with owner isolation and optimistic revision checks; latest API tests await CI validation.
+- [x] Local CRUD API is implemented with owner isolation and optimistic revision checks; four lifecycle tests passed in CI run `43309965692`.
 - [ ] UI controls round-trip without losing schema fields.
 - [ ] User can review analysis evidence and limitations.
 - [ ] User can save, duplicate, rename, edit, and apply templates.
@@ -287,7 +287,7 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** validate shared edit-locking in CI and audit remaining metadata-mutating routes. Then implement caption styling and template-driven hook/title adapters with measured capability claims. Keep live Gemini validation opt-in. Focused template CI is green at 109 passed; the full backend run reports 1,317 passed, 50 skipped, and the same two pre-existing failures documented in `implementation.md`. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+**Immediate next action:** add the safe local asset upload/import lifecycle, then connect canonical caption styling to the existing subtitle pipeline and implement hook/title rendering as separately tested adapter capabilities. Keep live Gemini validation opt-in. Latest CI run `43309965692` passed: 119 focused template/API/edit-lock tests, 1,327 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -323,14 +323,14 @@ The backend failures were reproduced on the pre-feature `main` workflow: the sam
 - Duration fallback now consistently uses the five-second minimum range already required by the tests.
 - Recut watermark application no longer passes unsupported background arguments to the watermark function.
 
-The four shared edit-lock tests passed in the backend suite. The dedicated template workflow now also includes API and edit-lock tests, so these important integration checks do not rely solely on the broad backend job. Clean-branch Actions run `43304254324` passed: 115 focused template/API/locking tests, 1,323 backend tests passed with 50 skipped, and frontend build passed.
+The four shared edit-lock tests passed in the backend suite. The dedicated template workflow now also includes API and edit-lock tests, so these important integration checks do not rely solely on the broad backend job. Clean-branch Actions run `43309965692` passed: 119 focused template/API/locking tests, 1,327 backend tests passed with 50 skipped, and frontend build passed.
 
 
 ### Verified acceptance evidence
 
-GitHub Actions run [43304254324](https://github.com/helalxp/clippy/actions/runs/43304254324) passed on `feature/template-reference-system-clean`:
-- Template/API/edit-lock suite: 115 passed.
-- Full backend suite: 1,323 passed, 50 skipped.
+GitHub Actions run [43309965692](https://github.com/helalxp/clippy/actions/runs/43309965692) passed on `feature/template-reference-system-clean`:
+- Template/API/edit-lock suite: 119 passed.
+- Full backend suite: 1,327 passed, 50 skipped.
 - Frontend production build: passed.
 
 The clean branch was created directly from `main` to isolate template work. It has since received implementation, documentation, and local CRUD API commits. The previous feature branch remains untouched because its history contained 205 commits beyond main and included desktop-installer artifacts unrelated to this feature.
@@ -347,4 +347,4 @@ The local API slice now includes:
 
 The same hashed owner scope is used by template application and library CRUD. Updates are server-versioned and deletes require an expected revision, preventing stale clients from overwriting or removing newer work. Managed mode remains blocked. Asset-bearing creates are rejected until the dedicated upload flow can validate content type, size, checksums, opaque IDs, and safe paths.
 
-Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Revision-safety hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, `be791d4746e167a78ab8e7d463282ec26ce19be0`, and `6e49046629eca2b41f4cd5a19aae668536c8758d`. The previous CI run does not cover these additions; acceptance remains provisional until the new tests run successfully.
+Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Revision-safety hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, `be791d4746e167a78ab8e7d463282ec26ce19be0`, and `6e49046629eca2b41f4cd5a19aae668536c8758d`. The latest CI run `43309965692` covers the API and revision-safety additions; the asset upload/import flow remains unimplemented.
