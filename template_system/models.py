@@ -274,6 +274,21 @@ class TemplateAsset(ContractModel):
     media_type: Literal["image/png", "image/webp", "image/jpeg", "font/ttf", "font/otf"]
     size_bytes: int = Field(ge=0, le=250_000_000)
     sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    width: int | None = Field(default=None, ge=1, le=16384)
+    height: int | None = Field(default=None, ge=1, le=16384)
+    source_timestamp_ms: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def media_metadata_consistent(self) -> "TemplateAsset":
+        if self.media_type.startswith("font/") and any(
+            value is not None for value in (self.width, self.height, self.source_timestamp_ms)
+        ):
+            raise ValueError("font assets cannot contain frame dimensions or source timestamps")
+        if (self.width is None) != (self.height is None):
+            raise ValueError("image dimensions must be supplied together")
+        if self.source_timestamp_ms is not None and self.width is None:
+            raise ValueError("timestamped frame assets require image dimensions")
+        return self
 
     @field_validator("path")
     @classmethod
@@ -413,6 +428,17 @@ class TemplateDocument(ContractModel):
             )
         if evidence_assets - asset_ids:
             raise ValueError("analysis or interpretation evidence references an unknown asset")
+        for item in self.analysis.evidence:
+            if item.asset_id and item.source_timestamp_ms is not None:
+                asset = asset_by_id[item.asset_id]
+                if asset.source_timestamp_ms is not None and asset.source_timestamp_ms != item.source_timestamp_ms:
+                    raise ValueError("analysis evidence timestamp does not match its frame asset")
+        if self.interpretation is not None:
+            for claim in self.interpretation.claims:
+                for evidence in claim.evidence:
+                    asset = asset_by_id[evidence.asset_id]
+                    if asset.source_timestamp_ms != evidence.timestamp_ms:
+                        raise ValueError("interpretation evidence timestamp does not match its frame asset")
         backends = [item.backend for item in self.capabilities]
         if len(backends) != len(set(backends)):
             raise ValueError("template renderer capability assessments must be unique")
