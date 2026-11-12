@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import io
 from pathlib import Path
@@ -16,6 +17,7 @@ from template_system.interpretation import (
     interpret_reference,
     interpretation_to_proposals,
     resolve_interpreted_recipe,
+    review_interpretation_claim,
     synthesize_draft_recipe,
     InterpretationSynthesisError,
 )
@@ -217,6 +219,8 @@ def _direct_interpretation():
                 confidence="high",
                 source="human_correction",
                 status="corrected",
+                reviewed_by="local-user",
+                reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
                 evidence=evidence,
                 rationale="User confirmed captions should be enabled.",
             ),
@@ -235,6 +239,8 @@ def _direct_interpretation():
                 confidence="low",
                 source="inference",
                 status="rejected",
+                reviewed_by="local-user",
+                reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
                 evidence=evidence,
                 rationale="This was only a weak background inference.",
             ),
@@ -278,6 +284,8 @@ def test_synthesis_rejects_accepted_values_outside_recipe_ranges():
             confidence="high",
             source="human_correction",
             status="accepted",
+            reviewed_by="local-user",
+            reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
             evidence=evidence,
             rationale="Invalid size supplied by a faulty review client.",
         )],
@@ -329,3 +337,61 @@ def test_reviewed_interpretation_uses_clip_override_and_lock_precedence():
     assert locked.recipe.captions.enabled is True
     assert locked.adaptation_decisions[0].accepted is False
     assert "explicit lock" in locked.adaptation_decisions[0].reason
+
+
+
+def test_human_review_records_reviewer_timestamp_and_correction():
+    evidence = [InterpretationEvidence(asset_id="frame_asset", timestamp_ms=1000)]
+    interpretation = TemplateInterpretation(
+        provider_id="fake",
+        model_id="v1",
+        claims=[InterpretationClaim(
+            property_path="captions.font_size_ratio",
+            value=0.05,
+            confidence="medium",
+            source="visual_observation",
+            evidence=evidence,
+            rationale="The caption text appears moderately large.",
+        )],
+    )
+
+    accepted = review_interpretation_claim(
+        interpretation,
+        "captions.font_size_ratio",
+        decision="accepted",
+        reviewed_by="local-user",
+        reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
+        review_note="Confirmed in the reference.",
+    )
+    assert accepted.claims[0].status == "accepted"
+    assert accepted.claims[0].reviewed_by == "local-user"
+    assert accepted.claims[0].reviewed_at is not None
+
+    corrected = review_interpretation_claim(
+        interpretation,
+        "captions.font_size_ratio",
+        decision="corrected",
+        reviewed_by="local-user",
+        reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
+        corrected_value=0.04,
+        review_note="Adjusted after visual comparison.",
+    )
+    assert corrected.claims[0].source == "human_correction"
+    assert corrected.claims[0].status == "corrected"
+    assert corrected.claims[0].value == 0.04
+    assert interpretation.claims[0].status == "pending"
+
+
+def test_reviewed_claims_require_reviewer_provenance():
+    evidence = [InterpretationEvidence(asset_id="frame_asset", timestamp_ms=1000)]
+
+    with pytest.raises(ValueError, match="reviewer identity and timestamp"):
+        InterpretationClaim(
+            property_path="captions.enabled",
+            value=True,
+            confidence="high",
+            source="visual_observation",
+            status="accepted",
+            evidence=evidence,
+            rationale="Observed in the reference.",
+        )
