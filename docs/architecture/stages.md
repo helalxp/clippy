@@ -179,11 +179,11 @@ Verification:
 - [x] Source path and hard-link aliases cannot be used as the destination.
 - [x] Application-service tests verify stored-template lookup, resolver precedence/locks, recipe hash, and render provenance.
 - [x] Focused template CI: **109 passed, 0 failed**.
-- [x] Full-backend API integration tests verify clean-source selection, metadata and in-memory updates, provenance persistence, and the managed-mode storage gate.
+- [x] Full-backend API integration tests verify clean-source selection, metadata and in-memory updates, provenance persistence, managed-mode storage gate, and cleanup after simulated metadata-write failure.
 
 Remaining:
 - [ ] Extend the shared per-job edit lock to every metadata-mutating clip endpoint and test concurrent edit races.
-- [ ] Add failure-injection tests for API cleanup and metadata-write interruption.
+- [x] Failure-injection test verifies metadata replacement failure preserves the last valid manifest/render and removes only the uncommitted output.
 - [ ] Implement caption styling and hook/title adapters one capability at a time.
 - [ ] Implement overlays only after asset sizing, alpha, and normalized-position semantics are validated.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
