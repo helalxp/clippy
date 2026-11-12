@@ -30,7 +30,12 @@ class GeminiVisionInterpreter:
         client=None,
         api_key: str | None = None,
         model: str | None = None,
+        consent_confirmed: bool = False,
     ):
+        if consent_confirmed is not True:
+            raise GeminiProviderError(
+                "explicit consent is required before sending sampled frames to Google"
+            )
         self.model = model or os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
         if client is not None:
             self.client = client
