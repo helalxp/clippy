@@ -4576,8 +4576,8 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
     if not metadata_files:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    # All clip-edit routes share this lock because they update the same metadata
-    # document. Read the document only after acquiring it.
+    # Serialize with rerender/reframe, which also use this per-job lock and
+    # update the same metadata document. Read metadata only after acquiring it.
     lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
     async with lock:
         metadata_path = metadata_files[0]
