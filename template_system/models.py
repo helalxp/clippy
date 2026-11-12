@@ -19,6 +19,7 @@ class ContractModel(BaseModel):
         extra="forbid",
         frozen=True,
         str_strip_whitespace=True,
+        populate_by_name=True,
     )
 
 
@@ -234,7 +235,7 @@ class TemplateAnalysis(ContractModel):
 
 
 class TemplateDocument(ContractModel):
-    schema: Literal["clippy.template"] = "clippy.template"
+    template_type: Literal["clippy.template"] = Field(default="clippy.template", alias="schema")
     schema_version: Literal[2] = 2
     id: str = Field(pattern=r"^tpl_[A-Za-z0-9_-]{8,64}$")
     revision: int = Field(default=1, ge=1)
