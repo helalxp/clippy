@@ -272,7 +272,14 @@ def probe_media(
         raise ReferenceAnalysisError("ffprobe returned invalid JSON") from exc
 
     streams = payload.get("streams") or []
-    video = next((item for item in streams if item.get("codec_type") == "video"), None)
+    video_streams = [item for item in streams if item.get("codec_type") == "video"]
+    audio_streams = [item for item in streams if item.get("codec_type") == "audio"]
+    other_stream_types = tuple(sorted({
+        str(item.get("codec_type") or "unknown")
+        for item in streams
+        if item.get("codec_type") not in {"video", "audio"}
+    }))
+    video = video_streams[0] if video_streams else None
     if not video:
         raise ReferenceAnalysisError("reference file contains no video stream")
 
@@ -294,7 +301,7 @@ def probe_media(
     if not (1 <= width <= 16384 and 1 <= height <= 16384):
         raise ReferenceAnalysisError("video dimensions are missing or outside supported limits")
 
-    audio = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    audio = audio_streams[0] if audio_streams else None
     rotation = 0
     for side_data in video.get("side_data_list") or []:
         try:
