@@ -338,7 +338,7 @@ def test_analyze_reference_video_preserves_partial_results(tmp_path, monkeypatch
     assert result.coverage["scene_detection"] == 0.0
     assert result.coverage["frame_sampling"] == 0.5
     assert len(result.samples) == 1
-    assert len(result.limitations) == 2
+    assert len(result.limitations) == 3
 
 
 
