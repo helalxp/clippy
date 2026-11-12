@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .models import AnalysisEvidence, TemplateAnalysis, TemplateAsset
 from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_visual_samples
@@ -24,6 +24,10 @@ from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_vis
 
 class ReferenceAnalysisError(RuntimeError):
     """A reference source could not be safely probed or sampled."""
+
+
+class ReferenceAnalysisCancelled(ReferenceAnalysisError):
+    """The caller cancelled reference analysis at a safe stage boundary."""
 
 
 @dataclass(frozen=True)
@@ -497,11 +501,26 @@ def analyze_reference_video(
     scene_threshold: float = 0.35,
     ffprobe_bin: str = "ffprobe",
     ffmpeg_bin: str = "ffmpeg",
+    progress_callback: Callable[[str, float], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ReferenceAnalysisResult:
-    """Run probe → scene analysis → bounded frame sampling, retaining limits."""
+    """Run probe → scene analysis → bounded frame sampling, retaining limits.
+
+    Progress callbacks receive (stage_name, fraction). Cancellation is checked
+    between expensive stages and between individual frame/visual operations.
+    """
+    def report(stage: str, progress: float) -> None:
+        if cancel_check is not None and cancel_check():
+            raise ReferenceAnalysisCancelled("reference analysis was cancelled")
+        if progress_callback is not None:
+            progress_callback(stage, progress)
+
+    report("probing", 0.02)
     probe = probe_media(video_path, ffprobe_bin=ffprobe_bin)
+    report("probed", 0.12)
     limitations: list[str] = []
     scene_ok = True
+    report("scene_detection", 0.16)
     try:
         boundaries = detect_scene_boundaries(
             video_path, probe.duration_seconds,
@@ -512,6 +531,7 @@ def analyze_reference_video(
         scene_ok = False
         limitations.append(f"Scene detection unavailable; uniform sampling used: {exc}")
 
+    report("scene_detection_complete", 0.28)
     timestamps = choose_sample_timestamps(
         probe.duration_seconds, boundaries, max_samples=max_samples
     )
@@ -523,6 +543,7 @@ def analyze_reference_video(
     raw_frame_dir.mkdir(parents=True, exist_ok=True)
     frame_dir = raw_frame_dir.resolve(strict=True)
     for index, timestamp in enumerate(timestamps, start=1):
+        report("frame_sampling", 0.28 + 0.48 * ((index - 1) / len(timestamps)))
         try:
             extracted = extract_sample_frames(
                 video_path, [timestamp], frame_dir,
@@ -537,12 +558,15 @@ def analyze_reference_video(
                 os.replace(frame_dir / sample.relative_path, stable_target)
                 sample = replace(sample, relative_path=stable_name)
             samples.append(sample)
+        except ReferenceAnalysisCancelled:
+            raise
         except ReferenceAnalysisError as exc:
             sample_failures += 1
             limitations.append(f"Frame sample at {timestamp:.3f}s failed: {exc}")
 
     if not samples:
         raise ReferenceAnalysisError("no reference frames could be sampled")
+    report("visual_measurement", 0.82)
     visual_measurements: tuple[FrameVisualMeasurement, ...] = ()
     try:
         visual_measurements = measure_visual_samples(samples, frame_dir)
@@ -559,6 +583,7 @@ def analyze_reference_video(
         if scene_ok and sample_failures == 0 and len(visual_measurements) == len(samples)
         else "partial"
     )
+    report("complete", 1.0)
     return ReferenceAnalysisResult(
         probe=probe,
         scene_boundaries_seconds=tuple(boundaries),
