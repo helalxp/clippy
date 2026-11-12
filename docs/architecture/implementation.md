@@ -87,8 +87,8 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - Visual-measurement tests: 6 passed.
 - Interpretation/review/synthesis tests: 17 passed.
 - Gemini adapter tests: 4 passed with a fake client; no live external request was made.
-- Python/FFmpeg adapter tests: 11 passed, including real cover/contain/background renders, audio preservation, and subtitle-stream rejection.
-- **Total: 101 passed in the focused GitHub Actions job.**
+- Python/FFmpeg adapter tests: 17 passed, including real cover/contain/background renders, audio preservation, subtitle-stream rejection, pixel-level crop/background checks, cancellation, and clean-source protection.
+- **Total: 109 passed in the focused GitHub Actions job.**
 - Frontend build job: passed.
 
 ### Full backend suite
