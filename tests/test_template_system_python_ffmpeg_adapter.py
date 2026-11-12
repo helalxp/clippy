@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from template_system.adapters.python_ffmpeg import (
     PythonFFmpegAdapter,
@@ -196,3 +198,72 @@ def test_adapter_refuses_to_silently_drop_subtitle_streams(tmp_path):
         PythonFFmpegAdapter().render(source, output, recipe_for())
 
     assert not output.exists()
+
+
+
+def extract_output_frame(path: Path):
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", "0.5",
+        "-i", str(path), "-frames:v", "1", "-f", "image2pipe",
+        "-vcodec", "png", "pipe:1",
+    ]
+    result = subprocess.run(command, capture_output=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    return Image.open(io.BytesIO(result.stdout)).convert("RGB")
+
+
+def test_solid_background_and_contain_geometry_match_recipe_pixels(tmp_path):
+    source = tmp_path / "red-source.mp4"
+    output = tmp_path / "solid-background.mp4"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:r=24:d=2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ]
+    built = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert built.returncode == 0, built.stderr
+
+    PythonFFmpegAdapter(timeout_seconds=120).render(
+        source, output, recipe_for("contain", "solid")
+    )
+    frame = extract_output_frame(output)
+
+    corner = frame.getpixel((5, 5))
+    center = frame.getpixel((180, 320))
+    assert all(abs(actual - expected) <= 8 for actual, expected in zip(corner, (17, 34, 51)))
+    assert center[0] > 180 and center[1] < 80 and center[2] < 80
+
+
+def test_manual_crop_anchor_changes_the_visible_source_region(tmp_path):
+    source = tmp_path / "anchored-source.mp4"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i",
+        "color=c=blue:s=320x240:r=24:d=2,drawbox=x=0:y=0:w=120:h=240:color=red:t=fill",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ]
+    built = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert built.returncode == 0, built.stderr
+
+    adapter = PythonFFmpegAdapter(timeout_seconds=120)
+    left_output = tmp_path / "left-anchor.mp4"
+    right_output = tmp_path / "right-anchor.mp4"
+    base = {
+        "canvas": {"width": 360, "height": 640, "fps": 24},
+        "framing": {"mode": "manual", "anchor_y": 0.5},
+    }
+    left_recipe = TemplateRecipe.model_validate({
+        **base,
+        "framing": {**base["framing"], "anchor_x": 0.0},
+    })
+    right_recipe = TemplateRecipe.model_validate({
+        **base,
+        "framing": {**base["framing"], "anchor_x": 1.0},
+    })
+    adapter.render(source, left_output, left_recipe)
+    adapter.render(source, right_output, right_recipe)
+
+    left_center = extract_output_frame(left_output).getpixel((180, 320))
+    right_center = extract_output_frame(right_output).getpixel((180, 320))
+    assert left_center[0] > 170 and left_center[2] < 100
+    assert right_center[2] > 150 and right_center[0] < 100
