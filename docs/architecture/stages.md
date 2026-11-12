@@ -292,3 +292,25 @@ Acceptance:
 ### Stage 5 update: shared edit locking
 
 The background, watermark, effects-generation, subtitle-add, subtitle-remove, hook, and translation endpoints now acquire the same per-job lock used by rerender, reframe, and template application. The lock encloses the complete operation so metadata is read only after acquiring it and derivative generation cannot interleave with another edit to the same job. Different jobs remain concurrent. Focused tests cover same-job serialization, cross-job independence, form-style endpoint arguments, and route registration for all seven decorated endpoints. CI validation is pending for the code commits `733bec520a7759a5dd92a0d6a194bca4078e8027`.
+
+
+## Implementation handoff — 2026-11-12
+
+### Committed in this pass
+
+- Added a shared async per-job edit-lock decorator.
+- Applied it to background, watermark, effects-generation, subtitle-add, subtitle-remove, hook, and translation endpoints.
+- Kept rerender, reframe, template application, and general edit on their existing explicit lock scopes to avoid nested-lock deadlocks.
+- Added tests for same-job serialization, independent-job concurrency, form-style job ID extraction, and route registration coverage.
+- Updated `implementation.md` and this stage tracker to distinguish implemented local application from the still-missing full template library workflow.
+
+### Next work, in order
+
+1. Run focused locking and template tests in CI, then run the full backend suite and record any baseline or newly introduced failures accurately.
+2. Audit remaining lifecycle interactions, especially project restore versus active edit operations, and add a shared lock only if the ownership and concurrency model supports it.
+3. Implement caption styling and template-driven hook/title rendering as separate adapter capabilities with real FFmpeg fixtures, preflight rejection, and deterministic output tests.
+4. Add safe local template library CRUD and asset upload/import APIs so users can create and manage templates without manually writing manifests.
+5. Reconcile browser-preview and final-render Remotion contracts before claiming preview/render parity.
+6. Continue with editor UI, migration/import/export, lifecycle/security review, and release gates.
+
+The branch is not release-ready. Managed/cloud template application remains blocked, the complete library UI/API is not implemented, and CI for the latest locking commits has not yet been confirmed.
