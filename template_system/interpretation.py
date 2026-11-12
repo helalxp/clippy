@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -82,6 +83,23 @@ class InterpretationClaim(ContractModel):
     status: Literal["pending", "accepted", "rejected", "corrected"] = "pending"
     evidence: list[InterpretationEvidence] = Field(min_length=1, max_length=8)
     rationale: str = Field(min_length=1, max_length=500)
+    reviewed_by: str | None = Field(default=None, min_length=1, max_length=128)
+    reviewed_at: datetime | None = None
+    review_note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def review_provenance(self) -> "InterpretationClaim":
+        if self.status == "pending":
+            if self.reviewed_by is not None or self.reviewed_at is not None or self.review_note is not None:
+                raise ValueError("pending claims cannot contain review provenance")
+        else:
+            if not self.reviewed_by or self.reviewed_at is None:
+                raise ValueError("reviewed claims require reviewer identity and timestamp")
+        if self.status == "corrected" and self.source != "human_correction":
+            raise ValueError("corrected claims must use human_correction as their source")
+        if self.source == "human_correction" and self.status != "corrected":
+            raise ValueError("human_correction claims must have corrected status")
+        return self
 
     @model_validator(mode="after")
     def unique_evidence(self) -> "InterpretationClaim":
@@ -91,10 +109,20 @@ class InterpretationClaim(ContractModel):
         return self
 
 
+class ProviderInterpretationClaim(ContractModel):
+    """Model-only claim shape. It deliberately has no review/status fields."""
+    property_path: InterpretationProperty
+    value: ClaimValue
+    confidence: Literal["high", "medium", "low", "uncertain"]
+    source: Literal["visual_observation", "inference"]
+    evidence: list[InterpretationEvidence] = Field(min_length=1, max_length=8)
+    rationale: str = Field(min_length=1, max_length=500)
+
+
 class ProviderInterpretationPayload(ContractModel):
     """Provider response schema without caller-owned provider/model metadata."""
     summary: str = Field(default="", max_length=1200)
-    claims: list[InterpretationClaim] = Field(default_factory=list, max_length=256)
+    claims: list[ProviderInterpretationClaim] = Field(default_factory=list, max_length=256)
     limitations: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -274,7 +302,9 @@ def interpret_reference(
         claim = dict(raw_claim)
         if claim.get("source") not in {"visual_observation", "inference"}:
             raise InterpretationError("provider claims must be observations or inferences")
-        # A model cannot approve, reject, or mark its own claims as human-corrected.
+        # Review metadata is caller-owned and never accepted from a model response.
+        for field_name in ("status", "reviewed_by", "reviewed_at", "review_note"):
+            claim.pop(field_name, None)
         claim["status"] = "pending"
         sanitized_claims.append(claim)
     payload["claims"] = sanitized_claims
@@ -372,3 +402,42 @@ def resolve_interpreted_recipe(
         clip_overrides=clip_overrides,
         locks=locks,
     )
+
+
+_REVIEW_VALUE_UNSET = object()
+
+
+def review_interpretation_claim(
+    interpretation: TemplateInterpretation,
+    property_path: str,
+    *,
+    decision: Literal["accepted", "rejected", "corrected"],
+    reviewed_by: str,
+    reviewed_at: datetime,
+    review_note: str | None = None,
+    corrected_value: Any = _REVIEW_VALUE_UNSET,
+) -> TemplateInterpretation:
+    """Return a new interpretation with an explicit, attributable human decision."""
+    if decision == "corrected" and corrected_value is _REVIEW_VALUE_UNSET:
+        raise ValueError("a corrected claim requires corrected_value")
+    if decision != "corrected" and corrected_value is not _REVIEW_VALUE_UNSET:
+        raise ValueError("corrected_value is only valid for a corrected decision")
+
+    payload = interpretation.model_dump(mode="python", by_alias=True)
+    target = next(
+        (claim for claim in payload["claims"] if claim["property_path"] == property_path),
+        None,
+    )
+    if target is None:
+        raise KeyError(f"interpretation claim not found: {property_path}")
+    if target["status"] != "pending":
+        raise ValueError("only pending claims can receive a review decision")
+
+    target["status"] = decision
+    target["reviewed_by"] = reviewed_by
+    target["reviewed_at"] = reviewed_at
+    target["review_note"] = review_note
+    if decision == "corrected":
+        target["source"] = "human_correction"
+        target["value"] = corrected_value
+    return TemplateInterpretation.model_validate(payload)
