@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from template_system.analysis import ReferenceAnalysisError
+from template_system.analysis import ReferenceAnalysisCancelled, ReferenceAnalysisError
 from template_system.ingest import (
     StagedReference,
     cleanup_staged_reference,
@@ -97,3 +97,28 @@ def test_cleanup_rejects_path_outside_owned_stage(tmp_path):
         cleanup_staged_reference(forged, staging_root)
 
     assert staged.path.exists()
+
+
+
+def test_stage_reference_reports_progress_and_can_be_cancelled(tmp_path):
+    source = tmp_path / "large.mp4"
+    source.write_bytes(b"x" * (2 * 1024 * 1024))
+    staging = tmp_path / "staging"
+    progress = []
+    checks = []
+
+    def cancel_after_first_chunk():
+        checks.append(True)
+        return len(checks) > 1
+
+    with pytest.raises(ReferenceAnalysisCancelled, match="cancelled"):
+        stage_reference_video(
+            source,
+            staging,
+            progress_callback=lambda copied, total: progress.append((copied, total)),
+            cancel_check=cancel_after_first_chunk,
+        )
+
+    assert progress[0] == (0, 2 * 1024 * 1024)
+    assert progress[-1][0] == 1024 * 1024
+    assert list(staging.iterdir()) == []
