@@ -14,6 +14,7 @@ import time
 import zipfile
 import math
 import itertools
+import inspect
 import functools
 import asyncio
 import signal
@@ -4376,6 +4377,28 @@ _FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK"}
 # share metadata.json and the canonical files, so they must not interleave.
 _rerender_locks: Dict[str, asyncio.Lock] = {}
 
+
+def _serialize_job_edit(endpoint):
+    """Serialize metadata-mutating editor routes against the per-job edit lock.
+
+    The lock covers the complete read/modify/render/write operation, not merely
+    the final metadata write. Endpoints that already acquire this lock directly
+    (rerender, reframe, template apply) must not use this decorator.
+    """
+    @functools.wraps(endpoint)
+    async def wrapped(*args, **kwargs):
+        bound = inspect.signature(endpoint).bind_partial(*args, **kwargs)
+        req = bound.arguments.get("req")
+        job_id = getattr(req, "job_id", None) or bound.arguments.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise RuntimeError(
+                f"{endpoint.__name__} must expose a non-empty job_id or req.job_id"
+            )
+        lock = _rerender_locks.setdefault(job_id, asyncio.Lock())
+        async with lock:
+            return await endpoint(*args, **kwargs)
+    return wrapped
+
 # Scene-listing builds write stable preview/thumbnail names per job; serialize
 # them so overlapping editor opens don't tear each other's files.
 _scenes_locks: Dict[str, asyncio.Lock] = {}
@@ -4926,6 +4949,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
 
 
 @app.post("/api/clip/background")
+@_serialize_job_edit
 async def set_clip_background(req: ClipBackgroundRequest, request: Request):
     """Add a selectable background treatment to a generated clip delivery.
 
@@ -5044,6 +5068,7 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
 
 
 @app.post("/api/clip/watermark")
+@_serialize_job_edit
 async def edit_clip_watermark(
     request: Request,
     job_id: str = Form(...),
@@ -5468,6 +5493,7 @@ async def generate_effects_config(
 
 
 @app.post("/api/subtitle")
+@_serialize_job_edit
 async def add_subtitles(req: SubtitleRequest, request: Request):
     if req.preset:
         preset = CAPTION_PRESETS.get(req.preset.strip().lower())
@@ -5699,6 +5725,7 @@ class RemoveSubtitlesRequest(BaseModel):
 
 
 @app.post("/api/subtitle/remove")
+@_serialize_job_edit
 async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     """Point a clip back at its un-captioned original.
 
@@ -5770,6 +5797,7 @@ class HookRequest(BaseModel):
     remove: Optional[bool] = False  # strip the burned hook instead of adding one
 
 @app.post("/api/hook")
+@_serialize_job_edit
 async def add_hook(req: HookRequest, request: Request):
     await require_managed_entitlement(request)
     await _ensure_job_files(req.job_id, request)
