@@ -10,6 +10,8 @@ import pytest
 
 import template_system.analysis as analysis_module
 from template_system.models import TemplateDocument
+from template_system.ingest import cleanup_staged_reference, stage_reference_video
+from template_system.storage import LocalTemplateStorage
 from template_system.analysis import (
     FrameSample,
     FrameVisualMeasurement,
@@ -441,13 +443,20 @@ def test_real_ffmpeg_reference_analysis_pipeline(tmp_path):
     built = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
     assert built.returncode == 0, built.stderr
 
-    result = analysis_module.analyze_reference_video(
-        source,
-        tmp_path / "evidence",
-        max_samples=4,
-        scene_threshold=0.2,
-    )
+    staging_root = tmp_path / "staging"
+    staged = stage_reference_video(source, staging_root)
+    evidence_dir = tmp_path / "evidence"
+    try:
+        result = analysis_module.analyze_reference_video(
+            staged.path,
+            evidence_dir,
+            max_samples=4,
+            scene_threshold=0.2,
+        )
+    finally:
+        cleanup_staged_reference(staged, staging_root)
 
+    assert not staged.path.exists()
     assert result.status == "complete"
     assert result.probe.duration_seconds == pytest.approx(2.0, abs=0.15)
     assert result.probe.width == 320
@@ -458,3 +467,24 @@ def test_real_ffmpeg_reference_analysis_pipeline(tmp_path):
     analysis, assets = result.to_template_parts()
     assert analysis.status == "complete"
     assert len(assets) == len(result.samples)
+
+    document = TemplateDocument.model_validate({
+        "id": "tpl_realffmpeg01",
+        "name": "Real FFmpeg fixture",
+        "origin": {
+            "kind": "reference_video",
+            "source_name": staged.original_name,
+            "source_fingerprint": f"sha256:{staged.sha256}",
+        },
+        "analysis": analysis.model_dump(),
+        "assets": [asset.model_dump() for asset in assets],
+    })
+    storage = LocalTemplateStorage(tmp_path / "template-library")
+    payloads = {
+        asset.id: (evidence_dir / asset.path).read_bytes()
+        for asset in assets
+    }
+    storage.create(document, asset_payloads=payloads)
+    persisted = storage.get(document.id)
+    assert persisted.analysis.status == "complete"
+    assert len(persisted.assets) == len(result.samples)
