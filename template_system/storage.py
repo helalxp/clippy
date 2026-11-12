@@ -13,10 +13,11 @@ import shutil
 import tempfile
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
-from .models import TemplateDocument
+from .models import TemplateAsset, TemplateDocument
 
 _TEMPLATE_ID = re.compile(r"^tpl_[A-Za-z0-9_-]{8,64}$")
 _MANIFEST_NAME = "manifest.json"
@@ -39,6 +40,14 @@ class TemplateRevisionConflict(TemplateStorageError):
 
 
 class TemplateIntegrityError(TemplateStorageError):
+    pass
+
+
+class TemplateAssetNotFound(TemplateStorageError):
+    pass
+
+
+class TemplateAssetInUse(TemplateStorageError):
     pass
 
 
@@ -293,6 +302,122 @@ class LocalTemplateStorage:
             self._verify_assets(template_dir, document)
             self._atomic_write_manifest(template_dir, document)
         return document
+
+    def add_asset(
+        self,
+        template_id: str,
+        asset: TemplateAsset,
+        payload: bytes,
+        *,
+        expected_revision: int,
+    ) -> TemplateDocument:
+        """Add one validated asset and advance the template revision atomically."""
+        if not isinstance(payload, bytes):
+            raise TypeError("template asset payload must be bytes")
+        if len(payload) != asset.size_bytes:
+            raise TemplateIntegrityError("template asset size does not match manifest")
+        if hashlib.sha256(payload).hexdigest().lower() != asset.sha256.lower():
+            raise TemplateIntegrityError("template asset checksum does not match manifest")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("expected_revision must be a positive integer")
+
+        template_dir = self._template_dir(template_id)
+        with self._root_lock, self._synchronized("_library"), self._synchronized(template_id):
+            if not template_dir.is_dir():
+                raise TemplateNotFound(template_id)
+            current = self._read_document(template_dir)
+            if current.revision != expected_revision:
+                raise TemplateRevisionConflict(
+                    f"expected revision {expected_revision}, found {current.revision}"
+                )
+            if any(existing.id == asset.id for existing in current.assets):
+                raise TemplateIntegrityError("template asset id already exists")
+            if any(existing.path == asset.path for existing in current.assets):
+                raise TemplateIntegrityError("template asset path already exists")
+
+            target = self._asset_path(template_dir, asset.path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self._assert_no_symlink_components(template_dir, target)
+            try:
+                with target.open("xb") as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+
+                updated_data = current.model_dump(mode="python", by_alias=True)
+                updated_data["assets"] = [*current.assets, asset]
+                updated_data["revision"] = current.revision + 1
+                updated_data["updated_at"] = datetime.now(timezone.utc)
+                updated = TemplateDocument.model_validate(updated_data)
+                self._atomic_write_manifest(template_dir, updated)
+            except Exception:
+                target.unlink(missing_ok=True)
+                raise
+            return updated
+
+    def remove_asset(
+        self,
+        template_id: str,
+        asset_id: str,
+        *,
+        expected_revision: int,
+    ) -> TemplateDocument:
+        """Remove an unreferenced asset and advance the template revision."""
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("expected_revision must be a positive integer")
+        template_dir = self._template_dir(template_id)
+        with self._root_lock, self._synchronized("_library"), self._synchronized(template_id):
+            if not template_dir.is_dir():
+                raise TemplateNotFound(template_id)
+            current = self._read_document(template_dir)
+            if current.revision != expected_revision:
+                raise TemplateRevisionConflict(
+                    f"expected revision {expected_revision}, found {current.revision}"
+                )
+            asset = next((item for item in current.assets if item.id == asset_id), None)
+            if asset is None:
+                raise TemplateAssetNotFound(asset_id)
+
+            referenced_ids = {
+                item.asset_id for item in current.recipe.overlays if item.asset_id
+            }
+            referenced_ids.update(
+                item for item in (
+                    current.recipe.captions.font_asset_id,
+                    current.recipe.hook.font_asset_id,
+                ) if item
+            )
+            referenced_ids.update(
+                item.asset_id for item in current.analysis.evidence if item.asset_id
+            )
+            if current.interpretation is not None:
+                referenced_ids.update(
+                    evidence.asset_id
+                    for claim in current.interpretation.claims
+                    for evidence in claim.evidence
+                )
+            if asset_id in referenced_ids:
+                raise TemplateAssetInUse(
+                    "asset is referenced by the recipe or template evidence"
+                )
+
+            updated_data = current.model_dump(mode="python", by_alias=True)
+            updated_data["assets"] = [
+                item for item in current.assets if item.id != asset_id
+            ]
+            updated_data["revision"] = current.revision + 1
+            updated_data["updated_at"] = datetime.now(timezone.utc)
+            updated = TemplateDocument.model_validate(updated_data)
+            self._atomic_write_manifest(template_dir, updated)
+
+            # The manifest no longer references this file. A failed unlink leaves
+            # only an orphaned file, never a manifest that points at missing bytes.
+            asset_path = self._asset_path(template_dir, asset.path)
+            try:
+                asset_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return updated
 
     def delete(
         self,
