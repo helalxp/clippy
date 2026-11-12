@@ -13,7 +13,9 @@ from template_system.adapters.python_ffmpeg import (
     RenderCancelledError,
     RendererCompatibilityError,
 )
-from template_system.models import TemplateRecipe
+from template_system.models import TemplateDocument, TemplateRecipe
+from template_system.service import TemplateApplicationService
+from template_system.storage import LocalTemplateStorage
 
 
 pytestmark = pytest.mark.skipif(
@@ -304,3 +306,55 @@ def test_adapter_can_cancel_an_active_ffmpeg_process(tmp_path):
     assert len(checks) > 1
     assert not output.exists()
     assert list(tmp_path.glob(".*.tmp.mp4")) == []
+
+
+
+def test_application_service_loads_template_resolves_and_returns_provenance(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "applied.mp4"
+    make_source_video(source)
+    storage = LocalTemplateStorage(tmp_path / "template-library")
+    template = TemplateDocument(
+        id="tpl_applyservice01",
+        name="Application service fixture",
+        recipe=recipe_for("contain", "blur"),
+    )
+    storage.create(template)
+    service = TemplateApplicationService(storage)
+
+    result = service.apply(
+        template.id,
+        source,
+        output,
+        job_overrides={"canvas": {"width": 400}},
+        clip_overrides={"canvas": {"width": 420}},
+        locks={"canvas.width": 360},
+    )
+
+    assert output.is_file()
+    assert result.template_id == template.id
+    assert result.template_revision == 1
+    assert len(result.recipe_hash) == 64
+    assert result.render.width == 360
+    assert result.locked_paths == ("canvas.width",)
+    serialized = result.to_dict()
+    assert serialized["template_id"] == template.id
+    assert serialized["output_fingerprint"] == result.render.output_fingerprint
+
+
+def test_application_service_refuses_template_with_unsupported_features(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "should-not-exist.mp4"
+    make_source_video(source)
+    storage = LocalTemplateStorage(tmp_path / "template-library")
+    template = TemplateDocument(
+        id="tpl_unsupported01",
+        name="Unsupported template",
+        recipe=TemplateRecipe.model_validate({"captions": {"enabled": True}}),
+    )
+    storage.create(template)
+
+    with pytest.raises(RendererCompatibilityError):
+        TemplateApplicationService(storage).apply(template.id, source, output)
+
+    assert not output.exists()
