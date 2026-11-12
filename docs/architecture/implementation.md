@@ -190,12 +190,14 @@ The previous `feature/template-reference-system` branch was 205 commits ahead of
 - Added owner-isolated local endpoints: `GET /api/templates`, `POST /api/templates`, `GET /api/templates/{template_id}`, `PUT /api/templates/{template_id}`, and `DELETE /api/templates/{template_id}`.
 - Each request resolves the same hashed owner scope used by template application. Local installations without an account use a dedicated local-installation scope.
 - Filesystem operations run in worker threads; the storage layer retains cross-process locks and atomic manifest writes.
-- Updates require an explicit `expected_revision` and a document revision increment. Stale writes return HTTP 409.
+- Updates require an explicit `expected_revision`; the server increments the revision and timestamp. Deletes also require the caller's observed `expected_revision`. Stale updates or deletes return HTTP 409.
 - Managed mode returns HTTP 503 until durable per-user storage and lifecycle guarantees exist.
 - Create currently accepts asset-free manifests only. Asset-bearing manifests return HTTP 422 rather than creating records whose referenced files do not exist.
 - Added four API tests for CRUD, owner isolation, revision conflicts, asset gating, and managed-mode gating.
-- Implementation commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`.
-- API test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`.
+- Initial API implementation: `c208028afa3e453efa27eeed09c071dc42ba3b3a`.
+- CRUD API tests: `ab80b3a82810fb50bc4dec397cc462a7beb39073`.
+- Revision-safe update/delete hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, and `be791d4746e167a78ab8e7d463282ec26ce19be0`.
+- Timestamp assertion hardening: `6e49046629eca2b41f4cd5a19aae668536c8758d`.
 - CI status for these commits: pending verification. The prior green CI run validates the preceding code tree only.
 
 Next: validate the new API tests in GitHub Actions, then add a bounded asset upload/import API with MIME, size, checksum, opaque-ID, and path validation. After that, connect existing clip transcript and caption-style data to canonical template caption styling without duplicating the current subtitle engine.
