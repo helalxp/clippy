@@ -234,7 +234,14 @@ def test_template_library_api_supports_owner_scoped_crud_and_revision_checks(
     assert updated["template"]["revision"] == 2
     assert updated["template"]["name"] == "Updated template"
     assert updated["template"]["recipe"]["canvas"]["width"] == 900
-    assert updated["template"]["updated_at"] > created["template"]["updated_at"]
+    from datetime import datetime
+
+    def parse_timestamp(value):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    assert parse_timestamp(updated["template"]["updated_at"]) > parse_timestamp(
+        created["template"]["updated_at"]
+    )
 
     with pytest.raises(HTTPException) as stale:
         asyncio.run(
