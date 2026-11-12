@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
+import template_system.analysis as analysis_module
 from template_system.analysis import (
+    FrameSample,
+    MediaProbe,
     ReferenceAnalysisError,
     choose_sample_timestamps,
     detect_scene_boundaries,
@@ -226,3 +229,93 @@ def test_extract_sample_frames_refuses_to_overwrite_existing_evidence(tmp_path, 
 
     with pytest.raises(ReferenceAnalysisError, match="already exists"):
         extract_sample_frames(source, [1.0], output)
+
+
+
+def _fake_probe():
+    return MediaProbe(
+        source_name="reference.mp4",
+        source_fingerprint="a" * 64,
+        file_size_bytes=100,
+        duration_seconds=10.0,
+        width=1920,
+        height=1080,
+        frame_rate=30.0,
+        pixel_aspect_ratio=1.0,
+        video_codec="h264",
+        pixel_format="yuv420p",
+        has_audio=False,
+        audio_codec=None,
+        audio_channels=None,
+        audio_sample_rate=None,
+        rotation_degrees=0,
+    )
+
+
+def test_analyze_reference_video_returns_evidence_and_coverage(tmp_path, monkeypatch):
+    monkeypatch.setattr(analysis_module, "probe_media", lambda *args, **kwargs: _fake_probe())
+    monkeypatch.setattr(analysis_module, "detect_scene_boundaries", lambda *args, **kwargs: [5.0])
+    monkeypatch.setattr(analysis_module, "choose_sample_timestamps", lambda *args, **kwargs: [2.5, 7.5])
+
+    def fake_extract(video_path, timestamps, output_dir, **kwargs):
+        timestamp = int(timestamps[0] * 1000)
+        filename = f"frame_001_{timestamp:010d}ms.png"
+        (Path(output_dir) / filename).write_bytes(_png())
+        return (FrameSample(
+            timestamp_ms=timestamp,
+            relative_path=filename,
+            sha256=hashlib.sha256(_png()).hexdigest(),
+            size_bytes=len(_png()),
+            width=320,
+            height=180,
+        ),)
+
+    monkeypatch.setattr(analysis_module, "extract_sample_frames", fake_extract)
+    result = analysis_module.analyze_reference_video("unused.mp4", tmp_path / "frames")
+
+    assert result.status == "complete"
+    assert result.coverage == {
+        "media_probe": 1.0,
+        "scene_detection": 1.0,
+        "frame_sampling": 1.0,
+    }
+    assert [sample.relative_path for sample in result.samples] == [
+        "frame_001_0000002500ms.png",
+        "frame_002_0000007500ms.png",
+    ]
+
+
+def test_analyze_reference_video_preserves_partial_results(tmp_path, monkeypatch):
+    monkeypatch.setattr(analysis_module, "probe_media", lambda *args, **kwargs: _fake_probe())
+
+    def scene_failure(*args, **kwargs):
+        raise ReferenceAnalysisError("scene detector unavailable")
+
+    monkeypatch.setattr(analysis_module, "detect_scene_boundaries", scene_failure)
+    monkeypatch.setattr(analysis_module, "choose_sample_timestamps", lambda *args, **kwargs: [2.5, 7.5])
+    calls = []
+
+    def fake_extract(video_path, timestamps, output_dir, **kwargs):
+        calls.append(timestamps[0])
+        if len(calls) == 2:
+            raise ReferenceAnalysisError("decode failed")
+        timestamp = int(timestamps[0] * 1000)
+        filename = f"frame_001_{timestamp:010d}ms.png"
+        (Path(output_dir) / filename).write_bytes(_png())
+        return (FrameSample(
+            timestamp_ms=timestamp,
+            relative_path=filename,
+            sha256=hashlib.sha256(_png()).hexdigest(),
+            size_bytes=len(_png()),
+            width=320,
+            height=180,
+        ),)
+
+    monkeypatch.setattr(analysis_module, "extract_sample_frames", fake_extract)
+    result = analysis_module.analyze_reference_video("unused.mp4", tmp_path / "frames")
+
+    assert result.status == "partial"
+    assert result.coverage["scene_detection"] == 0.0
+    assert result.coverage["frame_sampling"] == 0.5
+    assert len(result.samples) == 1
+    assert len(result.limitations) == 2
