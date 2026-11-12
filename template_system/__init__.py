@@ -23,6 +23,7 @@ from .interpretation import (
     TemplateInterpretation,
     interpret_reference,
     interpretation_to_proposals,
+    resolve_interpreted_recipe,
     synthesize_draft_recipe,
 )
 from .models import TemplateDocument, TemplateRecipe
@@ -70,6 +71,7 @@ __all__ = [
     "measure_visual_samples",
     "interpret_reference",
     "interpretation_to_proposals",
+    "resolve_interpreted_recipe",
     "synthesize_draft_recipe",
     "probe_media",
     "registered_capabilities",
