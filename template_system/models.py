@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr, field_validator, model_validator
 
 
 class ContractModel(BaseModel):
@@ -42,10 +42,7 @@ InterpretationProperty = Literal[
     "background.mode", "background.color", "background.blur_radius_ratio",
     "rhythm.pace", "rhythm.target_shot_seconds", "rhythm.target_cuts_per_minute",
 ]
-ClaimValue = Annotated[
-    str | int | float | bool | None,
-    Field(strict=True),
-]
+ClaimValue = StrictStr | StrictInt | StrictFloat | StrictBool | None
 
 
 class InterpretationEvidence(ContractModel):
