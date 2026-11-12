@@ -4613,13 +4613,18 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
             f"template_{int(time.time())}_{uuid.uuid4().hex[:10]}_{clean_name}"
         )
         output_path = os.path.join(output_dir, output_name)
-        duration_seconds = float((clips[req.clip_index] or {}).get("duration") or 0)
+        clip_segments, _ = _clip_recipe_parts(clips[req.clip_index])
+        duration_seconds = sum(
+            max(0.0, float(segment.get("end", 0)) - float(segment.get("start", 0)))
+            for segment in clip_segments
+        )
         render_minutes = max(1, math.ceil(duration_seconds / 60.0)) if BILLING_ENABLED else 0
         reservation_id = await reserve_managed_action(
             request, render_minutes, req.job_id, "template_apply"
         ) if BILLING_ENABLED else None
         rendered = None
         served_name = None
+        metadata_committed = False
         try:
             storage = LocalTemplateStorage(template_root)
             service = TemplateApplicationService(storage)
@@ -4660,6 +4665,7 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
                     stream.flush()
                     os.fsync(stream.fileno())
                 os.replace(temporary_metadata, metadata_path)
+                metadata_committed = True
             finally:
                 if os.path.exists(temporary_metadata):
                     os.remove(temporary_metadata)
@@ -4680,9 +4686,9 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
         except HTTPException:
             if reservation_id:
                 await _metering.release_reservation(reservation_id)
-            if rendered is not None:
+            if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
-            if served_name and served_name != output_name:
+            if not metadata_committed and served_name and served_name != output_name:
                 try:
                     os.remove(os.path.join(output_dir, served_name))
                 except FileNotFoundError:
@@ -4691,7 +4697,7 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
         except TemplateNotFound:
             if reservation_id:
                 await _metering.release_reservation(reservation_id)
-            if rendered is not None:
+            if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
             raise HTTPException(status_code=404, detail="Template not found")
         except RendererCompatibilityError as exc:
@@ -4701,15 +4707,15 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
         except RenderAdapterError as exc:
             if reservation_id:
                 await _metering.release_reservation(reservation_id)
-            if rendered is not None:
+            if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail=str(exc))
         except Exception as exc:
             if reservation_id:
                 await _metering.release_reservation(reservation_id)
-            if rendered is not None:
+            if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
-            if served_name and served_name != output_name:
+            if not metadata_committed and served_name and served_name != output_name:
                 try:
                     os.remove(os.path.join(output_dir, served_name))
                 except FileNotFoundError:
