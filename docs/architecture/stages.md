@@ -84,7 +84,7 @@ Acceptance:
 
 ## Stage 3 — Reference ingest and deterministic analysis
 
-**Status: NEXT / NOT STARTED.**
+**Status: IN PROGRESS — deterministic probe/sampling foundation implemented; ingest orchestration and visual measurements remain.**
 
 Objective: turn a local reference video into a traceable analysis record without pretending unmeasured properties were detected.
 
@@ -99,9 +99,10 @@ Deliverables:
 
 Acceptance:
 - [ ] Invalid or unsupported media fails with actionable errors.
-- [ ] Sampling is bounded by configured frame count, resolution, and duration.
-- [ ] Every measured property records its method and source evidence.
-- [ ] Partial failure preserves completed analysis stages.
+- [x] Sampling count (max 64), frame dimensions, frame bytes, source size, source duration, scene-cut count, and subprocess timeouts are bounded.
+- [x] Sampled frames carry source timestamps, relative paths, dimensions, byte sizes, and checksums.
+- [ ] Convert probe/sample records into canonical TemplateAnalysis evidence and TemplateAsset records.
+- [x] Scene-detection or individual frame-sampling failures produce partial results and preserve successful evidence.
 - [ ] Unmeasured properties remain unknown, not fabricated.
 - [ ] No external model receives media unless the user has explicitly opted into that analysis path.
 
@@ -231,11 +232,11 @@ Acceptance:
 | 0. Audit | Complete |
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
 | 2. Local persistence | Complete; focused CI green |
-| 3. Deterministic analysis | Planned |
+| 3. Deterministic analysis | In progress; probe/sampling foundation implemented |
 | 4. Python/FFmpeg adapter | Planned |
 | 5. Remotion parity | Planned |
 | 6. API and UI | Planned |
 | 7. Migration and lifecycle | Planned |
 | 8. Release readiness | Planned |
 
-**Immediate next action:** implement Stage 3 deterministic media probing, bounded scene-aware frame sampling, and evidence capture. The focused Stage 1+2 CI job is green; the separate full backend job remains red and must be triaged without conflating its failures with the template-specific result. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** finish Stage 3 by integrating evidence with the canonical template document and adding transactional staged ingest/cancellation plus deterministic visual measurements. The focused template CI job now includes analysis tests; the separate full backend job remains red and must be triaged independently. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
