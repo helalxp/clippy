@@ -273,10 +273,10 @@ Acceptance:
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
 | 2. Local persistence | Complete; focused CI green |
 | 3. Deterministic analysis | Complete; 69 focused tests pass, including real FFmpeg ingest-to-persisted-template fixture |
-| 4. Structured interpretation and synthesis | In progress; strict claims, consent-gated Gemini adapter, human review, persistent draft assembly, and capability reports implemented |\n| 5. Python/FFmpeg adapter | Planned |
+| 4. Structured interpretation and synthesis | In progress; strict claims, consent-gated Gemini adapter, human review, persistent draft assembly, and capability reports implemented |\n| 5. Python/FFmpeg adapter | In progress; real FFmpeg adapter and storage-backed application service implemented, existing API integration pending |
 | 6. Remotion parity | Planned |
 | 7. API and UI | Planned |
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** integrate the isolated FFmpeg adapter into the existing Clippy render/editor API, add recipe provenance and golden-frame checks, while keeping the live Gemini quality test opt-in and consent-gated. The focused CI suite currently reports 101 passing tests. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** integrate the isolated FFmpeg adapter into the existing Clippy render/editor API, add recipe provenance and golden-frame checks, while keeping the live Gemini quality test opt-in and consent-gated. The latest completed focused CI suite reports 107 passing tests; two additional regression tests are awaiting CI. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
