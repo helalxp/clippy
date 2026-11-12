@@ -14,6 +14,17 @@ from .analysis import (
 )
 from .capabilities import check_compatibility, registered_capabilities
 from .ingest import StagedReference, cleanup_staged_reference, stage_reference_video
+from .interpretation import (
+    DraftRecipeSynthesis,
+    InterpretationClaim,
+    InterpretationError,
+    InterpretationEvidence,
+    InterpretationSynthesisError,
+    TemplateInterpretation,
+    interpret_reference,
+    interpretation_to_proposals,
+    synthesize_draft_recipe,
+)
 from .models import TemplateDocument, TemplateRecipe
 from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_visual_samples
@@ -29,6 +40,11 @@ from .storage import (
 __all__ = [
     "FrameSample",
     "FrameVisualMeasurement",
+    "DraftRecipeSynthesis",
+    "InterpretationClaim",
+    "InterpretationError",
+    "InterpretationEvidence",
+    "InterpretationSynthesisError",
     "LocalTemplateStorage",
     "MediaProbe",
     "ReferenceAnalysisCancelled",
@@ -39,6 +55,7 @@ __all__ = [
     "TemplateAlreadyExists",
     "TemplateDocument",
     "TemplateIntegrityError",
+    "TemplateInterpretation",
     "TemplateNotFound",
     "TemplateRecipe",
     "TemplateRevisionConflict",
@@ -51,6 +68,9 @@ __all__ = [
     "detect_scene_boundaries",
     "extract_sample_frames",
     "measure_visual_samples",
+    "interpret_reference",
+    "interpretation_to_proposals",
+    "synthesize_draft_recipe",
     "probe_media",
     "registered_capabilities",
     "resolve_recipe",
