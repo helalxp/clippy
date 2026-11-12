@@ -93,8 +93,10 @@ class InterpretationClaim(ContractModel):
             if self.reviewed_by is not None or self.reviewed_at is not None or self.review_note is not None:
                 raise ValueError("pending claims cannot contain review provenance")
         else:
-            if not self.reviewed_by or self.reviewed_at is None:
+            if not self.reviewed_by or not self.reviewed_by.strip() or self.reviewed_at is None:
                 raise ValueError("reviewed claims require reviewer identity and timestamp")
+            if self.reviewed_at.tzinfo is None or self.reviewed_at.utcoffset() is None:
+                raise ValueError("reviewed_at must include a timezone")
         if self.status == "corrected" and self.source != "human_correction":
             raise ValueError("corrected claims must use human_correction as their source")
         if self.source == "human_correction" and self.status != "corrected":
@@ -418,6 +420,10 @@ def review_interpretation_claim(
     corrected_value: Any = _REVIEW_VALUE_UNSET,
 ) -> TemplateInterpretation:
     """Return a new interpretation with an explicit, attributable human decision."""
+    if not reviewed_by.strip():
+        raise ValueError("reviewed_by must not be blank")
+    if reviewed_at.tzinfo is None or reviewed_at.utcoffset() is None:
+        raise ValueError("reviewed_at must include a timezone")
     if decision == "corrected" and corrected_value is _REVIEW_VALUE_UNSET:
         raise ValueError("a corrected claim requires corrected_value")
     if decision != "corrected" and corrected_value is not _REVIEW_VALUE_UNSET:
