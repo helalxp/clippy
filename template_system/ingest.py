@@ -9,8 +9,9 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from .analysis import ReferenceAnalysisError, _local_video_path
+from .analysis import ReferenceAnalysisCancelled, ReferenceAnalysisError, _local_video_path
 
 _STAGE_ID = re.compile(r"^ref_[a-f0-9]{32}$")
 
@@ -29,6 +30,8 @@ def stage_reference_video(
     staging_root: str | Path,
     *,
     max_file_size_bytes: int = 2 * 1024 * 1024 * 1024,
+    progress_callback: Callable[[int, int], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> StagedReference:
     """Copy a local reference into an isolated staging directory atomically."""
     source = _local_video_path(source_path)
@@ -62,8 +65,12 @@ def stage_reference_video(
     digest = hashlib.sha256()
     copied = 0
     try:
+        if progress_callback is not None:
+            progress_callback(0, source_size)
         with source.open("rb") as incoming, os.fdopen(fd, "wb") as outgoing:
             while True:
+                if cancel_check is not None and cancel_check():
+                    raise ReferenceAnalysisCancelled("reference staging was cancelled")
                 chunk = incoming.read(1024 * 1024)
                 if not chunk:
                     break
@@ -72,11 +79,15 @@ def stage_reference_video(
                     raise ReferenceAnalysisError("reference video exceeds the staging size limit")
                 digest.update(chunk)
                 outgoing.write(chunk)
+                if progress_callback is not None:
+                    progress_callback(copied, source_size)
             outgoing.flush()
             os.fsync(outgoing.fileno())
         if copied != source_size:
             raise ReferenceAnalysisError("source file changed while it was being staged")
         os.replace(temporary, target)
+        if progress_callback is not None:
+            progress_callback(copied, source_size)
         return StagedReference(
             id=stage_id,
             path=target,
