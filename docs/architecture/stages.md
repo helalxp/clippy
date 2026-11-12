@@ -215,12 +215,12 @@ Acceptance:
 
 ## Stage 7 — API, library, and visual editor
 
-**Status: PLANNED.**
+**Status: PARTIAL.** Local owner-scoped CRUD endpoints are implemented; asset upload/import, library UI, and editor workflow remain outstanding.
 
 Objective: expose template management and application through a cohesive user workflow.
 
 Deliverables:
-- Authenticated/local-safe template API.
+- Authenticated/local-safe template API. Asset-free list/create/read/update/delete endpoints are implemented; asset upload is not yet available.
 - Library browse/search/filter and template details.
 - Reference upload and analysis progress/cancellation UI.
 - Editor controls mapped directly to canonical schema properties.
@@ -228,6 +228,7 @@ Deliverables:
 - Apply to one clip or batch, adaptation review, clip overrides, and explicit locks.
 
 Acceptance:
+- [~] Local CRUD API is implemented with owner isolation and optimistic revision checks; latest API tests await CI validation.
 - [ ] UI controls round-trip without losing schema fields.
 - [ ] User can review analysis evidence and limitations.
 - [ ] User can save, duplicate, rename, edit, and apply templates.
@@ -309,11 +310,11 @@ The background, watermark, effects-generation, subtitle-add, subtitle-remove, ho
 1. Run focused locking and template tests in CI, then run the full backend suite and record any baseline or newly introduced failures accurately.
 2. Audit remaining lifecycle interactions, especially project restore versus active edit operations, and add a shared lock only if the ownership and concurrency model supports it.
 3. Implement caption styling and template-driven hook/title rendering as separate adapter capabilities with real FFmpeg fixtures, preflight rejection, and deterministic output tests.
-4. Add safe local template library CRUD and asset upload/import APIs so users can create and manage templates without manually writing manifests.
+4. Add safe template asset upload/import APIs so templates can reference uploaded fonts, logos, and other assets.
 5. Reconcile browser-preview and final-render Remotion contracts before claiming preview/render parity.
 6. Continue with editor UI, migration/import/export, lifecycle/security review, and release gates.
 
-The branch is not release-ready. Managed/cloud template application remains blocked, the complete library UI/API is not implemented, and CI for the latest locking commits has not yet been confirmed.
+The branch is not release-ready. Managed/cloud template application remains blocked, asset upload/import and the library/editor UI are not implemented, and CI for the latest local CRUD API commits is pending.
 
 
 ## CI reliability review — 2026-11-12
@@ -332,4 +333,18 @@ GitHub Actions run [43304254324](https://github.com/helalxp/clippy/actions/runs/
 - Full backend suite: 1,323 passed, 50 skipped.
 - Frontend production build: passed.
 
-The clean branch is based directly on current `main` and is one commit ahead. The previous feature branch was left untouched because its history contained 205 commits beyond main and included desktop-installer artifacts unrelated to the template work. Use the clean branch for subsequent template implementation.
+The clean branch was created directly from `main` to isolate template work. It has since received implementation, documentation, and local CRUD API commits. The previous feature branch remains untouched because its history contained 205 commits beyond main and included desktop-installer artifacts unrelated to this feature.
+
+
+## Latest Stage 7 update — local template API
+
+The local API slice now includes:
+- `GET /api/templates` for deterministic library listing.
+- `POST /api/templates` for asset-free template creation.
+- `GET /api/templates/{template_id}` for owner-scoped retrieval.
+- `PUT /api/templates/{template_id}` with `expected_revision` conflict protection.
+- `DELETE /api/templates/{template_id}` for owned template removal.
+
+The same hashed owner scope is used by template application and library CRUD. Managed mode remains blocked. Asset-bearing creates are rejected until the dedicated upload flow can validate content type, size, checksums, opaque IDs, and safe paths.
+
+Code commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. Test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. The previous CI run does not cover these additions; acceptance remains provisional until the new tests run successfully.
