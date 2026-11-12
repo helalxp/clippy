@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Stages 0–3 complete; Stage 4 evidence-linked interpretation and draft-recipe synthesis is in progress.  
+**Status:** Stages 0–3 complete; Stage 4 evidence-linked interpretation, human review, and persistent draft synthesis is in progress.  
 **Last verified update:** 2026-11-12
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
@@ -30,7 +30,8 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Not yet implemented
 
-- [~] Provider-neutral, strict interpretation contract, evidence verification, reviewed-claim synthesis, resolver integration, and optional Gemini vision adapter implemented; live provider quality validation remains.
+- [x] Provider-neutral strict interpretation contract, evidence verification, attributable human review, resolver integration, optional consent-gated Gemini vision adapter, persistent interpretation claims, and renderer capability snapshots in draft templates.
+- [ ] Live provider quality validation, token/cost telemetry, and broader visual claim coverage.
 - [ ] Production Python/FFmpeg adapter consuming the resolved recipe.
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
 - [ ] Template API, durable analysis-job lifecycle, library UI, editor UI, and end-to-end apply workflow.
@@ -58,7 +59,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Media probe and scene sampling | `template_system/analysis.py` | Implemented; real FFmpeg fixture passes |
 | Pixel measurements | `template_system/visuals.py` | Implemented; 6 tests pass |
 | Focused template tests | `tests/test_template_system_*.py` | 69 passed in GitHub Actions |
-| Semantic interpretation | `template_system/interpretation.py`, `template_system/providers/gemini.py` | Contract and optional Gemini adapter implemented; live call/quality verification pending |
+| Semantic interpretation | `template_system/interpretation.py`, `template_system/providers/gemini.py`, domain models | Contract, consent-gated Gemini adapter, human review, synthesis, and persistent draft assembly implemented; live call/quality verification pending |
 | Python/FFmpeg recipe adapter | Not implemented | Stage 5 |
 | Remotion parity | Not implemented | Stage 6 |
 | API and UI | Not implemented | Stage 7 |
@@ -84,7 +85,9 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - Analysis tests: 20 passed, including a real FFmpeg-generated two-scene fixture and a cut-time assertion within 200 ms of the known transition.
 - Ingest tests: 7 passed.
 - Visual-measurement tests: 6 passed.
-- **Total: 69 passed in the focused GitHub Actions job.**
+- Interpretation/review/synthesis tests: 17 passed.
+- Gemini adapter tests: 4 passed with a fake client; no live external request was made.
+- **Total: 90 passed in the focused GitHub Actions job.**
 - Frontend build job: passed.
 
 ### Full backend suite
@@ -119,7 +122,7 @@ The provider-neutral interpretation contract and optional Gemini vision adapter 
 - remain a proposal until accepted or corrected;
 - never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The next gates are focused CI verification, a live opt-in Gemini smoke test, and quality checks on representative references. Then synthesize a draft `TemplateRecipe` deterministically from accepted claims and measured facts; explicit clip overrides and locks continue through the canonical resolver.
+Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The focused suite now passes 90 tests. The next gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly now persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots; explicit clip overrides and locks continue through the canonical resolver.
 
 ## 8. Next vertical slice after Stage 4
 
