@@ -52,14 +52,14 @@ class CompatibilityReport:
 _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
     "python_ffmpeg": {
         "canvas": FeatureCapability("canvas", "exact", "Output dimensions and frame rate are explicit pipeline inputs."),
-        "framing": FeatureCapability("framing", "approximate", "Automatic scene framing and manual crop overrides exist, but normalized template anchors do not yet have a canonical adapter."),
-        "safe_area": FeatureCapability("safe_area", "approximate", "Some existing overlay placement uses margins, but the canonical safe-area contract is not wired through the pipeline."),
-        "captions": FeatureCapability("captions", "approximate", "ASS subtitle burning supports rich timing and styling, but the template caption contract is not yet translated."),
-        "hook": FeatureCapability("hook", "approximate", "Hook rendering and placement exist, but template typography and animation semantics are not yet mapped."),
-        "background": FeatureCapability("background", "approximate", "Blur and solid-background editing exists through a separate derivative endpoint."),
-        "overlays": FeatureCapability("overlays", "approximate", "Watermark rendering exists, but the generic overlay layer is not implemented."),
-        "effects": FeatureCapability("effects", "approximate", "Punch-in and selected image adjustments exist; the canonical effect timeline is not mapped."),
-        "motion": FeatureCapability("motion", "approximate", "Punch-in motion exists, but generic motion recipes are not mapped."),
+        "framing": FeatureCapability("framing", "exact", "The canonical FFmpeg adapter implements deterministic cover, contain, and anchored crop modes; subject tracking is explicitly unsupported."),
+        "safe_area": FeatureCapability("safe_area", "unsupported", "The first FFmpeg adapter does not place captions or overlays against canonical safe-area margins."),
+        "captions": FeatureCapability("captions", "unsupported", "The first FFmpeg adapter does not yet translate canonical caption recipes into ASS subtitle styling."),
+        "hook": FeatureCapability("hook", "unsupported", "The first FFmpeg adapter does not yet translate canonical hook typography and animation."),
+        "background": FeatureCapability("background", "exact", "The FFmpeg adapter implements black/original matte, blurred duplicate, and solid-color contain backgrounds; background fill is incompatible with cover crop."),
+        "overlays": FeatureCapability("overlays", "unsupported", "The first FFmpeg adapter does not implement the generic overlay collection."),
+        "effects": FeatureCapability("effects", "unsupported", "The first FFmpeg adapter does not implement canonical effect segments."),
+        "motion": FeatureCapability("motion", "unsupported", "The first FFmpeg adapter does not implement canonical motion recipes."),
         "transitions": FeatureCapability("transitions", "unsupported", "No canonical transition adapter is present in the audited pipeline."),
         "rhythm": FeatureCapability("rhythm", "unsupported", "Rhythm is analysis metadata only; it is not applied as an edit recipe."),
     },
@@ -134,6 +134,44 @@ def _requested_features(recipe: TemplateRecipe) -> set[str]:
     return requested
 
 
+
+def _capability_for_recipe(
+    recipe: TemplateRecipe,
+    backend: RendererBackend,
+    feature: str,
+    registered: FeatureCapability,
+) -> FeatureCapability:
+    """Refine broad feature support when a specific recipe combination conflicts."""
+    if backend != "python_ffmpeg":
+        return registered
+    if feature == "framing":
+        if recipe.framing.subject_tracking:
+            return FeatureCapability(
+                "framing", "unsupported",
+                "The first adapter does not implement subject tracking.",
+            )
+        contain_mode = (
+            recipe.framing.mode == "contain"
+            or (recipe.framing.mode == "auto" and recipe.background.mode != "original")
+        )
+        if contain_mode and (
+            recipe.framing.anchor_x != 0.5 or recipe.framing.anchor_y != 0.5
+        ):
+            return FeatureCapability(
+                "framing", "unsupported",
+                "Contain framing is centered; custom anchors are supported only for cover/manual crop.",
+            )
+        return registered
+    if feature == "background":
+        if recipe.framing.mode in {"cover", "manual"}:
+            return FeatureCapability(
+                "background", "unsupported",
+                "Cover/manual crop fills the canvas, so a separate background treatment would be invisible.",
+            )
+        return registered
+    return registered
+
+
 def check_compatibility(
     recipe: TemplateRecipe,
     backend: RendererBackend,
@@ -149,7 +187,7 @@ def check_compatibility(
     unsupported: list[CompatibilityFinding] = []
 
     for feature in sorted(_requested_features(recipe)):
-        capability = registry[feature]
+        capability = _capability_for_recipe(recipe, backend, feature, registry[feature])
         finding = CompatibilityFinding(
             feature=capability.feature,
             level=capability.level,
