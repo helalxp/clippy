@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Stages 0–3 complete; Stage 4 evidence-linked interpretation, human review, and persistent draft synthesis is in progress.  
+**Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis and Stage 5 isolated Python/FFmpeg application adapter are in progress.  
 **Last verified update:** 2026-11-12
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
@@ -32,7 +32,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 - [x] Provider-neutral strict interpretation contract, evidence verification, attributable human review, resolver integration, optional consent-gated Gemini vision adapter, persistent interpretation claims, and renderer capability snapshots in draft templates.
 - [ ] Live provider quality validation, token/cost telemetry, and broader visual claim coverage.
-- [ ] Production Python/FFmpeg adapter consuming the resolved recipe.
+- [~] Isolated Python/FFmpeg adapter consumes validated recipes for canvas, cover/contain/manual framing, and original/blur/solid backgrounds; integration with Clippy's existing generation/editor APIs and remaining renderer features are pending.
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
 - [ ] Template API, durable analysis-job lifecycle, library UI, editor UI, and end-to-end apply workflow.
 - [ ] Migration of the legacy v1 reference-template manifest.
@@ -60,7 +60,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Pixel measurements | `template_system/visuals.py` | Implemented; 6 tests pass |
 | Focused template tests | `tests/test_template_system_*.py` | 69 passed in GitHub Actions |
 | Semantic interpretation | `template_system/interpretation.py`, `template_system/providers/gemini.py`, domain models | Contract, consent-gated Gemini adapter, human review, synthesis, and persistent draft assembly implemented; live call/quality verification pending |
-| Python/FFmpeg recipe adapter | Not implemented | Stage 5 |
+| Python/FFmpeg recipe adapter | `template_system/adapters/python_ffmpeg.py` | First real-FFmpeg slice implemented; API integration and additional features pending |
 | Remotion parity | Not implemented | Stage 6 |
 | API and UI | Not implemented | Stage 7 |
 | Migration/import/export | Not implemented | Stage 8 |
@@ -87,12 +87,13 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - Visual-measurement tests: 6 passed.
 - Interpretation/review/synthesis tests: 17 passed.
 - Gemini adapter tests: 4 passed with a fake client; no live external request was made.
-- **Total: 90 passed in the focused GitHub Actions job.**
+- Python/FFmpeg adapter tests: 11 passed, including real cover/contain/background renders, audio preservation, and subtitle-stream rejection.
+- **Total: 101 passed in the focused GitHub Actions job.**
 - Frontend build job: passed.
 
 ### Full backend suite
 
-The full backend job is not green. On the audited branch run it reported **1,294 passed, 30 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
+The full backend job is not green. The latest full-suite run reported **1,315 passed, 42 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
 
 1. `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`: test expects `(20.0, 30.0)`, current result is `(20.0, 25.0)`.
 2. `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`: injected watermark lambda does not accept the `backdrop_type` and `backdrop_color` keyword arguments now passed by `recut.perform_recut`.
@@ -112,7 +113,7 @@ The Windows Python 3.12 installer/runtime issue is tracked separately. It is not
 
 See [stages.md](./stages.md) for acceptance evidence and remaining work.
 
-## 7. Active work: Stage 4
+## 7. Active work: Stages 4–5
 
 The provider-neutral interpretation contract and optional Gemini vision adapter are now implemented. A provider may propose structured claims about caption style, hook placement, framing, background treatment, and rhythm, but every claim must:
 - target a known canonical recipe property;
@@ -122,16 +123,16 @@ The provider-neutral interpretation contract and optional Gemini vision adapter 
 - remain a proposal until accepted or corrected;
 - never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The focused suite now passes 90 tests. The next gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly now persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots; explicit clip overrides and locks continue through the canonical resolver.
+Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The focused suite now passes 101 tests. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter for canvas/framing/background, but it is not yet wired into Clippy's existing API or generation flow; captions, hooks, overlays, tracking, and recipe provenance remain.
 
-## 8. Next vertical slice after Stage 4
+## 8. Next vertical slice
 
-1. Implement a small Python/FFmpeg adapter for canvas, caption style, hook, and one background behavior.
-2. Preflight renderer capability before rendering.
-3. Render deterministic fixtures from clean source media.
-4. Inspect output frames, timing, stream metadata, and recipe provenance.
-5. Update capability claims only after adapter behavior is implemented and tested.
-6. Add Remotion preview/final adapters only after the Python slice is stable.
+1. Wire `PythonFFmpegAdapter` into the existing editor/render API using clean canonical source media.
+2. Persist recipe hash, template revision, and output provenance.
+3. Add golden-frame pixel assertions for crop anchors and background treatment.
+4. Add caption and hook adapters with exact/approximate/unsupported capability reporting.
+5. Add overlay support only after asset sizing/position semantics are validated.
+6. Add Remotion preview/final adapters only after the Python slice is integrated and stable.
 
 ## 9. Change log
 
