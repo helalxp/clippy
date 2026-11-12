@@ -23,6 +23,7 @@ def _probe_payload(*, audio=True, duration="12.5"):
         "width": 1920,
         "height": 1080,
         "avg_frame_rate": "30000/1001",
+        "sample_aspect_ratio": "1:1",
         "pix_fmt": "yuv420p",
         "side_data_list": [{"rotation": 90}],
     }]
@@ -31,6 +32,7 @@ def _probe_payload(*, audio=True, duration="12.5"):
             "codec_type": "audio",
             "codec_name": "aac",
             "channels": 2,
+            "sample_rate": "48000",
         })
     return {"streams": streams, "format": {"duration": duration}}
 
