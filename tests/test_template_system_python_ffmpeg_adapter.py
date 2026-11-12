@@ -20,13 +20,21 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def make_source_video(path: Path):
+def make_source_video(path: Path, *, with_audio: bool = False):
     command = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=2",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        str(path),
     ]
+    if with_audio:
+        command.extend([
+            "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=2",
+            "-map", "0:v:0", "-map", "1:a:0",
+        ])
+    command.extend([
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        *(["-c:a", "aac", "-shortest"] if with_audio else []),
+        str(path),
+    ])
     result = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0, result.stderr
 
@@ -148,3 +156,18 @@ def test_adapter_preserves_existing_output_when_source_is_invalid(tmp_path):
         PythonFFmpegAdapter().render(source, output, recipe_for())
 
     assert output.read_bytes() == b"previous valid output"
+
+
+
+def test_adapter_preserves_audio_streams(tmp_path):
+    source = tmp_path / "source-with-audio.mp4"
+    output = tmp_path / "render-with-audio.mp4"
+    make_source_video(source, with_audio=True)
+
+    result = PythonFFmpegAdapter(timeout_seconds=120).render(
+        source,
+        output,
+        recipe_for("contain", "blur"),
+    )
+
+    assert result.has_audio is True
