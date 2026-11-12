@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ..analysis import ReferenceAnalysisCancelled, ReferenceAnalysisError, _local_video_path, probe_media
+from ..analysis import ReferenceAnalysisError, _local_video_path, probe_media
 from ..capabilities import CompatibilityReport, check_compatibility
 from ..models import TemplateRecipe
 
@@ -144,6 +144,8 @@ class PythonFFmpegAdapter:
             raise RenderAdapterError(str(exc)) from exc
 
         destination_input = Path(output_path).expanduser()
+        if destination_input.suffix.lower() != ".mp4":
+            raise RenderAdapterError("PythonFFmpegAdapter currently writes MP4 output only")
         if destination_input.is_symlink():
             raise RenderAdapterError("render output must not be a symbolic link")
         destination_input.parent.mkdir(parents=True, exist_ok=True)
@@ -246,9 +248,7 @@ class PythonFFmpegAdapter:
                 raise RenderAdapterError("render did not preserve source audio presence")
 
             os.replace(temporary, destination)
-            if progress_callback is not None:
-                progress_callback("complete", 1.0)
-            return RenderResult(
+            result = RenderResult(
                 output_path=destination,
                 source_fingerprint=source_probe.source_fingerprint,
                 output_fingerprint=output_probe.source_fingerprint,
@@ -259,6 +259,12 @@ class PythonFFmpegAdapter:
                 has_audio=output_probe.has_audio,
                 compatibility=report,
             )
+            if progress_callback is not None:
+                try:
+                    progress_callback("complete", 1.0)
+                except Exception:
+                    pass
+            return result
         except Exception:
             if process is not None:
                 self._terminate(process)
