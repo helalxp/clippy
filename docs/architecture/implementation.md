@@ -2,14 +2,14 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Phases 1 and 2 complete; Stage 3 deterministic reference-analysis foundation implemented and under verification.  
+**Status:** Stages 0–3 complete; Stage 4 structured interpretation and template synthesis is next.  
 **Last verified update:** 2026-11-12
 
-This file is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone gates live in [stages.md](./stages.md).
+This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
 
 ## 1. Objective
 
-Let a creator provide a reference video and turn its editing language into a reusable, editable, versioned Clippy template. Applying a template must produce a deterministic effective recipe, disclose unsupported or approximate behavior, preserve explicit user choices, and eventually render consistently in preview and final output.
+Turn a creator-provided reference video into a reusable, editable, versioned Clippy template. Applying a template must produce a deterministic effective recipe, disclose unsupported or approximate behavior, preserve explicit user choices, and ultimately render consistently in preview and final output.
 
 A template is a structured editing recipe, not a visual preset or an AI-generated description.
 
@@ -17,114 +17,120 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Completed
 
-- [x] Phase 0 source audit: legacy reference-template prototype, Python/FFmpeg pipeline, Remotion preview/render trees, editing endpoints, and baseline CI were inspected.
-- [x] Confirmed two Remotion composition trees have behavior/schema drift.
-- [x] Confirmed Python/FFmpeg is a separate production-critical render path and cannot be bypassed by implementing templates only in Remotion.
-- [x] Defined canonical versioned template and recipe contracts in `template_system/models.py`.
-- [x] Defined conservative per-renderer capability reporting in `template_system/capabilities.py`.
-- [x] Defined deterministic recipe resolution, adaptation rejection, explicit locks, and canonical SHA-256 hashing in `template_system/resolver.py`.
-- [x] Added focused contract tests in `tests/test_template_system_contracts.py`.
-- [x] Declared Pydantic v2 explicitly in `requirements.txt`.
-- [x] Focused tests executed by the user in an isolated Python 3.11.16 environment: **18 passed, 0 failed (0.35s)** on 2026-11-12.
+- [x] Phase 0 repository and architecture audit.
+- [x] Canonical versioned template and recipe contracts.
+- [x] Conservative renderer capability registry.
+- [x] Deterministic recipe resolver with explicit locks, adaptation decisions, and canonical SHA-256 hashing.
+- [x] Local template storage with atomic manifest replacement, thread and OS-backed cross-process locks, optimistic revision checks, and asset integrity validation.
+- [x] Reference-video staging, deterministic FFprobe metadata collection, FFmpeg scene-cut detection, bounded frame sampling, pixel-level visual measurements, and partial-result reporting.
+- [x] Conversion of measured results into canonical `TemplateAnalysis`, `TemplateAsset`, and evidence records.
+- [x] Progress callbacks and cancellation checks at safe staging/analysis boundaries.
+- [x] Real FFmpeg/FFprobe integration fixture verifies the full local path from staging through analysis and persistent template assets.
+- [x] Focused template CI: **69 passed, 0 failed** on 2026-11-12.
 
 ### Not yet implemented
 
-- [x] Local template storage, atomic writes, per-template thread and OS-backed file locks, revision compare-and-swap, and asset integrity verification implemented and focused-test verified.
+- [ ] Structured semantic interpretation of reference frames.
+- [ ] Evidence-backed synthesis of a reusable editing recipe from interpreted claims.
+- [ ] Production Python/FFmpeg adapter consuming the resolved recipe.
+- [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
+- [ ] Template API, durable analysis-job lifecycle, library UI, editor UI, and end-to-end apply workflow.
 - [ ] Migration of the legacy v1 reference-template manifest.
-- [~] Deterministic media probing, transactional local staging/cleanup, scene-boundary candidates, bounded sample selection, timestamped PNG evidence, SHA-256 fingerprints, canonical TemplateAnalysis/TemplateAsset conversion, deterministic pixel-level visual measurements, progress callbacks, cancellation boundaries, and partial-result reporting implemented. UI/job orchestration and representative real-media quality validation remain.
-- [ ] Deterministic visual measurements and optional structured vision interpretation.
-- [ ] A production Python/FFmpeg adapter consuming the resolved recipe.
-- [ ] A shared recipe contract consumed by browser preview and Remotion final render.
-- [ ] Preview/final visual parity fixtures and automated image/timing comparisons.
-- [ ] Template API, library UI, editor UI, and end-to-end apply workflow.
-- [ ] Import/export package format and complete lifecycle operations.
-- [ ] Managed/cloud storage. This remains explicitly out of scope until tenant isolation and authorization are designed.
+- [ ] Versioned import/export package and complete template lifecycle operations.
+- [ ] Managed/cloud storage. This remains out of scope until tenant isolation and authorization are designed.
+
+### Explicitly not claimed
+
+- Pixel difference between sampled frames is not optical flow and does not establish subject motion.
+- Edge density is not semantic subject/layout detection.
+- Color palette measurements do not identify brand intent or editing style by themselves.
+- Scene-cut candidates are deterministic FFmpeg measurements, not yet a validated editorial-cut classifier.
+- No AI-generated claim is accepted without strict schema validation and references to sampled evidence.
 
 ## 3. Implementation inventory
 
-| Area | Current implementation | Status |
+| Area | Source | Status |
 |---|---|---|
-| Domain contracts | `template_system/models.py` | Implemented; focused tests pass |
-| Capability registry | `template_system/capabilities.py` | Implemented as conservative assessment |
-| Recipe resolver | `template_system/resolver.py` | Implemented; focused tests pass |
-| Public exports | `template_system/__init__.py` | Implemented |
-| Contract tests | `tests/test_template_system_contracts.py` | 18/18 passed in user-run focused test |
-| Storage | `template_system/storage.py` | Implemented; 18 tests added, execution pending |
-| Analysis | `template_system/analysis.py` | Deterministic probe/sampling slice implemented; broader Stage 3 work pending |
-| Python/FFmpeg adapter | Not implemented | Pending |
-| Remotion adapters/parity | Not implemented | Pending |
-| API and UI | Not implemented | Pending |
-| Migration/import/export | Not implemented | Pending |
+| Domain contracts | `template_system/models.py` | Implemented; 18 contract tests pass |
+| Capability registry | `template_system/capabilities.py` | Implemented; conservative exact/approximate/unsupported reporting |
+| Recipe resolver | `template_system/resolver.py` | Implemented; deterministic precedence, locks, and hash |
+| Local storage | `template_system/storage.py` | Implemented; 18 storage tests pass |
+| Reference staging | `template_system/ingest.py` | Implemented; 7 tests pass |
+| Media probe and scene sampling | `template_system/analysis.py` | Implemented; real FFmpeg fixture passes |
+| Pixel measurements | `template_system/visuals.py` | Implemented; 6 tests pass |
+| Focused template tests | `tests/test_template_system_*.py` | 69 passed in GitHub Actions |
+| Semantic interpretation | Not implemented | Stage 4 |
+| Python/FFmpeg recipe adapter | Not implemented | Stage 5 |
+| Remotion parity | Not implemented | Stage 6 |
+| API and UI | Not implemented | Stage 7 |
+| Migration/import/export | Not implemented | Stage 8 |
 
-## 4. Technical decisions already established
+## 4. Technical decisions
 
 1. **Canonical intent is renderer-independent.** Domain models describe normalized editing intent; FFmpeg and Remotion details belong in adapters.
-2. **Units are explicit.** Positions and dimensions expressed as ratios are canvas-relative; timeline values are seconds; colors are six-digit sRGB hex; font sizes are ratios of canvas height.
+2. **Units are explicit.** Positions and dimensions ending in `_ratio` are canvas-relative; timeline values are seconds; colors are six-digit sRGB hex; font sizes are ratios of canvas height.
 3. **Compatibility is honest.** Exact, approximate, and unsupported are distinct. An unsupported requested feature makes a renderer incompatible; it must never be silently dropped.
 4. **Resolution is deterministic.** Defaults → template → revision → job overrides → AI adaptation proposals → clip overrides → explicit locks. Lists replace, never append.
-5. **AI is advisory.** Adaptations are recorded with accept/reject reasons. Clip overrides and locks cannot be silently overwritten.
+5. **AI is advisory.** Claims must be schema-validated, evidence-linked, and reviewable. User corrections, clip overrides, and locks remain authoritative.
 6. **Local-first storage only.** Do not enable shared/managed storage before ownership, authorization, isolation, quotas, deletion, and media delivery are implemented and tested.
-7. **No premature UI or renderer rewrite.** First prove a persisted recipe and one real renderer vertical slice. Then prove preview/render parity.
-8. **Existing generation behavior must remain stable.** The template system must be opt-in and must not alter the current clip-generation path until adapter behavior has regression evidence.
+7. **No premature UI or renderer rewrite.** First synthesize a validated recipe, then prove a Python/FFmpeg vertical slice, then measure preview/final parity.
+8. **Existing generation behavior remains stable.** Template application is opt-in and must not alter the current generation path without regression evidence.
 
-## 5. Current verification and confidence
+## 5. Verification and known repository baseline
 
-### Verified
+### Template-specific verification
 
-- The user created and activated `D:\\openshorts\\.venv` with Python 3.11.16.
-- `python -m pytest tests/test_template_system_contracts.py -v` collected 18 tests.
-- Result: **18 passed in 0.35 seconds**.
+- Contract tests: 18 passed.
+- Storage tests: 18 passed, including cross-process locking and failure-preservation cases.
+- Analysis tests: 20 passed, including a real FFmpeg-generated two-scene fixture and a cut-time assertion within 200 ms of the known transition.
+- Ingest tests: 7 passed.
+- Visual-measurement tests: 6 passed.
+- **Total: 69 passed in the focused GitHub Actions job.**
+- Frontend build job: passed.
 
-### Not verified
+### Full backend suite
 
-- The complete backend suite has not been run successfully in a complete project environment.
-- No GitHub Actions green run has been established for this feature branch.
-- No FFmpeg recipe adapter or real template-driven render exists yet.
-- No visual parity claim is justified.
-- No Windows installer/runtime conclusion is part of this feature's verification.
+The full backend job is not green. On the audited branch run it reported **1,294 passed, 30 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
 
-The Python 3.12 installer/runtime issue is tracked separately and is not a blocker for continuing repository implementation.
+1. `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`: test expects `(20.0, 30.0)`, current result is `(20.0, 25.0)`.
+2. `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`: injected watermark lambda does not accept the `backdrop_type` and `backdrop_color` keyword arguments now passed by `recut.perform_recut`.
 
-## 6. Completed: Phase 2 local persistence
+These are not failures in the template-specific test job. They remain separate repository cleanup items and are not silently counted as green.
 
-**Verification (2026-11-12):** GitHub Actions focused job passed for `tests/test_template_system_contracts.py` and `tests/test_template_system_storage.py` on commit `ee6a46f302cfecac935c400ab3697425f5e9f9ed`. The suite contains 18 contract tests and 18 storage tests. The focused job is green. The separate full backend job is red; its exact failures have not yet been extracted from the run log, and the audit already records two pre-existing main-branch failures. The frontend build job passed.
+### Scope boundary
 
+The Windows Python 3.12 installer/runtime issue is tracked separately. It is not a blocker for remote implementation or GitHub Actions validation of this feature.
 
+## 6. Completed stages
 
-**Implementation update (2026-11-12):** `template_system/storage.py` now provides local-only create/get/list/update/delete operations, canonical manifest serialization, atomic replacement, per-template in-process locks, optimistic revision checks, and asset size/SHA-256 verification. `tests/test_template_system_storage.py` adds coverage for CRUD, malformed manifests, asset corruption, path/symlink escape, failed writes, and concurrent operations. These tests are committed but not yet verified. Stage 2 remains open until they execute successfully and edge cases are reviewed.
+- **Stage 0:** architecture and source audit.
+- **Stage 1:** canonical contracts, capability registry, resolver.
+- **Stage 2:** local persistence and asset integrity.
+- **Stage 3:** deterministic reference ingest, probe, scene sampling, visual measurements, evidence conversion, and real-media fixture validation.
 
+See [stages.md](./stages.md) for acceptance evidence and remaining work.
 
+## 7. Next active work: Stage 4
 
-Implement a storage boundary that is safe and testable before exposing APIs.
+Build a provider-agnostic interpretation boundary. A vision provider may propose structured claims about caption style, hook placement, framing, background treatment, overlays, transitions, and rhythm, but every claim must:
+- target a known canonical recipe property;
+- cite one or more sampled evidence asset IDs and timestamps;
+- include a calibrated qualitative confidence or an explicit uncertainty state;
+- pass strict type/range validation;
+- remain a proposal until accepted or corrected;
+- never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Required behavior:
-- Configurable local library root, defaulting to a dedicated template-library directory without changing existing upload/output folders.
-- Strict template ID/path validation; all resolved paths must remain beneath the library root.
-- One directory per template, with canonical manifest and an assets directory.
-- Atomic manifest replacement using a temporary file in the same directory and `os.replace`.
-- Per-template in-process synchronization to prevent lost updates in concurrent requests.
-- Validate every manifest on read and write using `TemplateDocument`.
-- Verify asset existence, declared size, and SHA-256 before accepting a stored document.
-- Reject symlinks/path traversal that escape the template directory.
-- Preserve the original manifest if a write or validation fails.
-- Explicit local-only behavior; no implicit network access or cloud upload.
-- Tests for create/get/list/update/delete, malformed manifests, path traversal, corrupt/missing assets, checksum mismatch, atomic-write failure, and concurrent updates.
+Then synthesize a draft `TemplateRecipe` deterministically from accepted claims and measured facts. Provider-specific Gemini wiring comes after the provider-neutral contract and fake-provider tests.
 
-Do not add API routes until storage behavior and its failure modes are covered.
+## 8. Next vertical slice after Stage 4
 
-## 7. Active work: Stage 3 deterministic reference analysis
+1. Implement a small Python/FFmpeg adapter for canvas, caption style, hook, and one background behavior.
+2. Preflight renderer capability before rendering.
+3. Render deterministic fixtures from clean source media.
+4. Inspect output frames, timing, stream metadata, and recipe provenance.
+5. Update capability claims only after adapter behavior is implemented and tested.
+6. Add Remotion preview/final adapters only after the Python slice is stable.
 
-**Implemented slice:** `template_system/ingest.py` stages local media into unique, permission-restricted directories using bounded streaming copies, SHA-256, atomic file replacement, progress callbacks, cancellation checks, and ownership-checked cleanup. `template_system/analysis.py` probes local files with FFprobe, validates streams/duration/dimensions/size, records codec/FPS/pixel-aspect/audio/rotation metadata and a streaming SHA-256 fingerprint, detects bounded FFmpeg scene-cut candidates, chooses scene-midpoint plus uniform timestamps, extracts bounded PNG evidence frames, converts samples into canonical `TemplateAsset` and `TemplateAnalysis` records, and reports coverage/limitations while retaining partial successes. `template_system/visuals.py` computes deterministic color palettes, luminance, saturation, edge density, and adjacent-sample pixel change. Pixel change is explicitly not claimed as optical flow or subject motion. Analysis exposes progress callbacks and cancellation checks between expensive stages and frame operations. Dedicated tests cover staging, cleanup, progress/cancellation, probe parsing, invalid media, bounds, sampling, evidence conversion, visual measurements, frame integrity, collisions, and partial analysis.
+## 9. Change log
 
-**Still required before Stage 3 closes:** wire progress/cancellation into a durable analysis-job/API lifecycle, add representative real-media fixtures and scene-boundary quality evaluation, and validate the complete ingest-to-template-evidence workflow against real FFmpeg/FFprobe binaries.
-
-## 8. Next vertical slice after Stage 3
-
-1. Build a first Python/FFmpeg adapter for a deliberately small subset: canvas, caption styling, hook, and one background mode only where exact behavior can be proven.
-2. Run deterministic fixture renders and inspect actual output frames and metadata.
-3. Update the capability registry only when adapter behavior is implemented and tested.
-4. Add preview/Remotion integration only after the Python slice is stable; parity must be measured, not assumed.
-
-## 8. Change log
-
-- **2026-11-12:** Phase 1 contract suite reported by the user as 18/18 passing under Python 3.11.16. Updated project standing; installer Python 3.12 issue explicitly kept outside this workstream.
+- **2026-11-12:** Restored this tracker and `stages.md` on the online feature branch. Stages 0–3 are now evidenced; focused template CI reports 69 passing tests, including a real FFmpeg ingest-to-persisted-template fixture. Recorded the two known full-backend baseline failures separately.
