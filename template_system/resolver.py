@@ -53,6 +53,17 @@ def _paths_overlap(left: str, right: str) -> bool:
     return left == right or left.startswith(right + ".") or right.startswith(left + ".")
 
 
+def _leaf_paths(value: Mapping[str, Any], prefix: str = "") -> set[str]:
+    paths: set[str] = set()
+    for key, child in value.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(child, Mapping) and child:
+            paths.update(_leaf_paths(child, path))
+        else:
+            paths.add(path)
+    return paths
+
+
 def _canonical_hash(recipe: TemplateRecipe) -> str:
     payload = recipe.model_dump(mode="json")
     canonical = json.dumps(
@@ -109,6 +120,9 @@ def resolve_recipe(
     ):
         merged = _merge(merged, layer)
 
+    clip_layer = as_mapping(clip_overrides)
+    explicit_clip_paths = _leaf_paths(clip_layer)
+
     decisions: list[AdaptationDecision] = []
     for raw_proposal in adaptations:
         proposal = (
@@ -129,6 +143,19 @@ def resolve_recipe(
                 )
             )
             continue
+        clip_override = next(
+            (path for path in explicit_clip_paths if _paths_overlap(proposal.path, path)),
+            None,
+        )
+        if clip_override is not None:
+            decisions.append(
+                AdaptationDecision(
+                    path=proposal.path,
+                    accepted=False,
+                    reason=f"superseded by explicit clip override: {clip_override}",
+                )
+            )
+            continue
         _set_path(merged, proposal.path, proposal.value)
         decisions.append(
             AdaptationDecision(
@@ -138,7 +165,7 @@ def resolve_recipe(
             )
         )
 
-    merged = _merge(merged, as_mapping(clip_overrides))
+    merged = _merge(merged, clip_layer)
     for path, value in locked_values.items():
         _set_path(merged, path, value)
 
