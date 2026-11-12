@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Phases 1 and 2 implemented and focused-test verified; Stage 3 deterministic reference analysis is next.  
+**Status:** Phases 1 and 2 complete; Stage 3 deterministic reference-analysis foundation implemented and under verification.  
 **Last verified update:** 2026-11-12
 
 This file is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone gates live in [stages.md](./stages.md).
@@ -31,7 +31,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 - [x] Local template storage, atomic writes, per-template thread and OS-backed file locks, revision compare-and-swap, and asset integrity verification implemented and focused-test verified.
 - [ ] Migration of the legacy v1 reference-template manifest.
-- [ ] Reference-video ingest, media probing, temporal sampling, evidence capture, and staged analysis jobs.
+- [~] Deterministic media probing, scene-boundary candidates, bounded sample selection, timestamped PNG evidence, SHA-256 fingerprints, and partial-result reporting implemented. Staged ingest/jobs, cancellation, and broader visual measurements remain.
 - [ ] Deterministic visual measurements and optional structured vision interpretation.
 - [ ] A production Python/FFmpeg adapter consuming the resolved recipe.
 - [ ] A shared recipe contract consumed by browser preview and Remotion final render.
@@ -50,7 +50,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Public exports | `template_system/__init__.py` | Implemented |
 | Contract tests | `tests/test_template_system_contracts.py` | 18/18 passed in user-run focused test |
 | Storage | `template_system/storage.py` | Implemented; 18 tests added, execution pending |
-| Analysis | Not implemented | Pending |
+| Analysis | `template_system/analysis.py` | Deterministic probe/sampling slice implemented; broader Stage 3 work pending |
 | Python/FFmpeg adapter | Not implemented | Pending |
 | Remotion adapters/parity | Not implemented | Pending |
 | API and UI | Not implemented | Pending |
@@ -112,15 +112,18 @@ Required behavior:
 
 Do not add API routes until storage behavior and its failure modes are covered.
 
-## 7. Next vertical slice after storage
+## 7. Active work: Stage 3 deterministic reference analysis
 
-1. Add a deterministic media-probe and sampling service that accepts a staged local video path.
-2. Capture bounded representative frames and scene-boundary evidence without calling a model.
-3. Store analysis status, coverage, evidence references, and limitations in the canonical template document.
-4. Build a first Python/FFmpeg adapter for a deliberately small subset: canvas, caption styling, hook, and one background mode only where exact behavior can be proven.
-5. Run deterministic fixture renders and inspect actual output frames and metadata.
-6. Update the capability registry only when adapter behavior is implemented and tested.
-7. Add preview/Remotion integration only after the Python slice is stable; parity must be measured, not assumed.
+**Implemented slice:** `template_system/analysis.py` probes local files with FFprobe, validates streams/duration/dimensions/size, records codec/FPS/pixel-aspect/audio/rotation metadata and a streaming SHA-256 fingerprint, detects bounded FFmpeg scene-cut candidates, chooses scene-midpoint plus uniform timestamps, extracts bounded PNG evidence frames, and reports coverage/limitations while retaining partial successes. `tests/test_template_system_analysis.py` covers probe parsing, invalid media, bounds, sampling, frame integrity, collisions, and partial analysis.
+
+**Still required before Stage 3 closes:** staged ingest/copy and cleanup, explicit cancellation/progress integration, deterministic color/layout/motion measurements, attaching frame evidence to the canonical template asset inventory and `TemplateAnalysis`, and end-to-end fixture validation against real FFmpeg binaries.
+
+## 8. Next vertical slice after Stage 3
+
+1. Build a first Python/FFmpeg adapter for a deliberately small subset: canvas, caption styling, hook, and one background mode only where exact behavior can be proven.
+2. Run deterministic fixture renders and inspect actual output frames and metadata.
+3. Update the capability registry only when adapter behavior is implemented and tested.
+4. Add preview/Remotion integration only after the Python slice is stable; parity must be measured, not assumed.
 
 ## 8. Change log
 
