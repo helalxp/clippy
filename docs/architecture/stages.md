@@ -78,8 +78,8 @@ Acceptance:
 - [ ] Asset-integrity tests pass in CI.
 - [x] Manifest writes use same-directory temp files, fsync, and atomic replace.
 - [ ] Simulated write-failure test passes.
-- [x] Per-template locks and expected-revision compare-and-swap are implemented.
-- [ ] Concurrent create/update tests pass.
+- [x] Thread locks, OS-backed file locks, and expected-revision compare-and-swap are implemented.
+- [ ] Concurrent thread and cross-process create/update tests pass.
 - [x] Storage is explicitly rooted by caller and does not reference upload/output directories.
 
 ## Stage 3 — Reference ingest and deterministic analysis
