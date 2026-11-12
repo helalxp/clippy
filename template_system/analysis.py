@@ -50,11 +50,13 @@ class MediaProbe:
             "width": self.width,
             "height": self.height,
             "frame_rate": self.frame_rate,
+            "pixel_aspect_ratio": self.pixel_aspect_ratio,
             "video_codec": self.video_codec,
             "pixel_format": self.pixel_format,
             "has_audio": self.has_audio,
             "audio_codec": self.audio_codec,
             "audio_channels": self.audio_channels,
+            "audio_sample_rate": self.audio_sample_rate,
             "rotation_degrees": self.rotation_degrees,
         }
 
