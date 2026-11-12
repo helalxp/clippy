@@ -43,6 +43,7 @@ from .adapters import (
     RenderResult,
     RendererCompatibilityError,
 )
+from .service import TemplateApplicationResult, TemplateApplicationService
 from .storage import (
     LocalTemplateStorage,
     TemplateAlreadyExists,
@@ -82,6 +83,8 @@ __all__ = [
     "RendererCapabilityFinding",
     "RendererCompatibilityDocument",
     "TemplateDocument",
+    "TemplateApplicationResult",
+    "TemplateApplicationService",
     "TemplateIntegrityError",
     "TemplateInterpretation",
     "TemplateNotFound",
