@@ -280,4 +280,5 @@ Acceptance:
 | 7. API and UI | Planned |
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
+
 **Immediate next action:** extend metadata locking to all clip-edit routes, add failure-injection coverage, then implement caption/hook adapters with measured capability claims. Keep live Gemini validation opt-in. Focused template CI is green at 109 passed; the full backend run reports 1,317 passed, 50 skipped, and the same two pre-existing failures documented in `implementation.md`. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
