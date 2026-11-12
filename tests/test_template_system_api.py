@@ -42,6 +42,8 @@ def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_prove
     }
 
     monkeypatch.setattr(app_module, "OUTPUT_DIR", str(output_dir))
+    template_library_dir = tmp_path / "template-library"
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(template_library_dir))
     monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
     monkeypatch.setattr(app_module, "require_managed_entitlement", _async_noop)
     monkeypatch.setattr(app_module, "_ensure_job_files", _async_noop)
@@ -52,7 +54,7 @@ def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_prove
     app_module._rerender_locks[job_id] = asyncio.Lock()
 
     scope = hashlib.sha256(b"local-installation").hexdigest()[:32]
-    storage = LocalTemplateStorage(output_dir / "template_library" / scope)
+    storage = LocalTemplateStorage(template_library_dir / scope)
     template = TemplateDocument(
         id="tpl_api_fixture001",
         name="API integration fixture",
