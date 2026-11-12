@@ -282,7 +282,7 @@ def test_synthesis_rejects_accepted_values_outside_recipe_ranges():
             property_path="captions.font_size_ratio",
             value=0.5,
             confidence="high",
-            source="human_correction",
+            source="visual_observation",
             status="accepted",
             reviewed_by="local-user",
             reviewed_at=datetime(2026, 11, 12, tzinfo=timezone.utc),
