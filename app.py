@@ -4376,6 +4376,14 @@ async def rerender_clip(req: RerenderRequest, request: Request):
       re-reframe with the same engine the pipeline used. 409 when the source
       already aged out.
     """
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Template application is disabled in managed mode until the template "
+                "library has durable per-user storage. Local/self-hosted mode remains available."
+            ),
+        )
     await require_managed_entitlement(request)
     await _ensure_job_files(req.job_id, request)
     if req.job_id not in jobs:
@@ -4613,15 +4621,6 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
             f"template_{int(time.time())}_{uuid.uuid4().hex[:10]}_{clean_name}"
         )
         output_path = os.path.join(output_dir, output_name)
-        clip_segments, _ = _clip_recipe_parts(clips[req.clip_index])
-        duration_seconds = sum(
-            max(0.0, float(segment.get("end", 0)) - float(segment.get("start", 0)))
-            for segment in clip_segments
-        )
-        render_minutes = max(1, math.ceil(duration_seconds / 60.0)) if BILLING_ENABLED else 0
-        reservation_id = await reserve_managed_action(
-            request, render_minutes, req.job_id, "template_apply"
-        ) if BILLING_ENABLED else None
         rendered = None
         served_name = None
         metadata_committed = False
@@ -4675,8 +4674,6 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
                 memory_clips[req.clip_index].update(updates)
             _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
 
-            if reservation_id:
-                await _metering.commit_reservation(reservation_id)
             return {
                 "success": True,
                 "new_video_url": new_video_url,
@@ -4684,8 +4681,6 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
                 "compatibility": rendered.render.compatibility.as_dict(),
             }
         except HTTPException:
-            if reservation_id:
-                await _metering.release_reservation(reservation_id)
             if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
             if not metadata_committed and served_name and served_name != output_name:
@@ -4695,18 +4690,12 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
                     pass
             raise
         except TemplateNotFound:
-            if reservation_id:
-                await _metering.release_reservation(reservation_id)
             if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
             raise HTTPException(status_code=404, detail="Template not found")
         except RendererCompatibilityError as exc:
-            if reservation_id:
-                await _metering.release_reservation(reservation_id)
             raise HTTPException(status_code=422, detail=str(exc))
         except RenderAdapterError as exc:
-            if reservation_id:
-                await _metering.release_reservation(reservation_id)
             if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail=str(exc))
