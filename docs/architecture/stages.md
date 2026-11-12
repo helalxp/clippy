@@ -181,8 +181,13 @@ Verification:
 - [x] Focused template CI: **109 passed, 0 failed**.
 - [x] Full-backend API integration tests verify clean-source selection, metadata and in-memory updates, provenance persistence, managed-mode storage gate, and cleanup after simulated metadata-write failure.
 
+Implemented in this update:
+- Shared per-job edit serialization now covers background, watermark, subtitle-add, subtitle-remove, and hook routes in addition to the existing rerender, reframe, and template-apply lock scopes.
+- Added focused concurrency tests proving same-job edits serialize, different jobs proceed independently, and form-style endpoints resolve their job ID.
+
 Remaining:
-- [ ] Extend the shared per-job edit lock to every metadata-mutating clip endpoint and test concurrent edit races.
+- [ ] Audit any other metadata-mutating routes and add lock coverage where required.
+- [ ] Confirm concurrency tests and full backend CI are green.
 - [x] Failure-injection test verifies metadata replacement failure preserves the last valid manifest/render and removes only the uncommitted output.
 - [ ] Implement caption styling and hook/title adapters one capability at a time.
 - [ ] Implement overlays only after asset sizing, alpha, and normalized-position semantics are validated.
@@ -281,4 +286,9 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** extend metadata locking to all clip-edit routes, add failure-injection coverage, then implement caption/hook adapters with measured capability claims. Keep live Gemini validation opt-in. Focused template CI is green at 109 passed; the full backend run reports 1,317 passed, 50 skipped, and the same two pre-existing failures documented in `implementation.md`. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+**Immediate next action:** validate shared edit-locking in CI and audit remaining metadata-mutating routes. Then implement caption styling and template-driven hook/title adapters with measured capability claims. Keep live Gemini validation opt-in. Focused template CI is green at 109 passed; the full backend run reports 1,317 passed, 50 skipped, and the same two pre-existing failures documented in `implementation.md`. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+
+
+### Stage 5 update: shared edit locking
+
+The background, watermark, subtitle-add, subtitle-remove, and hook endpoints now acquire the same per-job lock used by rerender, reframe, and template application. The lock encloses the complete operation so metadata is read only after acquiring it and derivative generation cannot interleave with another edit to the same job. Different jobs remain concurrent. Focused tests cover same-job serialization, cross-job independence, and form-style endpoint arguments. CI validation is pending for commit `733bec520a7759a5dd92a0d6a194bca4078e8027`.
