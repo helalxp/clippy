@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .adapters.python_ffmpeg import PythonFFmpegAdapter, RenderResult
-from .models import TemplateDocument
+from .models import TemplateDocument, TemplateRecipe
 from .resolver import AdaptationDecision, resolve_recipe
 from .storage import LocalTemplateStorage
 
@@ -20,6 +20,7 @@ class TemplateApplicationResult:
     recipe_hash: str
     applied_at: datetime
     render: RenderResult
+    resolved_recipe: TemplateRecipe
     adaptation_decisions: tuple[AdaptationDecision, ...]
     locked_paths: tuple[str, ...]
 
@@ -30,7 +31,8 @@ class TemplateApplicationResult:
             "template_revision": self.template_revision,
             "recipe_hash": self.recipe_hash,
             "applied_at": self.applied_at.isoformat(),
-            "output_path": str(self.render.output_path),
+            "output_filename": self.render.output_path.name,
+            "resolved_recipe": self.resolved_recipe.model_dump(mode="json", by_alias=True),
             "source_fingerprint": self.render.source_fingerprint,
             "output_fingerprint": self.render.output_fingerprint,
             "duration_seconds": self.render.duration_seconds,
@@ -90,6 +92,7 @@ class TemplateApplicationService:
             recipe_hash=resolved.recipe_hash,
             applied_at=datetime.now(timezone.utc),
             render=rendered,
+            resolved_recipe=resolved.recipe,
             adaptation_decisions=resolved.adaptation_decisions,
             locked_paths=resolved.locked_paths,
         )
