@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .models import AnalysisEvidence, TemplateAnalysis, TemplateAsset
+from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_visual_samples
 
 
 class ReferenceAnalysisError(RuntimeError):
@@ -91,6 +92,7 @@ class ReferenceAnalysisResult:
     coverage: dict[str, float]
     limitations: tuple[str, ...]
     status: str
+    visual_measurements: tuple[FrameVisualMeasurement, ...] = ()
 
     def to_template_parts(self) -> tuple[TemplateAnalysis, list[TemplateAsset]]:
         """Convert measured evidence into canonical analysis and asset records."""
@@ -123,6 +125,45 @@ class ReferenceAnalysisResult:
                 source_timestamp_ms=sample.timestamp_ms,
                 asset_id=asset_id,
             ))
+        for measurement in self.visual_measurements:
+            timestamp = measurement.timestamp_ms
+            evidence.extend([
+                AnalysisEvidence(
+                    property_path="reference.color_palette",
+                    method="pillow.median_cut",
+                    source_timestamp_ms=timestamp,
+                    note=json.dumps(
+                        [item.to_dict() for item in measurement.dominant_colors],
+                        sort_keys=True,
+                    )[:1000],
+                ),
+                AnalysisEvidence(
+                    property_path="reference.luminance",
+                    method="pillow.grayscale_statistics",
+                    source_timestamp_ms=timestamp,
+                    note=json.dumps({
+                        "mean": measurement.mean_luminance,
+                        "stddev": measurement.luminance_stddev,
+                    }, sort_keys=True),
+                ),
+                AnalysisEvidence(
+                    property_path="reference.edge_density",
+                    method="pillow.gradient_threshold",
+                    source_timestamp_ms=timestamp,
+                    note=f"normalized_edge_density={measurement.edge_density:.6f}",
+                ),
+            ])
+            if measurement.inter_sample_visual_change is not None:
+                evidence.append(AnalysisEvidence(
+                    property_path="reference.inter_sample_visual_change",
+                    method="pillow.sample_difference",
+                    source_timestamp_ms=timestamp,
+                    note=(
+                        "pixel difference between adjacent sampled frames; "
+                        "not an optical-flow or subject-motion estimate; "
+                        f"value={measurement.inter_sample_visual_change:.6f}"
+                    ),
+                ))
         analysis = TemplateAnalysis(
             status=self.status,
             coverage=self.coverage,
@@ -502,12 +543,22 @@ def analyze_reference_video(
 
     if not samples:
         raise ReferenceAnalysisError("no reference frames could be sampled")
+    visual_measurements: tuple[FrameVisualMeasurement, ...] = ()
+    try:
+        visual_measurements = measure_visual_samples(samples, frame_dir)
+    except VisualMeasurementError as exc:
+        limitations.append(f"Deterministic visual measurements unavailable: {exc}")
     coverage = {
         "media_probe": 1.0,
         "scene_detection": 1.0 if scene_ok else 0.0,
         "frame_sampling": len(samples) / len(timestamps),
+        "visual_measurements": len(visual_measurements) / len(samples),
     }
-    status = "complete" if scene_ok and sample_failures == 0 else "partial"
+    status = (
+        "complete"
+        if scene_ok and sample_failures == 0 and len(visual_measurements) == len(samples)
+        else "partial"
+    )
     return ReferenceAnalysisResult(
         probe=probe,
         scene_boundaries_seconds=tuple(boundaries),
@@ -515,4 +566,5 @@ def analyze_reference_video(
         coverage=coverage,
         limitations=tuple(limitations),
         status=status,
+        visual_measurements=visual_measurements,
     )
