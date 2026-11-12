@@ -461,6 +461,7 @@ def test_real_ffmpeg_reference_analysis_pipeline(tmp_path):
     assert result.probe.duration_seconds == pytest.approx(2.0, abs=0.15)
     assert result.probe.width == 320
     assert result.probe.height == 240
+    assert any(abs(boundary - 1.0) <= 0.2 for boundary in result.scene_boundaries_seconds)
     assert result.samples
     assert len(result.visual_measurements) == len(result.samples)
     assert result.coverage["visual_measurements"] == 1.0
