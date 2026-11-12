@@ -120,30 +120,31 @@ Scope limits carried forward:
 
 ## Stage 4 — Structured interpretation and template synthesis
 
-**Status: IN PROGRESS — provider-neutral contract, optional Gemini adapter, and deterministic reviewed-claim synthesis implemented; CI/live-quality verification pending.**
+**Status: IN PROGRESS — provider-neutral contract, consent-gated Gemini adapter, human review, deterministic synthesis, and persistent draft assembly implemented; live-provider quality validation remains.**
 
 Objective: convert measurements and optional vision interpretation into a reviewable draft template.
 
 Implemented deliverables:
-- Strict provider-neutral response schema with a closed allowlist of canonical recipe leaf paths and strict scalar types.
-- Every claim requires qualitative confidence, observation/inference classification, rationale, and one or more exact sampled asset/timestamp references.
+- Strict provider-neutral response schema and persisted domain models with a closed allowlist of canonical recipe leaf paths and strict scalar types.
+- Every claim requires qualitative confidence, observation/inference classification, rationale, and one or more exact sampled asset/timestamp references. The template document persists the interpretation and verifies each evidence timestamp against its frame asset.
 - Evidence files are path-contained, size-bounded, and SHA-256 verified before they are passed to a provider.
 - Frame count and total evidence bytes are bounded; only selected PNG frames are sent, never the source video.
 - Optional Gemini vision adapter uses structured JSON output and the existing `GEMINI_API_KEY` / `GEMINI_MODEL` configuration. It is opt-in and makes no network call on import or construction with an injected client.
 - Provider claims are forcibly marked pending; a model cannot self-approve, reject, or mark its own claim as a human correction.
 - Deterministic draft synthesis applies only accepted/corrected claims; pending and rejected claims do not mutate the recipe.
 - Reviewed claims convert into canonical resolver proposals, preserving clip-override and explicit-lock precedence.
+- Draft assembly persists deterministic analysis, interpretation claims, reviewer provenance, timestamped frame assets, synthesized recipe, and all three renderer compatibility snapshots.
 
 Remaining deliverables:
-- Live opt-in Gemini smoke test and provider error/cost telemetry.
+- Live opt-in Gemini smoke test and provider token/cost telemetry.
 - Representative-reference quality evaluation and calibration of qualitative confidence.
-- Complete support/compatibility report attached to each synthesized draft.
+- Representative-reference quality evaluation, confidence calibration, and expanded interpretation of transitions/overlays/text where evidence supports it.
 
 Acceptance:
 - [x] Model output is schema-validated and cannot introduce arbitrary recipe fields.
 - [x] Claims without exact supplied evidence references are rejected.
 - [x] Confidence is qualitative only; no numeric confidence is emitted.
-- [ ] Capability incompatibilities are attached to the synthesized draft and visible before a template is marked ready.
+- [x] Capability incompatibilities are attached to the synthesized draft for Python/FFmpeg, Remotion preview, and Remotion render.
 - [x] Model claims remain pending; accepted/corrected claims are the only ones applied, and the resolver preserves clip overrides and locks.
 
 ## Stage 5 — Python/FFmpeg application vertical slice
@@ -253,10 +254,10 @@ Acceptance:
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
 | 2. Local persistence | Complete; focused CI green |
 | 3. Deterministic analysis | Complete; 69 focused tests pass, including real FFmpeg ingest-to-persisted-template fixture |
-| 4. Structured interpretation and synthesis | In progress; contract, Gemini adapter, and synthesis implemented |\n| 5. Python/FFmpeg adapter | Planned |
+| 4. Structured interpretation and synthesis | In progress; strict claims, consent-gated Gemini adapter, human review, persistent draft assembly, and capability reports implemented |\n| 5. Python/FFmpeg adapter | Planned |
 | 6. Remotion parity | Planned |
 | 7. API and UI | Planned |
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** verify the expanded focused suite, then perform a live opt-in Gemini smoke test and evaluate interpretation quality on representative references before advancing to the Python/FFmpeg application adapter. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** perform a live opt-in Gemini smoke test only with explicit user consent and a configured API key, add token/cost telemetry, and evaluate claim quality on representative references. The focused CI suite currently reports 90 passing tests. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
