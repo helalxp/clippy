@@ -5376,6 +5376,7 @@ class EffectsGenerateRequest(BaseModel):
     input_filename: Optional[str] = None
 
 @app.post("/api/effects/generate")
+@_serialize_job_edit
 async def generate_effects_config(
     req: EffectsGenerateRequest,
     request: Request,
@@ -5949,6 +5950,7 @@ async def get_languages():
     return {"languages": get_supported_languages()}
 
 @app.post("/api/translate")
+@_serialize_job_edit
 async def translate_clip(
     req: TranslateRequest,
     request: Request,
