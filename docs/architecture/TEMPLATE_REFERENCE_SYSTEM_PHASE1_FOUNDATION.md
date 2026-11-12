@@ -1,7 +1,7 @@
 # Template Reference System — Phase 1 Foundation
 
 **Branch:** \`feature/template-reference-system\`  
-**Status:** Foundation implementation committed; local test execution and renderer integration are still required.
+**Status:** Phase 1 foundation implemented; focused contract suite verified by the user on 2026-11-12. Renderer integration remains pending.
 
 ## Delivered
 
@@ -73,11 +73,15 @@ This foundation is not yet wired into the production pipeline. In particular:
 
 These are intentional gates. The contract and capability model must be exercised before application routes can persist or apply templates.
 
+## Verification update (2026-11-12)
+
+The user executed `python -m pytest tests/test_template_system_contracts.py -v` in an isolated Python 3.11.16 environment. Result: **18 passed, 0 failed in 0.35s**. This verifies only the focused contract module; it is not a full backend-suite or renderer integration result.
+
 ## Next implementation gate
 
-1. Run the new focused test module and the existing backend suite on the user's Windows checkout.
-2. Fix any compatibility failures before adding route integration.
-3. Build a Python/FFmpeg adapter for one vertical slice: canvas + caption style + hook + background, with explicit capability findings for anything not implemented.
+1. Verify the Stage 2 local storage implementation and its dedicated test module.
+2. Add deterministic reference-media probing, bounded scene-aware sampling, and evidence capture.
+3. Build a Python/FFmpeg adapter for one vertical slice: canvas + caption style + hook + one background behavior, with explicit capability findings for anything not implemented.
 4. Capture deterministic fixture renders and compare expected frames, bounds, timing and output metadata.
 5. Only after that, add preview and Remotion adapters, using a shared contract and parity tests to address the existing composition drift.
 
