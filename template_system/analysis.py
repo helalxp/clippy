@@ -433,7 +433,11 @@ def analyze_reference_video(
     )
     samples: list[FrameSample] = []
     sample_failures = 0
-    frame_dir = Path(output_dir).expanduser().resolve()
+    raw_frame_dir = Path(output_dir).expanduser()
+    if raw_frame_dir.is_symlink():
+        raise ReferenceAnalysisError("frame output directory must not be a symbolic link")
+    raw_frame_dir.mkdir(parents=True, exist_ok=True)
+    frame_dir = raw_frame_dir.resolve(strict=True)
     for index, timestamp in enumerate(timestamps, start=1):
         try:
             extracted = extract_sample_frames(
@@ -443,7 +447,10 @@ def analyze_reference_video(
             sample = extracted[0]
             stable_name = f"frame_{index:03d}_{sample.timestamp_ms:010d}ms.png"
             if sample.relative_path != stable_name:
-                os.replace(frame_dir / sample.relative_path, frame_dir / stable_name)
+                stable_target = frame_dir / stable_name
+                if stable_target.exists() or stable_target.is_symlink():
+                    raise ReferenceAnalysisError(f"sample output already exists: {stable_name}")
+                os.replace(frame_dir / sample.relative_path, stable_target)
                 sample = replace(sample, relative_path=stable_name)
             samples.append(sample)
         except ReferenceAnalysisError as exc:
