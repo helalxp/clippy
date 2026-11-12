@@ -53,6 +53,7 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
     "python_ffmpeg": {
         "canvas": FeatureCapability("canvas", "exact", "Output dimensions and frame rate are explicit pipeline inputs."),
         "framing": FeatureCapability("framing", "approximate", "Automatic scene framing and manual crop overrides exist, but normalized template anchors do not yet have a canonical adapter."),
+        "safe_area": FeatureCapability("safe_area", "approximate", "Some existing overlay placement uses margins, but the canonical safe-area contract is not wired through the pipeline."),
         "captions": FeatureCapability("captions", "approximate", "ASS subtitle burning supports rich timing and styling, but the template caption contract is not yet translated."),
         "hook": FeatureCapability("hook", "approximate", "Hook rendering and placement exist, but template typography and animation semantics are not yet mapped."),
         "background": FeatureCapability("background", "approximate", "Blur and solid-background editing exists through a separate derivative endpoint."),
@@ -65,6 +66,7 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
     "remotion_preview": {
         "canvas": FeatureCapability("canvas", "exact", "The browser Player receives explicit composition dimensions and frame rate."),
         "framing": FeatureCapability("framing", "unsupported", "The preview composition does not consume the canonical framing recipe."),
+        "safe_area": FeatureCapability("safe_area", "unsupported", "The preview composition does not consume canonical safe-area margins."),
         "captions": FeatureCapability("captions", "approximate", "The dashboard composition supports captions, but its config schema and renderer semantics have drifted."),
         "hook": FeatureCapability("hook", "approximate", "The preview supports a narrower hook contract than the canonical template recipe."),
         "background": FeatureCapability("background", "unsupported", "The preview composition has no canonical background recipe input."),
@@ -77,6 +79,7 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
     "remotion_render": {
         "canvas": FeatureCapability("canvas", "exact", "The render service selects a composition with explicit dimensions and frame rate."),
         "framing": FeatureCapability("framing", "unsupported", "The render composition does not consume the canonical framing recipe."),
+        "safe_area": FeatureCapability("safe_area", "unsupported", "The render composition does not consume canonical safe-area margins."),
         "captions": FeatureCapability("captions", "approximate", "The root composition supports a narrower caption contract than the dashboard preview."),
         "hook": FeatureCapability("hook", "approximate", "The root composition supports a narrower hook contract than the canonical template recipe."),
         "background": FeatureCapability("background", "unsupported", "The render composition has no canonical background recipe input."),
@@ -105,6 +108,13 @@ def _requested_features(recipe: TemplateRecipe) -> set[str]:
         or recipe.framing.anchor_y != 0.5
     ):
         requested.add("framing")
+    if (
+        recipe.canvas.safe_top != 0.05
+        or recipe.canvas.safe_right != 0.05
+        or recipe.canvas.safe_bottom != 0.08
+        or recipe.canvas.safe_left != 0.05
+    ):
+        requested.add("safe_area")
     if recipe.captions.enabled:
         requested.add("captions")
     if recipe.hook.enabled:
