@@ -11,6 +11,7 @@ import template_system.analysis as analysis_module
 from template_system.models import TemplateDocument
 from template_system.analysis import (
     FrameSample,
+    FrameVisualMeasurement,
     MediaProbe,
     ReferenceAnalysisError,
     ReferenceAnalysisResult,
@@ -273,6 +274,22 @@ def test_analyze_reference_video_returns_evidence_and_coverage(tmp_path, monkeyp
         ),)
 
     monkeypatch.setattr(analysis_module, "extract_sample_frames", fake_extract)
+    monkeypatch.setattr(
+        analysis_module,
+        "measure_visual_samples",
+        lambda samples, root: tuple(
+            FrameVisualMeasurement(
+                timestamp_ms=sample.timestamp_ms,
+                dominant_colors=(),
+                mean_luminance=0.5,
+                luminance_stddev=0.1,
+                mean_saturation=0.2,
+                edge_density=0.3,
+                inter_sample_visual_change=None,
+            )
+            for sample in samples
+        ),
+    )
     result = analysis_module.analyze_reference_video("unused.mp4", tmp_path / "frames")
 
     assert result.status == "complete"
@@ -340,6 +357,15 @@ def test_analysis_result_builds_valid_template_evidence_and_assets():
         coverage={"media_probe": 1.0, "scene_detection": 1.0, "frame_sampling": 1.0},
         limitations=(),
         status="complete",
+        visual_measurements=(FrameVisualMeasurement(
+            timestamp_ms=2500,
+            dominant_colors=(),
+            mean_luminance=0.5,
+            luminance_stddev=0.1,
+            mean_saturation=0.2,
+            edge_density=0.3,
+            inter_sample_visual_change=None,
+        ),),
     )
 
     analysis, assets = result.to_template_parts()
