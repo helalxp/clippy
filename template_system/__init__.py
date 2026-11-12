@@ -36,6 +36,13 @@ from .models import RendererCapabilityFinding, RendererCompatibilityDocument, Te
 from .providers import GeminiProviderError, GeminiVisionInterpreter
 from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement, VisualMeasurementError, measure_visual_samples
+from .adapters import (
+    PythonFFmpegAdapter,
+    RenderAdapterError,
+    RenderCancelledError,
+    RenderResult,
+    RendererCompatibilityError,
+)
 from .storage import (
     LocalTemplateStorage,
     TemplateAlreadyExists,
@@ -47,6 +54,11 @@ from .storage import (
 
 __all__ = [
     "FrameSample",
+    "PythonFFmpegAdapter",
+    "RenderAdapterError",
+    "RenderCancelledError",
+    "RenderResult",
+    "RendererCompatibilityError",
     "FrameVisualMeasurement",
     "GeminiProviderError",
     "GeminiVisionInterpreter",
