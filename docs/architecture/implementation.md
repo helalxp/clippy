@@ -93,7 +93,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Full backend suite
 
-The full backend job is not green. The latest full-suite run reported **1,315 passed, 42 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
+The full backend job is not green. The latest full-suite run reported **1,315 passed, 48 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
 
 1. `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`: test expects `(20.0, 30.0)`, current result is `(20.0, 25.0)`.
 2. `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`: injected watermark lambda does not accept the `backdrop_type` and `backdrop_color` keyword arguments now passed by `recut.perform_recut`.
@@ -123,7 +123,7 @@ The provider-neutral interpretation contract and optional Gemini vision adapter 
 - remain a proposal until accepted or corrected;
 - never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The focused suite now passes 101 tests. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter for canvas/framing/background, but it is not yet wired into Clippy's existing API or generation flow; captions, hooks, overlays, tracking, and recipe provenance remain.
+Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The latest completed focused suite passed 107 tests; two additional clean-source overwrite regression tests are now queued for CI. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter plus a storage-backed application service. The service resolves overrides and locks, applies the supported subset, and returns recipe hash, template revision, source/output fingerprints, compatibility, and adaptation provenance. It is not yet wired into Clippy's existing API or generation flow; captions, hooks, overlays, and tracking remain unsupported.
 
 ## 8. Next vertical slice
 
@@ -136,4 +136,4 @@ Only the bounded sampled PNG evidence and deterministic measurements are passed 
 
 ## 9. Change log
 
-- **2026-11-12:** Restored this tracker and `stages.md` on the online feature branch. Stages 0–3 are now evidenced; focused template CI reports 69 passing tests, including a real FFmpeg ingest-to-persisted-template fixture. Recorded the two known full-backend baseline failures separately.
+- **2026-11-12:** Restored this tracker and `stages.md` on the online feature branch. Stages 0–3 are evidenced; Stage 4 interpretation and Stage 5 FFmpeg application work are in progress. Focused CI reached 107 passing tests, including real FFmpeg ingest, pixel-level output checks, and stored-template application-service tests. Added source-overwrite regression tests, pending CI. Recorded the two known full-backend baseline failures separately.
