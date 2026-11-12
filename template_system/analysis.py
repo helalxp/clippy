@@ -47,6 +47,9 @@ class MediaProbe:
     audio_channels: int | None
     audio_sample_rate: int | None
     rotation_degrees: int
+    video_stream_count: int = 1
+    audio_stream_count: int = 0
+    other_stream_types: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +68,9 @@ class MediaProbe:
             "audio_channels": self.audio_channels,
             "audio_sample_rate": self.audio_sample_rate,
             "rotation_degrees": self.rotation_degrees,
+            "video_stream_count": self.video_stream_count,
+            "audio_stream_count": self.audio_stream_count,
+            "other_stream_types": list(self.other_stream_types),
         }
 
 
@@ -327,6 +333,9 @@ def probe_media(
         audio_channels=audio_channels,
         audio_sample_rate=audio_sample_rate,
         rotation_degrees=rotation,
+        video_stream_count=len(video_streams),
+        audio_stream_count=len(audio_streams),
+        other_stream_types=other_stream_types,
     )
 
 
