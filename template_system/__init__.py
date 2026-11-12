@@ -3,6 +3,7 @@
 from .analysis import (
     FrameSample,
     MediaProbe,
+    ReferenceAnalysisCancelled,
     ReferenceAnalysisError,
     ReferenceAnalysisResult,
     analyze_reference_video,
@@ -30,6 +31,7 @@ __all__ = [
     "FrameVisualMeasurement",
     "LocalTemplateStorage",
     "MediaProbe",
+    "ReferenceAnalysisCancelled",
     "ReferenceAnalysisError",
     "ReferenceAnalysisResult",
     "ResolvedRecipe",
