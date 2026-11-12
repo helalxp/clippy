@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,12 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    subprocess.run(
-        ["ffmpeg", "-version"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).returncode != 0,
+    shutil.which("ffmpeg") is None,
     reason="Template API integration requires FFmpeg",
 )
 
