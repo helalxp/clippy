@@ -345,6 +345,6 @@ The local API slice now includes:
 - `PUT /api/templates/{template_id}` with `expected_revision` conflict protection.
 - `DELETE /api/templates/{template_id}` for owned template removal.
 
-The same hashed owner scope is used by template application and library CRUD. Managed mode remains blocked. Asset-bearing creates are rejected until the dedicated upload flow can validate content type, size, checksums, opaque IDs, and safe paths.
+The same hashed owner scope is used by template application and library CRUD. Updates are server-versioned and deletes require an expected revision, preventing stale clients from overwriting or removing newer work. Managed mode remains blocked. Asset-bearing creates are rejected until the dedicated upload flow can validate content type, size, checksums, opaque IDs, and safe paths.
 
-Code commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. Test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. The previous CI run does not cover these additions; acceptance remains provisional until the new tests run successfully.
+Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Revision-safety hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, `be791d4746e167a78ab8e7d463282ec26ce19be0`, and `6e49046629eca2b41f4cd5a19aae668536c8758d`. The previous CI run does not cover these additions; acceptance remains provisional until the new tests run successfully.
