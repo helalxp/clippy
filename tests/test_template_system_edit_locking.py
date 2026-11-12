@@ -77,3 +77,29 @@ def test_job_edit_lock_accepts_form_style_job_id_keyword():
         assert await mutate(SimpleNamespace(), job_id="form-job") == "form-job"
 
     asyncio.run(scenario())
+
+
+
+def test_metadata_mutating_editor_routes_use_the_shared_lock():
+    import app as app_module
+
+    required_paths = {
+        "/api/clip/background",
+        "/api/clip/watermark",
+        "/api/effects/generate",
+        "/api/subtitle",
+        "/api/subtitle/remove",
+        "/api/hook",
+        "/api/translate",
+    }
+    endpoints = {
+        route.path: route.endpoint
+        for route in app_module.app.routes
+        if getattr(route, "path", None) in required_paths
+    }
+
+    assert set(endpoints) == required_paths
+    for path, endpoint in endpoints.items():
+        assert hasattr(endpoint, "__wrapped__"), (
+            f"{path} must be serialized by the shared per-job edit lock"
+        )
