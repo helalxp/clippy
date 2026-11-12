@@ -52,6 +52,7 @@ class FramingRecipe(ContractModel):
 class CaptionRecipe(ContractModel):
     enabled: bool = False
     font_family: str = Field(default="Arial", min_length=1, max_length=120)
+    font_asset_id: str | None = None
     font_size_ratio: float = Field(default=0.035, gt=0, le=0.15)
     font_color: HexColor = "#FFFFFF"
     highlight_color: HexColor = "#FFE45E"
@@ -71,6 +72,7 @@ class HookRecipe(ContractModel):
     enabled: bool = False
     text: str = Field(default="", max_length=240)
     font_family: str = Field(default="Arial", min_length=1, max_length=120)
+    font_asset_id: str | None = None
     font_size_ratio: float = Field(default=0.06, gt=0, le=0.2)
     color: HexColor = "#FFFFFF"
     background_color: HexColor | None = None
@@ -268,6 +270,7 @@ class TemplateDocument(ContractModel):
         asset_ids = {asset.id for asset in self.assets}
         if len(asset_ids) != len(self.assets):
             raise ValueError("template asset ids must be unique")
+        asset_by_id = {asset.id: asset for asset in self.assets}
         referenced = {
             overlay.asset_id
             for overlay in self.recipe.overlays
@@ -276,6 +279,22 @@ class TemplateDocument(ContractModel):
         missing = referenced - asset_ids
         if missing:
             raise ValueError(f"recipe references missing asset ids: {sorted(missing)}")
+        for overlay in self.recipe.overlays:
+            if overlay.asset_id and not asset_by_id[overlay.asset_id].media_type.startswith("image/"):
+                raise ValueError(f"overlay {overlay.id!r} must reference an image asset")
+        font_refs = {
+            asset_id
+            for asset_id in (
+                self.recipe.captions.font_asset_id,
+                self.recipe.hook.font_asset_id,
+            )
+            if asset_id is not None
+        }
+        if font_refs - asset_ids:
+            raise ValueError(f"recipe references missing font asset ids: {sorted(font_refs - asset_ids)}")
+        for font_id in font_refs:
+            if not asset_by_id[font_id].media_type.startswith("font/"):
+                raise ValueError(f"font reference {font_id!r} must point to a font asset")
         evidence_assets = {
             item.asset_id for item in self.analysis.evidence if item.asset_id
         }
