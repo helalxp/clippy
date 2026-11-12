@@ -80,7 +80,7 @@ class LocalTemplateStorage:
             with lock_path.open("a+b") as stream:
                 stream.seek(0, os.SEEK_END)
                 if stream.tell() == 0:
-                    stream.write(b"\\0")
+                    stream.write(b"\0")
                     stream.flush()
                 stream.seek(0)
                 if os.name == "nt":
@@ -272,7 +272,7 @@ class LocalTemplateStorage:
         expected_revision: int,
     ) -> TemplateDocument:
         template_dir = self._template_dir(document.id)
-        with self._lock_for(document.id):
+        with self._synchronized(document.id):
             if not template_dir.is_dir():
                 raise TemplateNotFound(document.id)
             current = self._read_document(template_dir)
