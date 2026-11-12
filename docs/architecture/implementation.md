@@ -3,7 +3,7 @@
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system-clean`  
 **Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis is implemented with provider-quality gates pending; Stage 5 Python/FFmpeg application and local template-library API are in progress.  
-**Last implementation update:** 2026-11-12 (owner-scoped template-library CRUD and revision-safe lifecycle validated in CI run `43309965692`)
+**Last implementation update:** 2026-11-12 (owner-scoped template CRUD and verified image asset lifecycle validated in CI run `43310755521`)
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
 
@@ -26,7 +26,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - [x] Conversion of measured results into canonical `TemplateAnalysis`, `TemplateAsset`, and evidence records.
 - [x] Progress callbacks and cancellation checks at safe staging/analysis boundaries.
 - [x] Real FFmpeg/FFprobe integration fixture verifies the full local path from staging through analysis and persistent template assets.
-- [x] Focused template/API/edit-lock CI: **119 passed, 0 failed** in run `43309965692`.
+- [x] Focused template/API/edit-lock CI: **123 passed, 0 failed** in run `43310755521`.
 
 ### Not yet implemented
 
@@ -36,8 +36,9 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - [x] Shared per-job edit locking covers background, watermark, effects generation, subtitle add/remove, hook, and translation routes; rerender, reframe, template apply, and general edit retain their explicit lock scopes. Concurrency and route-registration tests passed in CI run `43309965692`.
 - [~] Remaining Python/FFmpeg features include template-driven captions, hooks/titles, overlays, and tracking; these must be implemented and capability-tested individually.
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
-- [x] Local template-library list/create/read/update/delete APIs with owner-scoped storage and optimistic revision checks. Create currently accepts asset-free templates only.
-- [~] Template asset upload/import, durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
+- [x] Local template-library list/create/read/update/delete APIs with owner-scoped storage and optimistic revision checks.
+- [x] Raster image asset upload/read/delete APIs for PNG, JPEG, and WebP, with server-generated IDs/paths, 20 MB cap, MIME/signature/decoder checks, dimension and pixel limits, SHA-256 verification, and revision-safe lifecycle.
+- [~] Template package import/export, font asset upload, durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
 - [ ] Migration of the legacy v1 reference-template manifest.
 - [ ] Versioned import/export package and complete template lifecycle operations.
 - [ ] Managed/cloud storage. This remains out of scope until tenant isolation and authorization are designed.
@@ -61,7 +62,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Reference staging | `template_system/ingest.py` | Implemented; 7 tests pass |
 | Media probe and scene sampling | `template_system/analysis.py` | Implemented; real FFmpeg fixture passes |
 | Pixel measurements | `template_system/visuals.py` | Implemented; 6 tests pass |
-| Focused template tests | `tests/test_template_system_*.py` | 119 passed in GitHub Actions run `43309965692` |
+| Focused template tests | `tests/test_template_system_*.py` | 123 passed in GitHub Actions run `43310755521` |
 | Semantic interpretation | `template_system/interpretation.py`, `template_system/providers/gemini.py`, domain models | Contract, consent-gated Gemini adapter, human review, synthesis, and persistent draft assembly implemented; live call/quality verification pending |
 | Python/FFmpeg recipe adapter | `template_system/adapters/python_ffmpeg.py` | First real-FFmpeg slice implemented; API integration and additional features pending |
 | Remotion parity | Not implemented | Stage 6 |
@@ -91,12 +92,12 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - Interpretation/review/synthesis tests: 17 passed.
 - Gemini adapter tests: 4 passed with a fake client; no live external request was made.
 - Python/FFmpeg adapter tests: 17 passed, including real cover/contain/background renders, audio preservation, subtitle-stream rejection, pixel-level crop/background checks, cancellation, and clean-source protection.
-- **Total: 119 passed in the focused GitHub Actions job** in run `43309965692`.
+- **Total: 123 passed in the focused GitHub Actions job** in run `43310755521`.
 - Frontend build job: passed.
 
 ### Full backend suite
 
-GitHub Actions run `43309965692` validated the current local-library API and revision-safety changes: **1,327 passed, 50 skipped, 0 failed** in the full backend suite; **119 passed** in the focused template/API/edit-lock suite; frontend production build passed. All three jobs completed successfully.
+GitHub Actions run `43310755521` validated the local-library CRUD and image-asset lifecycle: **1,331 passed, 50 skipped, 0 failed** in the full backend suite; **123 passed** in the focused template/API/edit-lock suite; frontend production build passed. All three jobs completed successfully.
 
 ### Scope boundary
 
@@ -167,7 +168,7 @@ The red backend check was compared against the latest `main` workflow, not assum
 
 The latest pre-fix template branch run had 1,321 passing, 50 skipped, and those same two baseline failures. The four new edit-lock tests passed in the backend run. The focused template workflow is being expanded to include the API and locking tests, with the lightweight backend dependencies needed to import the application.
 
-Clean-branch validation passed in GitHub Actions run `43309965692` on 2026-11-12: focused template/API/locking suite **119 passed**, full backend suite **1,327 passed, 50 skipped**, and frontend production build **passed**. No backend failures remain in this run.
+Clean-branch validation passed in GitHub Actions run `43310755521` on 2026-11-12: focused template/API/locking suite **123 passed**, full backend suite **1,331 passed, 50 skipped**, and frontend production build **passed**. No backend failures remain in this run.
 
 
 ### Verified clean-branch CI
@@ -175,8 +176,8 @@ Clean-branch validation passed in GitHub Actions run `43309965692` on 2026-11-12
 - Branch: `feature/template-reference-system-clean`
 - Base: current `main` at `0d8fe1fa4f9d8493adf2b8e6aff2bdaf6e64b4eb`
 - CI run: [43304254324](https://github.com/helalxp/clippy/actions/runs/43304254324)
-- Template, API and edit-lock tests: **119 passed**
-- Full backend suite: **1,327 passed, 50 skipped**
+- Template, API and edit-lock tests: **123 passed**
+- Full backend suite: **1,331 passed, 50 skipped**
 - Frontend production build: **passed**
 - Overall workflow: **passed**
 
@@ -196,6 +197,6 @@ The previous `feature/template-reference-system` branch was 205 commits ahead of
 - CRUD API tests: `ab80b3a82810fb50bc4dec397cc462a7beb39073`.
 - Revision-safe update/delete hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, and `be791d4746e167a78ab8e7d463282ec26ce19be0`.
 - Timestamp assertion hardening: `6e49046629eca2b41f4cd5a19aae668536c8758d`.
-- CI validation: passed in run `43309965692`, including the CRUD and revision-safe update/delete tests.
+- CI validation: passed in run `43310755521`, including CRUD, revision-safe update/delete, and image asset upload/read/delete tests.
 
-Next: add a bounded asset upload/import API with MIME, size, checksum, opaque-ID, and path validation. After that, connect existing clip transcript and caption-style data to canonical template caption styling without duplicating the current subtitle engine.
+Next: add font asset support and versioned template package import/export. Then connect existing clip transcript and caption-style data to canonical template caption styling without duplicating the current subtitle engine.
