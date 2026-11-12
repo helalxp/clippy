@@ -149,7 +149,7 @@ Acceptance:
 
 ## Stage 5 — Python/FFmpeg application vertical slice
 
-**Status: IN PROGRESS — deterministic adapter and template application service implemented; integration into Clippy's existing job/editor API remains.**
+**Status: IN PROGRESS — deterministic adapter, storage-backed application service, and `POST /api/template/apply` job integration implemented; end-to-end API verification and remaining capabilities are in progress.**
 
 Objective: apply a validated recipe subset to a clean canonical clip, preserve source media, and reject unsupported properties instead of silently ignoring them.
 
@@ -176,7 +176,7 @@ Verification:
 - [x] Failed renders preserve existing destinations and clean temporary output.
 - [x] Source path and hard-link aliases cannot be used as the destination.
 - [x] Application-service tests verify stored-template lookup, resolver precedence/locks, recipe hash, and render provenance.
-- [x] Latest completed focused CI run: **107 passed, 0 failed**. Two additional clean-source overwrite regression tests have been added and are awaiting their CI result.
+- [x] Focused CI previously passed **107 tests**; additional source-overwrite and provenance tests are queued with the latest commits.\n- [ ] End-to-end API integration test is now added and awaits the full backend CI run.
 
 Remaining:
 - [ ] Integrate the application service into Clippy's existing job/editor API with job ownership checks, per-job serialization, and atomic metadata updates.
