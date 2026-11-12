@@ -84,27 +84,40 @@ Acceptance:
 
 ## Stage 3 — Reference ingest and deterministic analysis
 
-**Status: IN PROGRESS — deterministic probe/sampling foundation implemented; ingest orchestration and visual measurements remain.**
+**Status: IN PROGRESS — deterministic ingest, probing, sampling, pixel measurements, and evidence conversion are implemented; real-media validation and job integration remain.**
 
 Objective: turn a local reference video into a traceable analysis record without pretending unmeasured properties were detected.
 
-Deliverables:
-- Safe staged ingest and media validation.
-- FFprobe metadata collection.
-- Scene-aware bounded frame sampling.
-- Deterministic shot/cut, color, layout, and motion measurements where reliable.
-- Evidence assets with timestamps and provenance.
-- Resumable staged analysis state and cancellation boundaries.
-- Coverage and limitation reporting.
+Implemented deliverables:
+- Local staging into unique, permission-restricted directories with bounded streaming copy, SHA-256, atomic file placement, progress callbacks, and cancellation checks.
+- Ownership-checked cleanup that removes only the generated staging directory.
+- FFprobe technical metadata: codec, duration, dimensions, frame rate, pixel aspect ratio, pixel format, audio presence/codec/channels/sample rate, rotation, file size, and source fingerprint.
+- FFmpeg scene-cut candidates with a hard boundary cap and bounded subprocess timeout.
+- Deterministic scene-midpoint and uniform fallback sampling, capped at 64 frames.
+- PNG evidence frames with timestamp, dimensions, byte size, and SHA-256.
+- Pixel-level measurements: dominant color palette, luminance mean/standard deviation, saturation, edge density, and adjacent-sample visual change.
+- Conversion into canonical `TemplateAnalysis`, `TemplateAsset`, and evidence records.
+- Coverage and limitations reporting, including partial results when scene detection, frame extraction, or visual measurement fails.
+- Progress callbacks and cancellation checks between major stages and individual frame operations.
 
 Acceptance:
-- [ ] Invalid or unsupported media fails with actionable errors.
-- [x] Sampling count (max 64), frame dimensions, frame bytes, source size, source duration, scene-cut count, and subprocess timeouts are bounded.
+- [x] Source staging validates a local regular file, enforces size bounds, and preserves the original.
+- [x] Staged media is fingerprinted and can be safely cleaned up.
+- [x] FFprobe metadata is validated and recorded without inventing missing values.
+- [x] Sampling count, dimensions, frame bytes, source size/duration, scene-cut count, and subprocess timeouts are bounded.
 - [x] Sampled frames carry source timestamps, relative paths, dimensions, byte sizes, and checksums.
+- [x] Pixel measurements are deterministic and explicitly described as measurements, not semantic interpretation.
+- [x] Pixel difference between sampled frames is not labeled as optical flow or subject motion.
 - [x] Probe/sample records convert into canonical `TemplateAnalysis` evidence and `TemplateAsset` records.
 - [x] Scene-detection or individual frame-sampling failures produce partial results and preserve successful evidence.
-- [ ] Unmeasured properties remain unknown, not fabricated.
+- [x] Progress callbacks and cancellation checks exist at safe stage/frame boundaries.
 - [x] This deterministic stage makes no model calls and uploads no media.
+- [ ] Real-media fixture tests validate FFprobe/FFmpeg behavior on supported source formats.
+- [ ] Scene-boundary quality is measured against manually annotated fixture cuts.
+- [ ] The full staged ingest-to-template-evidence workflow is verified against real media.
+- [ ] Progress/cancellation are wired into a durable API/UI analysis-job lifecycle.
+- [ ] Analysis can resume from completed stages after interruption.
+- [ ] Semantic subject/layout analysis and true motion estimation are added only when their measurements are reliable and evidence-backed.
 
 ## Stage 4 — Structured interpretation and template synthesis
 
