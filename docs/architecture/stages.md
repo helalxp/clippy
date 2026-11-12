@@ -149,25 +149,38 @@ Acceptance:
 
 ## Stage 5 — Python/FFmpeg application vertical slice
 
-**Status: PLANNED; first production adapter target.**
+**Status: IN PROGRESS — isolated deterministic adapter implemented and real-FFmpeg tested; Clippy API/generation integration remains.**
 
-Objective: apply a resolved template recipe to an existing clip through the production-critical Python/FFmpeg path.
+Objective: apply a validated recipe subset to a clean source clip and refuse unsupported properties instead of silently ignoring them.
 
-Initial supported slice:
-- Canvas/output dimensions.
-- One caption styling path.
-- Hook/title overlay.
-- One explicitly implemented background treatment.
-- Recipe hash and template provenance recorded with render output.
+Implemented isolated adapter slice:
+- Exact canvas dimensions and frame rate.
+- Deterministic cover crop, contain framing, and manually anchored crop.
+- Original/black matte, blurred duplicate background, and solid-color contain background.
+- H.264 MP4 output and AAC audio transcoding.
+- FFprobe verification of output dimensions, frame rate, duration, video stream count, and audio stream preservation.
+- Atomic temporary-output replacement; existing output survives failed renders.
+- Progress callbacks, cancellation checks before/during render, bounded runtime, and temporary-file cleanup.
+- Capability preflight marks unsupported recipe properties incompatible. The adapter rejects captions, hooks, overlays, effects, motion, transitions, subject tracking, unsupported stream types, and conflicting crop/background combinations.
 
-Acceptance:
-- [ ] Adapter consumes only validated `TemplateRecipe` data.
-- [ ] Unsupported requested properties fail preflight with a precise compatibility report.
-- [ ] Rendering starts from a stable clean source/base rather than chaining already-burned derivatives.
-- [ ] Output is playable and has expected dimensions, duration, and streams.
-- [ ] Fixture frames verify placement, colors, typography, and timing.
-- [ ] Existing non-template generation and editing tests remain unchanged/pass.
-- [ ] Reapplying the same recipe does not stack overlays or compound effects.
+Verification:
+- [x] Adapter consumes the canonical validated `TemplateRecipe`.
+- [x] Exact supported canvas/framing/background combinations pass preflight.
+- [x] Unsupported requested properties fail preflight with a precise compatibility report.
+- [x] Real FFmpeg fixtures render cover, blur, solid, and original-matte outputs.
+- [x] Output dimensions, frame rate, duration, and audio presence are verified.
+- [x] Audio streams are preserved; subtitle/other stream types are rejected rather than silently discarded.
+- [x] Failed renders preserve an existing destination and clean temporary output.
+- [x] Focused CI: **101 passed, 0 failed**, including real FFmpeg integration.
+
+Remaining:
+- [ ] Wire the adapter into the existing Clippy generation/editor API and use clean canonical source files.
+- [ ] Persist recipe hash, template revision, and render provenance with each output.
+- [ ] Add pixel-level golden-frame checks for crop anchors and background color/blur.
+- [ ] Implement caption styling, hook/title, and overlay adapters one capability at a time.
+- [ ] Implement subject tracking only with a measurable, fixture-tested contract.
+- [ ] Prove template application is repeatable and does not stack burned derivatives.
+- [ ] Run the full backend suite green after the two pre-existing baseline failures are fixed.
 
 ## Stage 6 — Preview and Remotion parity
 
