@@ -3,7 +3,7 @@
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
 **Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis and Stage 5 Python/FFmpeg adapter plus local clip-application API are in progress.  
-**Last verified update:** 2026-11-12
+**Last implementation update:** 2026-11-12 (shared edit-lock code committed; CI validation pending)
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
 
@@ -32,9 +32,11 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 - [x] Provider-neutral strict interpretation contract, evidence verification, attributable human review, resolver integration, optional consent-gated Gemini vision adapter, persistent interpretation claims, and renderer capability snapshots in draft templates.
 - [ ] Live provider quality validation, token/cost telemetry, and broader visual claim coverage.
-- [~] Isolated Python/FFmpeg adapter consumes validated recipes for canvas, cover/contain/manual framing, and original/blur/solid backgrounds; integration with Clippy's existing generation/editor APIs and remaining renderer features are pending.
+- [x] Python/FFmpeg adapter consumes validated recipes for canvas, cover/contain/manual framing, and original/blur/solid backgrounds; local `POST /api/template/apply` integrates the application service with clean canonical clips and provenance persistence.
+- [x] Shared per-job edit locking covers background, watermark, effects generation, subtitle add/remove, hook, and translation routes; rerender, reframe, template apply, and general edit retain their explicit lock scopes. Concurrency and route-registration tests are committed, pending CI execution.
+- [~] Remaining Python/FFmpeg features include template-driven captions, hooks/titles, overlays, and tracking; these must be implemented and capability-tested individually.
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
-- [ ] Template API, durable analysis-job lifecycle, library UI, editor UI, and end-to-end apply workflow.
+- [~] Local clip-application API exists, but template library CRUD/import/upload APIs, durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
 - [ ] Migration of the legacy v1 reference-template manifest.
 - [ ] Versioned import/export package and complete template lifecycle operations.
 - [ ] Managed/cloud storage. This remains out of scope until tenant isolation and authorization are designed.
