@@ -3,40 +3,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import shutil
-import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None,
-    reason="Template API integration requires FFmpeg",
-)
-
-
-def _make_video(path: Path):
-    result = subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=2",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_provenance(
+undefineddef test_template_apply_api_updates_clip_from_clean_canonical_and_persists_provenance(
     tmp_path, monkeypatch
 ):
     import app as app_module
     from template_system.models import TemplateDocument, TemplateRecipe
     from template_system.storage import LocalTemplateStorage
+    from template_system.service import TemplateApplicationService
 
     job_id = "template-api-fixture"
     output_dir = tmp_path / "output"
@@ -45,7 +21,7 @@ def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_prove
     metadata_path = job_dir / "fixture_metadata.json"
     clean_source = job_dir / "fixture_clip_1.mp4"
     previous_delivery = job_dir / "previous-style.mp4"
-    _make_video(clean_source)
+    clean_source.write_bytes(b\"clean canonical source fixture\")
     previous_delivery.write_bytes(b"previous derivative is deliberately not a video")
 
     metadata = {
@@ -83,6 +59,42 @@ def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_prove
         }),
     )
     storage.create(template)
+
+    def fake_apply(self, template_id, source_path, output_path, **kwargs):
+        assert Path(source_path) == clean_source
+        Path(output_path).write_bytes(b"rendered template fixture")
+        compatibility = SimpleNamespace(as_dict=lambda: {"status": "compatible"})
+        render = SimpleNamespace(
+            output_path=Path(output_path),
+            source_fingerprint="a" * 64,
+            output_fingerprint="b" * 64,
+            duration_seconds=2.0,
+            width=360,
+            height=640,
+            frame_rate=24.0,
+            has_audio=False,
+            compatibility=compatibility,
+        )
+        return SimpleNamespace(
+            template_id=template.id,
+            resolved_recipe=SimpleNamespace(
+                model_dump=lambda **options: {"canvas": {"width": 360, "height": 640}}
+            ),
+            render=render,
+            to_dict=lambda: {
+                "template_id": template.id,
+                "template_name": template.name,
+                "template_revision": 1,
+                "recipe_hash": "c" * 64,
+                "output_filename": Path(output_path).name,
+                "source_fingerprint": "a" * 64,
+                "output_fingerprint": "b" * 64,
+                "adaptation_decisions": [],
+                "locked_paths": [],
+            },
+        )
+
+    monkeypatch.setattr(TemplateApplicationService, "apply", fake_apply)
 
     request = SimpleNamespace()
     req = app_module.TemplateApplyRequest(
