@@ -15,6 +15,7 @@ from template_system.interpretation import (
     TemplateInterpretation,
     interpret_reference,
     interpretation_to_proposals,
+    resolve_interpreted_recipe,
     synthesize_draft_recipe,
     InterpretationSynthesisError,
 )
@@ -300,3 +301,27 @@ def test_interpretation_contract_rejects_duplicate_property_claims():
             model_id="v1",
             claims=[claim, claim],
         )
+
+
+
+def test_reviewed_interpretation_uses_clip_override_and_lock_precedence():
+    interpretation = _direct_interpretation()
+
+    clipped = resolve_interpreted_recipe(
+        TemplateRecipe(),
+        interpretation,
+        clip_overrides={"captions": {"enabled": False}},
+    )
+    assert clipped.recipe.captions.enabled is False
+    assert clipped.adaptation_decisions[0].accepted is False
+    assert "clip override" in clipped.adaptation_decisions[0].reason
+
+    locked = resolve_interpreted_recipe(
+        TemplateRecipe(),
+        interpretation,
+        clip_overrides={"captions": {"enabled": False}},
+        locks={"captions.enabled": True},
+    )
+    assert locked.recipe.captions.enabled is True
+    assert locked.adaptation_decisions[0].accepted is False
+    assert "explicit lock" in locked.adaptation_decisions[0].reason
