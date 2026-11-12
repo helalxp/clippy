@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import multiprocessing
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -40,6 +41,28 @@ def make_asset(payload=b"logo-bytes", *, path="assets/logo.png", asset_id="logo"
         size_bytes=len(payload),
         sha256=hashlib.sha256(payload).hexdigest(),
     )
+
+
+
+def _process_create(root, document_data, result_queue):
+    storage = LocalTemplateStorage(root)
+    document = TemplateDocument.model_validate(document_data)
+    try:
+        storage.create(document)
+        result_queue.put("created")
+    except TemplateAlreadyExists:
+        result_queue.put("exists")
+
+
+def _process_update(root, document_data, name, result_queue):
+    storage = LocalTemplateStorage(root)
+    document = TemplateDocument.model_validate(document_data)
+    updated = document.model_copy(update={"revision": document.revision + 1, "name": name})
+    try:
+        storage.update(updated, expected_revision=document.revision)
+        result_queue.put("saved")
+    except TemplateRevisionConflict:
+        result_queue.put("conflict")
 
 
 def test_create_get_and_list_template(tmp_path):
@@ -249,6 +272,57 @@ def test_concurrent_revision_updates_use_compare_and_swap(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(update, ("A", "B")))
 
+    assert outcomes.count("saved") == 1
+    assert outcomes.count("conflict") == 1
+    assert storage.get(original.id).revision == 2
+
+
+
+def test_cross_process_creates_are_serialized_by_file_lock(tmp_path):
+    storage = LocalTemplateStorage(tmp_path)
+    document = make_document()
+    payload = document.model_dump(mode="json", by_alias=True)
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    workers = [
+        context.Process(target=_process_create, args=(str(tmp_path), payload, results))
+        for _ in range(2)
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=20)
+        assert worker.exitcode == 0
+
+    outcomes = [results.get(timeout=5), results.get(timeout=5)]
+    assert outcomes.count("created") == 1
+    assert outcomes.count("exists") == 1
+    assert storage.get(document.id).id == document.id
+
+
+def test_cross_process_revision_updates_use_file_lock(tmp_path):
+    storage = LocalTemplateStorage(tmp_path)
+    original = make_document()
+    storage.create(original)
+    payload = original.model_dump(mode="json", by_alias=True)
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    workers = [
+        context.Process(
+            target=_process_update,
+            args=(str(tmp_path), payload, name, results),
+        )
+        for name in ("Worker A", "Worker B")
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=20)
+        assert worker.exitcode == 0
+
+    outcomes = [results.get(timeout=5), results.get(timeout=5)]
     assert outcomes.count("saved") == 1
     assert outcomes.count("conflict") == 1
     assert storage.get(original.id).revision == 2
