@@ -420,8 +420,10 @@ def review_interpretation_claim(
     corrected_value: Any = _REVIEW_VALUE_UNSET,
 ) -> TemplateInterpretation:
     """Return a new interpretation with an explicit, attributable human decision."""
-    if not reviewed_by.strip():
+    if not isinstance(reviewed_by, str) or not reviewed_by.strip():
         raise ValueError("reviewed_by must not be blank")
+    if not isinstance(reviewed_at, datetime):
+        raise TypeError("reviewed_at must be a datetime")
     if reviewed_at.tzinfo is None or reviewed_at.utcoffset() is None:
         raise ValueError("reviewed_at must include a timezone")
     if decision == "corrected" and corrected_value is _REVIEW_VALUE_UNSET:
