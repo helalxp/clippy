@@ -234,8 +234,13 @@ def interpret_reference(
         max_frame_bytes=max_frame_bytes,
         max_total_bytes=max_total_bytes,
     )
+    selected_timestamps = {frame.timestamp_ms for frame in frames}
+    selected_measurements = tuple(
+        item for item in visual_measurements
+        if item.timestamp_ms in selected_timestamps
+    )
     try:
-        raw = provider(frames, visual_measurements)
+        raw = provider(frames, selected_measurements)
     except Exception as exc:
         raise InterpretationError(f"interpretation provider failed: {type(exc).__name__}: {exc}") from exc
     if isinstance(raw, str):
@@ -247,8 +252,22 @@ def interpret_reference(
         raise InterpretationError("provider response must be a JSON object")
 
     payload = dict(raw)
-    payload.setdefault("provider_id", provider_id)
-    payload.setdefault("model_id", model_id)
+    payload["provider_id"] = provider_id
+    payload["model_id"] = model_id
+    raw_claims = payload.get("claims", [])
+    if not isinstance(raw_claims, list):
+        raise InterpretationError("provider claims must be a JSON array")
+    sanitized_claims = []
+    for raw_claim in raw_claims:
+        if not isinstance(raw_claim, Mapping):
+            raise InterpretationError("each provider claim must be a JSON object")
+        claim = dict(raw_claim)
+        if claim.get("source") not in {"visual_observation", "inference"}:
+            raise InterpretationError("provider claims must be observations or inferences")
+        # A model cannot approve, reject, or mark its own claims as human-corrected.
+        claim["status"] = "pending"
+        sanitized_claims.append(claim)
+    payload["claims"] = sanitized_claims
     try:
         interpretation = TemplateInterpretation.model_validate(payload)
     except ValidationError as exc:
