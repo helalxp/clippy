@@ -280,3 +280,27 @@ def test_adapter_never_modifies_the_clean_source_file(tmp_path):
 
     assert source.read_bytes() == original_bytes
     assert output.is_file()
+
+
+
+def test_adapter_can_cancel_an_active_ffmpeg_process(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "cancel-during-render.mp4"
+    make_source_video(source)
+    checks = []
+
+    def cancel_after_process_starts():
+        checks.append(True)
+        return len(checks) > 1
+
+    with pytest.raises(RenderCancelledError, match="cancelled"):
+        PythonFFmpegAdapter(timeout_seconds=120).render(
+            source,
+            output,
+            recipe_for("contain", "blur"),
+            cancel_check=cancel_after_process_starts,
+        )
+
+    assert len(checks) > 1
+    assert not output.exists()
+    assert list(tmp_path.glob(".*.tmp.mp4")) == []
