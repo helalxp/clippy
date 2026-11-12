@@ -27,7 +27,7 @@ class FakeClient:
 
 def test_gemini_provider_builds_bounded_structured_vision_request():
     client = FakeClient()
-    provider = GeminiVisionInterpreter(client=client, model="gemini-test")
+    provider = GeminiVisionInterpreter(client=client, model="gemini-test", consent_confirmed=True)
     frame = InterpretationFrame(
         asset_id="reference_frame_001",
         timestamp_ms=1250,
@@ -53,11 +53,17 @@ def test_gemini_provider_requires_explicit_api_key_without_injected_client(monke
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     with pytest.raises(GeminiProviderError, match="GEMINI_API_KEY"):
-        GeminiVisionInterpreter()
+        GeminiVisionInterpreter(consent_confirmed=True)
 
 
 def test_gemini_provider_rejects_empty_response():
-    provider = GeminiVisionInterpreter(client=FakeClient(response_text=""), model="gemini-test")
+    provider = GeminiVisionInterpreter(client=FakeClient(response_text=""), model="gemini-test", consent_confirmed=True)
 
     with pytest.raises(GeminiProviderError, match="no structured"):
         provider([], [])
+
+
+
+def test_gemini_provider_requires_explicit_external_processing_consent():
+    with pytest.raises(GeminiProviderError, match="explicit consent"):
+        GeminiVisionInterpreter(client=FakeClient(), model="gemini-test")
