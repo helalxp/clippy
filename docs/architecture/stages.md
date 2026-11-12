@@ -165,7 +165,7 @@ Implemented:
 - Capability preflight rejects unsupported captions, hooks, overlays, effects, motion, transitions, subject tracking, subtitle/other stream types, and conflicting crop/background combinations.
 - `TemplateApplicationService` loads a persisted template, resolves job/clip overrides and explicit locks, applies the FFmpeg adapter, and returns template revision, resolved recipe, recipe hash, source/output fingerprints, compatibility, adaptation decisions, and lock provenance.
 - `POST /api/template/apply` is connected to local/self-hosted Clippy jobs. It checks job ownership, serializes against rerender/reframe, renders from the clean canonical clip rather than the currently served derivative, atomically replaces metadata, updates in-memory job state, and archives the new delivery.
-- Managed/cloud template application is deliberately blocked until durable per-user storage, tenant isolation, backup, and deletion semantics are implemented. This avoids putting customer templates in the ephemeral job-output directory.
+- Template manifests and assets use a dedicated `TEMPLATE_LIBRARY_DIR`, explicitly rejected if configured inside `OUTPUT_DIR`, so job cleanup and archival cannot erase the library. Managed/cloud template application is deliberately blocked until durable per-user storage, tenant isolation, backup, and deletion semantics are implemented.
 
 Verification:
 - [x] Adapter consumes the canonical validated `TemplateRecipe`.
