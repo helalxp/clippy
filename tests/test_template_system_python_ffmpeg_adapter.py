@@ -358,3 +358,32 @@ def test_application_service_refuses_template_with_unsupported_features(tmp_path
         TemplateApplicationService(storage).apply(template.id, source, output)
 
     assert not output.exists()
+
+
+
+def test_adapter_refuses_to_overwrite_its_clean_source(tmp_path):
+    source = tmp_path / "source.mp4"
+    make_source_video(source)
+    original_bytes = source.read_bytes()
+
+    with pytest.raises(Exception, match="must not overwrite its clean source"):
+        PythonFFmpegAdapter().render(source, source, recipe_for())
+
+    assert source.read_bytes() == original_bytes
+
+
+def test_adapter_refuses_hardlink_alias_of_clean_source(tmp_path):
+    source = tmp_path / "source.mp4"
+    alias = tmp_path / "source-alias.mp4"
+    make_source_video(source)
+    try:
+        alias.hardlink_to(source)
+    except OSError:
+        pytest.skip("hard links are not supported by this filesystem")
+    original_bytes = source.read_bytes()
+
+    with pytest.raises(Exception, match="must not overwrite its clean source"):
+        PythonFFmpegAdapter().render(source, alias, recipe_for())
+
+    assert source.read_bytes() == original_bytes
+    assert alias.read_bytes() == original_bytes
