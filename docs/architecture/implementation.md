@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Stages 0–3 complete; Stage 4 structured interpretation and template synthesis is next.  
+**Status:** Stages 0–3 complete; Stage 4 evidence-linked interpretation and draft-recipe synthesis is in progress.  
 **Last verified update:** 2026-11-12
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
@@ -30,8 +30,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Not yet implemented
 
-- [ ] Structured semantic interpretation of reference frames.
-- [ ] Evidence-backed synthesis of a reusable editing recipe from interpreted claims.
+- [~] Provider-neutral, strict interpretation contract, evidence verification, reviewed-claim synthesis, resolver integration, and optional Gemini vision adapter implemented; live provider quality validation remains.
 - [ ] Production Python/FFmpeg adapter consuming the resolved recipe.
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
 - [ ] Template API, durable analysis-job lifecycle, library UI, editor UI, and end-to-end apply workflow.
@@ -59,7 +58,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Media probe and scene sampling | `template_system/analysis.py` | Implemented; real FFmpeg fixture passes |
 | Pixel measurements | `template_system/visuals.py` | Implemented; 6 tests pass |
 | Focused template tests | `tests/test_template_system_*.py` | 69 passed in GitHub Actions |
-| Semantic interpretation | Not implemented | Stage 4 |
+| Semantic interpretation | `template_system/interpretation.py`, `template_system/providers/gemini.py` | Contract and optional Gemini adapter implemented; live call/quality verification pending |
 | Python/FFmpeg recipe adapter | Not implemented | Stage 5 |
 | Remotion parity | Not implemented | Stage 6 |
 | API and UI | Not implemented | Stage 7 |
@@ -110,9 +109,9 @@ The Windows Python 3.12 installer/runtime issue is tracked separately. It is not
 
 See [stages.md](./stages.md) for acceptance evidence and remaining work.
 
-## 7. Next active work: Stage 4
+## 7. Active work: Stage 4
 
-Build a provider-agnostic interpretation boundary. A vision provider may propose structured claims about caption style, hook placement, framing, background treatment, overlays, transitions, and rhythm, but every claim must:
+The provider-neutral interpretation contract and optional Gemini vision adapter are now implemented. A provider may propose structured claims about caption style, hook placement, framing, background treatment, and rhythm, but every claim must:
 - target a known canonical recipe property;
 - cite one or more sampled evidence asset IDs and timestamps;
 - include a calibrated qualitative confidence or an explicit uncertainty state;
@@ -120,7 +119,7 @@ Build a provider-agnostic interpretation boundary. A vision provider may propose
 - remain a proposal until accepted or corrected;
 - never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Then synthesize a draft `TemplateRecipe` deterministically from accepted claims and measured facts. Provider-specific Gemini wiring comes after the provider-neutral contract and fake-provider tests.
+Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The next gates are focused CI verification, a live opt-in Gemini smoke test, and quality checks on representative references. Then synthesize a draft `TemplateRecipe` deterministically from accepted claims and measured facts; explicit clip overrides and locks continue through the canonical resolver.
 
 ## 8. Next vertical slice after Stage 4
 
