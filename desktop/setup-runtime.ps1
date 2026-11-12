@@ -218,9 +218,9 @@ if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
     if (-not (Test-Path -LiteralPath $PythonPth -PathType Leaf)) {
         throw "Official Python embeddable archive is missing python312._pth."
     }
-    $PthEntries = @("python312.zip", ".", "Lib", "Lib\\site-packages", "import site")
+    $PthEntries = @("python312.zip", ".", "Lib", "Lib\site-packages", "import site")
     [System.IO.File]::WriteAllLines($PythonPth, $PthEntries, [System.Text.Encoding]::ASCII)
-    $PythonSitePackages = Join-Path $PythonDir "Lib\\site-packages"
+    $PythonSitePackages = Join-Path $PythonDir "Lib\site-packages"
     New-Item -ItemType Directory -Path $PythonSitePackages -Force | Out-Null
 
     $PipBootstrap = Join-Path $Downloads "get-pip.py"
@@ -237,7 +237,7 @@ if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
 $PythonVersionOutput = (& $PythonExe --version 2>&1 | Out-String).Trim()
 $PythonVersionExitCode = $LASTEXITCODE
 Write-Stage ("Managed Python version check: " + $PythonVersionOutput)
-if ($PythonVersionExitCode -ne 0 -or $PythonVersionOutput -notmatch ("^Python\\s+" + [regex]::Escape($PythonVersion) + "$")) {
+if ($PythonVersionExitCode -ne 0 -or $PythonVersionOutput -notmatch ("^Python\s+" + [regex]::Escape($PythonVersion) + "$")) {
     throw "Managed Python version check failed. Expected Python $PythonVersion, got '$PythonVersionOutput' (exit code $PythonVersionExitCode)."
 }
 & $PythonExe -m pip --version
