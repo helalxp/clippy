@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis and Stage 5 isolated Python/FFmpeg application adapter are in progress.  
+**Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis and Stage 5 Python/FFmpeg adapter plus local clip-application API are in progress.  
 **Last verified update:** 2026-11-12
 
 This is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone exit criteria live in [stages.md](./stages.md).
@@ -93,7 +93,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Full backend suite
 
-The full backend job is not green. The latest full-suite run reported **1,315 passed, 48 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
+The full backend job is not green. The latest full-suite run after adding the local apply API tests reported **1,317 passed, 50 skipped, 2 failed**. Both failures match the pre-existing baseline recorded in the Phase 0 audit:
 
 1. `tests/test_generation_controls.py::TestClipDurationBounds::test_env_overrides_apply`: test expects `(20.0, 30.0)`, current result is `(20.0, 25.0)`.
 2. `tests/test_recut.py::TestPerformRecut::test_source_path_reframes_and_watermarks`: injected watermark lambda does not accept the `backdrop_type` and `backdrop_color` keyword arguments now passed by `recut.perform_recut`.
@@ -123,7 +123,7 @@ The provider-neutral interpretation contract and optional Gemini vision adapter 
 - remain a proposal until accepted or corrected;
 - never invent text content, fonts, logos, or unsupported renderer behavior from insufficient evidence.
 
-Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The latest completed focused suite passed 107 tests; two additional clean-source overwrite regression tests are now queued for CI. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter plus a storage-backed application service. The service resolves overrides and locks, applies the supported subset, and returns recipe hash, template revision, source/output fingerprints, compatibility, and adaptation provenance. It is now wired through `POST /api/template/apply`: the route checks job ownership, serializes against rerender/reframe, starts from the clean canonical clip, atomically updates metadata, updates in-memory clip state, and archives the new delivery. End-to-end API and managed-mode storage-gate tests have been added and are awaiting CI. Managed/cloud application is deliberately disabled until durable per-user storage, tenant isolation, backup, and deletion semantics are approved and implemented. Captions, hooks, overlays, and tracking remain unsupported.
+Only the bounded sampled PNG evidence and deterministic measurements are passed to the Gemini adapter; the original reference video is never uploaded by this adapter. Model-generated claims are forcibly reset to pending and cannot approve themselves. The latest completed focused suite passed 109 tests. The local apply API and managed-mode storage-gate tests also passed within the full backend run. Stage 4's remaining gates are a live opt-in Gemini smoke test, token/cost telemetry, and quality checks on representative references. Draft `TemplateDocument` assembly persists interpretation claims, reviewer provenance, frame evidence, recipe, and per-renderer capability snapshots. Stage 5 now has a real FFmpeg adapter plus a storage-backed application service. The service resolves overrides and locks, applies the supported subset, and returns recipe hash, template revision, source/output fingerprints, compatibility, and adaptation provenance. It is now wired through `POST /api/template/apply`: the route checks job ownership, serializes against rerender/reframe, starts from the clean canonical clip, atomically updates metadata, updates in-memory clip state, and archives the new delivery. End-to-end local API and managed-mode storage-gate tests passed in the full backend run. Managed/cloud application is deliberately disabled until durable per-user storage, tenant isolation, backup, and deletion semantics are approved and implemented. Captions, hooks, overlays, and tracking remain unsupported.
 
 ## 8. Next vertical slice
 
