@@ -4586,6 +4586,128 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _template_library_for_request(request):
+    """Return the local template library isolated to the authenticated owner."""
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Template library management is disabled in managed mode until "
+                "durable per-user storage and lifecycle guarantees are available."
+            ),
+        )
+    await require_managed_entitlement(request)
+    owner_id = await _owner_id(request)
+    storage_scope = hashlib.sha256(
+        str(owner_id or "local-installation").encode("utf-8")
+    ).hexdigest()[:32]
+    from template_system.storage import LocalTemplateStorage
+    return LocalTemplateStorage(os.path.join(TEMPLATE_LIBRARY_DIR, storage_scope))
+
+
+def _template_document_response(document):
+    return document.to_storage_dict()
+
+
+@app.get("/api/templates")
+async def list_templates(request: Request):
+    """List templates belonging to the current local installation or owner."""
+    storage = await _template_library_for_request(request)
+    documents = await asyncio.to_thread(storage.list)
+    return {"templates": [_template_document_response(item) for item in documents]}
+
+
+@app.post("/api/templates", status_code=201)
+async def create_template(payload: Dict[str, Any], request: Request):
+    """Create a local template manifest. Asset bytes use a separate upload flow."""
+    from template_system.models import TemplateDocument
+    from template_system.storage import TemplateAlreadyExists
+
+    storage = await _template_library_for_request(request)
+    try:
+        document = TemplateDocument.model_validate(payload)
+        if document.assets:
+            raise HTTPException(
+                status_code=422,
+                detail="Template asset upload is not available yet; create asset-free templates only.",
+            )
+        created = await asyncio.to_thread(storage.create, document)
+    except TemplateAlreadyExists:
+        raise HTTPException(status_code=409, detail="Template already exists")
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid template: {exc}")
+    return {"template": _template_document_response(created)}
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: str, request: Request):
+    """Fetch one template from the current owner's isolated library."""
+    from template_system.storage import TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        document = await asyncio.to_thread(storage.get, template_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"template": _template_document_response(document)}
+
+
+@app.put("/api/templates/{template_id}")
+async def update_template(
+    template_id: str,
+    payload: Dict[str, Any],
+    request: Request,
+):
+    """Update a template with optimistic revision checking."""
+    from template_system.models import TemplateDocument
+    from template_system.storage import TemplateNotFound, TemplateRevisionConflict
+
+    storage = await _template_library_for_request(request)
+    expected_revision = payload.get("expected_revision")
+    raw_document = payload.get("template")
+    if type(expected_revision) is not int or expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be a positive integer")
+    if not isinstance(raw_document, dict):
+        raise HTTPException(status_code=422, detail="template must be an object")
+    try:
+        document = TemplateDocument.model_validate(raw_document)
+        if document.id != template_id:
+            raise HTTPException(status_code=422, detail="Template id does not match the URL")
+        updated = await asyncio.to_thread(
+            storage.update,
+            document,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid template: {exc}")
+    return {"template": _template_document_response(updated)}
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: str, request: Request):
+    """Delete one template and its owned assets from the current library."""
+    from template_system.storage import TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        await asyncio.to_thread(storage.delete, template_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"success": True, "template_id": template_id}
+
+
 class TemplateApplyRequest(BaseModel):
     job_id: str
     clip_index: int
