@@ -12,6 +12,7 @@ import re
 import shutil
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
@@ -64,8 +65,40 @@ class LocalTemplateStorage:
         with cls._locks_guard:
             return cls._locks.setdefault(key, threading.RLock())
 
+    @contextmanager
+    def _synchronized(self, key: str):
+        """Serialize operations across threads and processes on this library root."""
+        lock = self._lock_for(f"{self.root}:{key}")
+        with lock:
+            lock_dir = self.root / ".locks"
+            if lock_dir.is_symlink():
+                raise TemplateIntegrityError("template lock directory cannot be a symlink")
+            lock_dir.mkdir(mode=0o700, exist_ok=True)
+            lock_path = lock_dir / f"{key}.lock"
+            if lock_path.is_symlink():
+                raise TemplateIntegrityError("template lock file cannot be a symlink")
+            with lock_path.open("a+b") as stream:
+                stream.seek(0, os.SEEK_END)
+                if stream.tell() == 0:
+                    stream.write(b"\\0")
+                    stream.flush()
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    if os.name == "nt":
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
     @staticmethod
-    def _validate_id(template_id: str) -> str:
+    def _validate_id(template_id: str):
         if not isinstance(template_id, str) or not _TEMPLATE_ID.fullmatch(template_id):
             raise ValueError("invalid template id")
         return template_id
@@ -199,7 +232,7 @@ class LocalTemplateStorage:
         asset_payloads: Mapping[str, bytes] | None = None,
     ) -> TemplateDocument:
         template_dir = self._template_dir(document.id)
-        with self._root_lock, self._lock_for(document.id):
+        with self._root_lock, self._synchronized("_library"), self._synchronized(document.id):
             if template_dir.exists():
                 raise TemplateAlreadyExists(document.id)
             template_dir.mkdir(mode=0o700)
@@ -214,7 +247,7 @@ class LocalTemplateStorage:
 
     def get(self, template_id: str) -> TemplateDocument:
         template_dir = self._template_dir(template_id)
-        with self._lock_for(template_id):
+        with self._synchronized(template_id):
             if not template_dir.is_dir():
                 raise TemplateNotFound(template_id)
             return self._read_document(template_dir)
@@ -228,7 +261,7 @@ class LocalTemplateStorage:
                     continue
                 if entry.is_symlink() or not entry.is_dir():
                     raise TemplateIntegrityError(f"unsafe template entry: {entry.name}")
-                with self._lock_for(entry.name):
+                with self._synchronized(entry.name):
                     documents.append(self._read_document(entry))
         return documents
 
@@ -263,7 +296,7 @@ class LocalTemplateStorage:
 
     def delete(self, template_id: str) -> None:
         template_dir = self._template_dir(template_id)
-        with self._root_lock, self._lock_for(template_id):
+        with self._root_lock, self._synchronized("_library"), self._synchronized(template_id):
             if not template_dir.exists():
                 raise TemplateNotFound(template_id)
             if template_dir.is_symlink() or not template_dir.is_dir():
