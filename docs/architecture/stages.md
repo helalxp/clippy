@@ -149,7 +149,7 @@ Acceptance:
 
 ## Stage 5 — Python/FFmpeg application vertical slice
 
-**Status: IN PROGRESS — deterministic adapter, storage-backed application service, and `POST /api/template/apply` local/self-hosted integration implemented; end-to-end API verification and remaining capabilities are in progress.**
+**Status: IN PROGRESS — deterministic adapter, storage-backed application service, and local/self-hosted `POST /api/template/apply` integration implemented and CI-tested; remaining renderer capabilities and concurrency hardening are in progress.**
 
 Objective: apply a validated recipe subset to a clean canonical clip, preserve source media, and reject unsupported properties instead of silently ignoring them.
 
@@ -163,7 +163,9 @@ Implemented:
 - Progress callbacks, cancellation before and during render, bounded runtime, and temporary-file cleanup.
 - Refusal of source/output path aliases, including hard links, so a render cannot overwrite its clean source.
 - Capability preflight rejects unsupported captions, hooks, overlays, effects, motion, transitions, subject tracking, subtitle/other stream types, and conflicting crop/background combinations.
-- `TemplateApplicationService` loads a persisted template, resolves job/clip overrides and explicit locks, applies the FFmpeg adapter, and returns template revision, recipe hash, source/output fingerprints, compatibility, adaptation decisions, and lock provenance.
+- `TemplateApplicationService` loads a persisted template, resolves job/clip overrides and explicit locks, applies the FFmpeg adapter, and returns template revision, resolved recipe, recipe hash, source/output fingerprints, compatibility, adaptation decisions, and lock provenance.
+- `POST /api/template/apply` is connected to local/self-hosted Clippy jobs. It checks job ownership, serializes against rerender/reframe, renders from the clean canonical clip rather than the currently served derivative, atomically replaces metadata, updates in-memory job state, and archives the new delivery.
+- Managed/cloud template application is deliberately blocked until durable per-user storage, tenant isolation, backup, and deletion semantics are implemented. This avoids putting customer templates in the ephemeral job-output directory.
 
 Verification:
 - [x] Adapter consumes the canonical validated `TemplateRecipe`.
@@ -176,18 +178,17 @@ Verification:
 - [x] Failed renders preserve existing destinations and clean temporary output.
 - [x] Source path and hard-link aliases cannot be used as the destination.
 - [x] Application-service tests verify stored-template lookup, resolver precedence/locks, recipe hash, and render provenance.
-- [x] Focused CI previously passed **109 tests**; additional source-overwrite and provenance tests are queued with the latest commits.\n- [ ] End-to-end API integration and managed-mode storage-gate tests are added and await the full backend CI run.
+- [x] Focused template CI: **109 passed, 0 failed**.
+- [x] Full-backend API integration tests verify clean-source selection, metadata and in-memory updates, provenance persistence, and the managed-mode storage gate.
 
 Remaining:
-- [ ] Integrate the application service into Clippy's existing job/editor API with job ownership checks, per-job serialization, and atomic metadata updates.
-- [ ] Apply templates from the clean canonical clip, not from a previously styled delivery derivative.
-- [ ] Persist recipe hash, template revision, source/output fingerprints, and applied settings with each clip output.
+- [ ] Extend the shared per-job edit lock to every metadata-mutating clip endpoint and test concurrent edit races.
+- [ ] Add failure-injection tests for API cleanup and metadata-write interruption.
 - [ ] Implement caption styling and hook/title adapters one capability at a time.
 - [ ] Implement overlays only after asset sizing, alpha, and normalized-position semantics are validated.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
 - [ ] Prove repeated template application is deterministic and never stacks burned-in derivatives.
 - [ ] Run the full backend suite green after the two pre-existing baseline failures are resolved.
-
 ## Stage 6 — Preview and Remotion parity
 
 **Status: PLANNED.**
