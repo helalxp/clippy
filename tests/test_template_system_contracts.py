@@ -144,3 +144,42 @@ def test_default_recipe_does_not_claim_unrequested_features():
     assert [item.feature for item in report.exact] == ["canvas"]
     assert report.approximate == ()
     assert report.unsupported == ()
+
+
+def test_template_serialization_uses_public_schema_key():
+    document = TemplateDocument.model_validate({
+        "schema": "clippy.template",
+        "id": "tpl_12345678",
+        "name": "Portable",
+    })
+
+    payload = document.to_storage_dict()
+    assert payload["schema"] == "clippy.template"
+    assert "template_type" not in payload
+
+
+def test_color_tokens_must_be_six_digit_hex():
+    with pytest.raises(ValidationError):
+        TemplateRecipe.model_validate({
+            "captions": {"font_color": "not-a-color"}
+        })
+
+
+def test_safe_area_margins_cannot_consume_the_canvas():
+    with pytest.raises(ValidationError):
+        TemplateRecipe.model_validate({
+            "canvas": {"safe_left": 0.6, "safe_right": 0.5}
+        })
+
+
+def test_requested_feature_is_reported_as_approximate_or_unsupported():
+    recipe = TemplateRecipe.model_validate({
+        "captions": {"enabled": True},
+        "background": {"mode": "blur"},
+    })
+
+    report = check_compatibility(recipe, "remotion_render")
+
+    assert report.status == "incompatible"
+    assert {item.feature for item in report.approximate} == {"captions"}
+    assert {item.feature for item in report.unsupported} == {"background"}
