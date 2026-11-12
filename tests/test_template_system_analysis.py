@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 import template_system.analysis as analysis_module
-from template_system.models import TemplateDocument\nfrom template_system.analysis import (
+from template_system.models import TemplateDocument
+from template_system.analysis import (
     FrameSample,
     MediaProbe,
     ReferenceAnalysisError,
