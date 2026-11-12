@@ -1,0 +1,95 @@
+"""Application service joining persisted templates, resolver, and render adapters."""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from .adapters.python_ffmpeg import PythonFFmpegAdapter, RenderResult
+from .models import TemplateDocument
+from .resolver import AdaptationDecision, resolve_recipe
+from .storage import LocalTemplateStorage
+
+
+@dataclass(frozen=True)
+class TemplateApplicationResult:
+    template_id: str
+    template_name: str
+    template_revision: int
+    recipe_hash: str
+    applied_at: datetime
+    render: RenderResult
+    adaptation_decisions: tuple[AdaptationDecision, ...]
+    locked_paths: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "template_id": self.template_id,
+            "template_name": self.template_name,
+            "template_revision": self.template_revision,
+            "recipe_hash": self.recipe_hash,
+            "applied_at": self.applied_at.isoformat(),
+            "output_path": str(self.render.output_path),
+            "source_fingerprint": self.render.source_fingerprint,
+            "output_fingerprint": self.render.output_fingerprint,
+            "duration_seconds": self.render.duration_seconds,
+            "width": self.render.width,
+            "height": self.render.height,
+            "frame_rate": self.render.frame_rate,
+            "has_audio": self.render.has_audio,
+            "compatibility": self.render.compatibility.as_dict(),
+            "adaptation_decisions": [asdict(item) for item in self.adaptation_decisions],
+            "locked_paths": list(self.locked_paths),
+        }
+
+
+class TemplateApplicationService:
+    """Resolve and apply a stored template without modifying its clean source."""
+
+    def __init__(
+        self,
+        storage: LocalTemplateStorage,
+        adapter: PythonFFmpegAdapter | None = None,
+    ):
+        self.storage = storage
+        self.adapter = adapter or PythonFFmpegAdapter()
+
+    def apply(
+        self,
+        template_id: str,
+        source_path: str | Path,
+        output_path: str | Path,
+        *,
+        job_overrides: Mapping[str, Any] | None = None,
+        clip_overrides: Mapping[str, Any] | None = None,
+        locks: Mapping[str, Any] | None = None,
+        allow_approximate: bool = False,
+        progress_callback: Callable[[str, float], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> TemplateApplicationResult:
+        template: TemplateDocument = self.storage.get(template_id)
+        resolved = resolve_recipe(
+            template=template.recipe,
+            job_overrides=job_overrides,
+            clip_overrides=clip_overrides,
+            locks=locks,
+        )
+        rendered = self.adapter.render(
+            source_path,
+            output_path,
+            resolved.recipe,
+            allow_approximate=allow_approximate,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+        return TemplateApplicationResult(
+            template_id=template.id,
+            template_name=template.name,
+            template_revision=template.revision,
+            recipe_hash=resolved.recipe_hash,
+            applied_at=datetime.now(timezone.utc),
+            render=rendered,
+            adaptation_decisions=resolved.adaptation_decisions,
+            locked_paths=resolved.locked_paths,
+        )
