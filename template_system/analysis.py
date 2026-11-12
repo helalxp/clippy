@@ -122,6 +122,9 @@ class ReferenceAnalysisResult:
                 media_type="image/png",
                 size_bytes=sample.size_bytes,
                 sha256=sample.sha256,
+                width=sample.width,
+                height=sample.height,
+                source_timestamp_ms=sample.timestamp_ms,
             ))
             evidence.append(AnalysisEvidence(
                 property_path="reference.frame_sample",
@@ -129,13 +132,19 @@ class ReferenceAnalysisResult:
                 source_timestamp_ms=sample.timestamp_ms,
                 asset_id=asset_id,
             ))
+        asset_id_by_timestamp = {
+            sample.timestamp_ms: f"reference_frame_{index:03d}"
+            for index, sample in enumerate(self.samples, start=1)
+        }
         for measurement in self.visual_measurements:
             timestamp = measurement.timestamp_ms
+            evidence_asset_id = asset_id_by_timestamp.get(timestamp)
             evidence.extend([
                 AnalysisEvidence(
                     property_path="reference.color_palette",
                     method="pillow.median_cut",
                     source_timestamp_ms=timestamp,
+                    asset_id=evidence_asset_id,
                     note=json.dumps(
                         [item.to_dict() for item in measurement.dominant_colors],
                         sort_keys=True,
@@ -145,6 +154,7 @@ class ReferenceAnalysisResult:
                     property_path="reference.luminance",
                     method="pillow.grayscale_statistics",
                     source_timestamp_ms=timestamp,
+                    asset_id=evidence_asset_id,
                     note=json.dumps({
                         "mean": measurement.mean_luminance,
                         "stddev": measurement.luminance_stddev,
@@ -154,6 +164,7 @@ class ReferenceAnalysisResult:
                     property_path="reference.edge_density",
                     method="pillow.gradient_threshold",
                     source_timestamp_ms=timestamp,
+                    asset_id=evidence_asset_id,
                     note=f"normalized_edge_density={measurement.edge_density:.6f}",
                 ),
             ])
@@ -162,6 +173,7 @@ class ReferenceAnalysisResult:
                     property_path="reference.inter_sample_visual_change",
                     method="pillow.sample_difference",
                     source_timestamp_ms=timestamp,
+                    asset_id=evidence_asset_id,
                     note=(
                         "pixel difference between adjacent sampled frames; "
                         "not an optical-flow or subject-motion estimate; "
