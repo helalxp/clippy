@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 
 def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_provenance(
@@ -63,9 +64,12 @@ def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_prove
     )
     storage.create(template)
 
+    rendered_paths = []
+
     def fake_apply(self, template_id, source_path, output_path, **kwargs):
         assert Path(source_path) == clean_source
         Path(output_path).write_bytes(b"rendered template fixture")
+        rendered_paths.append(Path(output_path))
         compatibility = SimpleNamespace(as_dict=lambda: {"status": "compatible"})
         render = SimpleNamespace(
             output_path=Path(output_path),
@@ -123,6 +127,25 @@ def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_prove
         assert (job_dir / clip["template_application"]["output_filename"]).is_file()
         assert clean_source.read_bytes() == original_source
         assert app_module.jobs[job_id]["result"]["clips"][0]["template_id"] == template.id
+
+        # A metadata replacement failure must leave the last valid manifest and
+        # served render intact, and remove only the uncommitted new render.
+        previous_metadata = metadata_path.read_bytes()
+        previous_video_url = clip["video_url"]
+
+        def fail_metadata_replace(source, destination):
+            raise OSError("simulated atomic metadata replacement failure")
+
+        monkeypatch.setattr(app_module.os, "replace", fail_metadata_replace)
+        with pytest.raises(HTTPException) as failed:
+            asyncio.run(app_module.apply_template_to_clip(req, request))
+
+        assert failed.value.status_code == 500
+        assert metadata_path.read_bytes() == previous_metadata
+        assert json.loads(metadata_path.read_text(encoding="utf-8"))["shorts"][0]["video_url"] == previous_video_url
+        assert rendered_paths[0].is_file()
+        assert len(rendered_paths) == 2
+        assert not rendered_paths[1].exists()
     finally:
         app_module.jobs.pop(job_id, None)
         app_module._rerender_locks.pop(job_id, None)
