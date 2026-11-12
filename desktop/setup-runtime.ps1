@@ -1,6 +1,22 @@
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# Clippy must not inherit another application's Python, Conda, or Node setup.
+# This setup engine invokes its managed executables by absolute path; these
+# variables can otherwise redirect imports, DLLs, packages, or child tools.
+$ConflictingEnvironmentVariables = @(
+    "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE", "PYTHONSTARTUP",
+    "PYTHONEXECUTABLE", "VIRTUAL_ENV", "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV", "CONDA_EXE", "CONDA_PYTHON_EXE",
+    "NODE_PATH", "NODE_OPTIONS", "NPM_CONFIG_PREFIX",
+    "NPM_CONFIG_USERCONFIG"
+)
+foreach ($Name in $ConflictingEnvironmentVariables) {
+    Remove-Item -LiteralPath ("Env:" + $Name) -ErrorAction SilentlyContinue
+}
+$env:PYTHONNOUSERSITE = "1"
+$env:PYTHONUTF8 = "1"
+
 $Root = Join-Path $env:LOCALAPPDATA "Clippy"
 $App = Join-Path $Root "app\current"
 $Runtime = Join-Path $Root "runtime"
