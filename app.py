@@ -4546,7 +4546,180 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class TemplateApplyRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    template_id: str
+    job_overrides: Optional[Dict[str, Any]] = None
+    clip_overrides: Optional[Dict[str, Any]] = None
+    locks: Optional[Dict[str, Any]] = None
+    allow_approximate: bool = False
+
+
+@app.post("/api/template/apply")
+async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
+    """Apply a stored template to a clean canonical clip and persist provenance.
+
+    This endpoint deliberately starts from <base>_clip_<n>.mp4, never the
+    currently served derivative. Reapplying a template therefore replaces the
+    previous delivery treatment instead of stacking filters and burned pixels.
+    """
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    metadata_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not metadata_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    # All clip-edit routes share this lock because they update the same metadata
+    # document. Read the document only after acquiring it.
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        metadata_path = metadata_files[0]
+        with open(metadata_path, "r", encoding="utf-8") as stream:
+            metadata = json.load(stream)
+        clips = metadata.get("shorts", [])
+        if req.clip_index < 0 or req.clip_index >= len(clips):
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        base_name = os.path.basename(metadata_path).replace("_metadata.json", "")
+        clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+        clean_source = os.path.join(output_dir, clean_name)
+        if not os.path.isfile(clean_source):
+            raise HTTPException(
+                status_code=409,
+                detail="The clean canonical clip is unavailable. Restore or regenerate the job before applying a template.",
+            )
+
+        owner_id = await _owner_id(request)
+        storage_scope = hashlib.sha256(
+            str(owner_id or "local-installation").encode("utf-8")
+        ).hexdigest()[:32]
+        template_root = os.path.join(OUTPUT_DIR, "template_library", storage_scope)
+
+        from template_system.service import TemplateApplicationService
+        from template_system.storage import LocalTemplateStorage, TemplateNotFound
+        from template_system.adapters.python_ffmpeg import (
+            RenderAdapterError,
+            RendererCompatibilityError,
+        )
+
+        output_name = (
+            f"template_{int(time.time())}_{uuid.uuid4().hex[:10]}_{clean_name}"
+        )
+        output_path = os.path.join(output_dir, output_name)
+        duration_seconds = float((clips[req.clip_index] or {}).get("duration") or 0)
+        render_minutes = max(1, math.ceil(duration_seconds / 60.0)) if BILLING_ENABLED else 0
+        reservation_id = await reserve_managed_action(
+            request, render_minutes, req.job_id, "template_apply"
+        ) if BILLING_ENABLED else None
+        rendered = None
+        served_name = None
+        try:
+            storage = LocalTemplateStorage(template_root)
+            service = TemplateApplicationService(storage)
+            rendered = await asyncio.to_thread(
+                service.apply,
+                req.template_id,
+                clean_source,
+                output_path,
+                job_overrides=req.job_overrides,
+                clip_overrides=req.clip_overrides,
+                locks=req.locks,
+                allow_approximate=req.allow_approximate,
+            )
+            served_name = await _deliver(request, req.job_id, output_name)
+            new_video_url = f"/videos/{req.job_id}/{served_name}"
+            application_record = rendered.to_dict()
+            application_record["served_filename"] = served_name
+            application_record["source_filename"] = clean_name
+
+            clip = clips[req.clip_index]
+            updates = {
+                "video_url": new_video_url,
+                "template_id": rendered.template_id,
+                "template_recipe": rendered.resolved_recipe.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "template_application": application_record,
+            }
+            clip.update(updates)
+            metadata["shorts"] = clips
+
+            # Write beside the original and replace atomically. A crash cannot
+            # leave a half-written metadata document pointing at a partial edit.
+            temporary_metadata = metadata_path + f".{uuid.uuid4().hex}.tmp"
+            try:
+                with open(temporary_metadata, "x", encoding="utf-8") as stream:
+                    json.dump(metadata, stream, indent=2)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary_metadata, metadata_path)
+            finally:
+                if os.path.exists(temporary_metadata):
+                    os.remove(temporary_metadata)
+
+            memory_clips = (job.get("result") or {}).get("clips") or []
+            if req.clip_index < len(memory_clips):
+                memory_clips[req.clip_index].update(updates)
+            _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+
+            if reservation_id:
+                await _metering.commit_reservation(reservation_id)
+            return {
+                "success": True,
+                "new_video_url": new_video_url,
+                "template_application": application_record,
+                "compatibility": rendered.render.compatibility.as_dict(),
+            }
+        except HTTPException:
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            if rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            if served_name and served_name != output_name:
+                try:
+                    os.remove(os.path.join(output_dir, served_name))
+                except FileNotFoundError:
+                    pass
+            raise
+        except TemplateNotFound:
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            if rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=404, detail="Template not found")
+        except RendererCompatibilityError as exc:
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            raise HTTPException(status_code=422, detail=str(exc))
+        except RenderAdapterError as exc:
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            if rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            if reservation_id:
+                await _metering.release_reservation(reservation_id)
+            if rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            if served_name and served_name != output_name:
+                try:
+                    os.remove(os.path.join(output_dir, served_name))
+                except FileNotFoundError:
+                    pass
+            print(f"❌ Template application failed for {req.job_id}: {exc}")
+            raise HTTPException(status_code=500, detail="Template application failed")
+
+
 # --- Manual framing -----------------------------------------------------------
+
 #
 # The reframe engine picks the crop automatically, and on a podcast it is right
 # most of the time and grossly wrong occasionally: a wide shot of the whole
