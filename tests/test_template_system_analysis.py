@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 
 import template_system.analysis as analysis_module
-from template_system.analysis import (
+from template_system.models import TemplateDocument\nfrom template_system.analysis import (
     FrameSample,
     MediaProbe,
     ReferenceAnalysisError,
+    ReferenceAnalysisResult,
     choose_sample_timestamps,
     detect_scene_boundaries,
     extract_sample_frames,
@@ -319,3 +320,42 @@ def test_analyze_reference_video_preserves_partial_results(tmp_path, monkeypatch
     assert result.coverage["frame_sampling"] == 0.5
     assert len(result.samples) == 1
     assert len(result.limitations) == 2
+
+
+
+def test_analysis_result_builds_valid_template_evidence_and_assets():
+    sample = FrameSample(
+        timestamp_ms=2500,
+        relative_path="frame_001_0000002500ms.png",
+        sha256="b" * 64,
+        size_bytes=1234,
+        width=320,
+        height=180,
+    )
+    result = ReferenceAnalysisResult(
+        probe=_fake_probe(),
+        scene_boundaries_seconds=(5.0,),
+        samples=(sample,),
+        coverage={"media_probe": 1.0, "scene_detection": 1.0, "frame_sampling": 1.0},
+        limitations=(),
+        status="complete",
+    )
+
+    analysis, assets = result.to_template_parts()
+    document = TemplateDocument.model_validate({
+        "id": "tpl_analysis123",
+        "name": "Analyzed reference",
+        "origin": {
+            "kind": "reference_video",
+            "source_name": result.probe.source_name,
+            "source_fingerprint": f"sha256:{result.probe.source_fingerprint}",
+        },
+        "analysis": analysis.model_dump(),
+        "assets": [asset.model_dump() for asset in assets],
+    })
+
+    assert len(document.assets) == 1
+    assert document.analysis.status == "complete"
+    frame_evidence = next(item for item in document.analysis.evidence if item.asset_id)
+    assert frame_evidence.asset_id == document.assets[0].id
+    assert frame_evidence.source_timestamp_ms == 2500
