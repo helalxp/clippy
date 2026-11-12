@@ -1,8 +1,8 @@
-"""Provider-neutral, evidence-linked semantic interpretation of reference frames.
+"""Provider-neutral, evidence-linked interpretation and template synthesis.
 
-No network calls or model provider are implemented here. Callers inject a
-provider explicitly, making consent, provider choice, and transport boundaries
-the responsibility of the application layer.
+This module owns the canonical claim contract, frame-evidence verification,
+human review, resolver integration, and draft assembly. Optional network-backed
+provider adapters live separately under template_system.providers.
 """
 from __future__ import annotations
 
