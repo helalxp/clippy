@@ -54,7 +54,7 @@ Stage 1 is complete as a domain-contract milestone, not as a usable product feat
 
 ## Stage 2 — Local persistence and asset integrity
 
-**Status: NEXT / NOT STARTED.**
+**Status: IMPLEMENTED IN SOURCE; VERIFICATION PENDING.**
 
 Objective: persist templates safely and reproducibly before adding public API or UI.
 
@@ -68,13 +68,19 @@ Deliverables:
 - Automated storage tests.
 
 Acceptance:
-- [ ] A valid template can be created, loaded, updated, listed, and deleted.
-- [ ] Invalid manifests are rejected without corrupting existing data.
-- [ ] Path traversal and symlink escapes are rejected.
-- [ ] Missing, oversized, or checksum-mismatched assets are rejected.
-- [ ] Interrupted/failed writes leave the previous manifest intact.
-- [ ] Concurrent updates cannot silently overwrite one another.
-- [ ] Storage is local-only and does not touch existing job upload/output data.
+- [x] Local storage methods for create, load, update, list, and delete are implemented.
+- [ ] CRUD behavior passes the new automated storage test module.
+- [x] Invalid manifests are rejected on read; atomic replacement preserves the prior manifest if writing fails.
+- [ ] Failure-preservation tests pass in CI.
+- [x] Template ID/path containment and symlink checks are implemented.
+- [ ] Path/symlink adversarial tests pass in CI.
+- [x] Asset byte length and SHA-256 are verified on create and read.
+- [ ] Asset-integrity tests pass in CI.
+- [x] Manifest writes use same-directory temp files, fsync, and atomic replace.
+- [ ] Simulated write-failure test passes.
+- [x] Per-template locks and expected-revision compare-and-swap are implemented.
+- [ ] Concurrent create/update tests pass.
+- [x] Storage is explicitly rooted by caller and does not reference upload/output directories.
 
 ## Stage 3 — Reference ingest and deterministic analysis
 
@@ -224,7 +230,7 @@ Acceptance:
 |---|---|
 | 0. Audit | Complete |
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
-| 2. Local persistence | Next |
+| 2. Local persistence | Implemented; tests pending |
 | 3. Deterministic analysis | Planned |
 | 4. Python/FFmpeg adapter | Planned |
 | 5. Remotion parity | Planned |
@@ -232,4 +238,4 @@ Acceptance:
 | 7. Migration and lifecycle | Planned |
 | 8. Release readiness | Planned |
 
-**Immediate next action:** implement and test Stage 2 local persistence. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** execute and review `tests/test_template_system_storage.py`, fix any failures, then proceed to Stage 3 deterministic media probing and evidence sampling. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
