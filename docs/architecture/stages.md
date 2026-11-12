@@ -176,7 +176,7 @@ Verification:
 - [x] Failed renders preserve existing destinations and clean temporary output.
 - [x] Source path and hard-link aliases cannot be used as the destination.
 - [x] Application-service tests verify stored-template lookup, resolver precedence/locks, recipe hash, and render provenance.
-- [x] Focused CI previously passed **107 tests**; additional source-overwrite and provenance tests are queued with the latest commits.\n- [ ] End-to-end API integration and managed-mode storage-gate tests are added and await the full backend CI run.
+- [x] Focused CI previously passed **109 tests**; additional source-overwrite and provenance tests are queued with the latest commits.\n- [ ] End-to-end API integration and managed-mode storage-gate tests are added and await the full backend CI run.
 
 Remaining:
 - [ ] Integrate the application service into Clippy's existing job/editor API with job ownership checks, per-job serialization, and atomic metadata updates.
@@ -279,4 +279,4 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** integrate the isolated FFmpeg adapter into the existing Clippy render/editor API, add recipe provenance and golden-frame checks, while keeping the live Gemini quality test opt-in and consent-gated. The latest completed focused CI suite reports 107 passing tests; two additional regression tests are awaiting CI. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** integrate the isolated FFmpeg adapter into the existing Clippy render/editor API, add recipe provenance and golden-frame checks, while keeping the live Gemini quality test opt-in and consent-gated. The latest completed focused CI suite reports 109 passing tests; two additional regression tests are awaiting CI. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
