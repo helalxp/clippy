@@ -8,15 +8,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping, Sequence
 
-from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, ValidationError
+from pydantic import Field, ValidationError
 
 from .analysis import FrameSample
-from .capabilities import CompatibilityReport, RendererBackend, check_compatibility
+from .capabilities import CompatibilityReport, check_compatibility
 from .models import (
     AdaptationProposal,
     AnalysisEvidence,
@@ -356,3 +356,77 @@ def review_interpretation_claim(
         target["source"] = "human_correction"
         target["value"] = corrected_value
     return TemplateInterpretation.model_validate(payload)
+
+
+
+def build_template_draft(
+    analysis_result,
+    interpretation: TemplateInterpretation,
+    base_recipe: TemplateRecipe,
+    *,
+    template_id: str,
+    name: str,
+    description: str = "",
+    category: str = "Uncategorized",
+    tags: Sequence[str] = (),
+) -> TemplateDocument:
+    """Build a persistable template draft from deterministic and reviewed evidence."""
+    analysis, assets = analysis_result.to_template_parts()
+    synthesis = synthesize_draft_recipe(base_recipe, interpretation)
+    analysis_data = analysis.model_dump(mode="python")
+    interpretation_evidence = []
+
+    for claim in interpretation.claims:
+        note = json.dumps({
+            "value": claim.value,
+            "source": claim.source,
+            "confidence": claim.confidence,
+            "status": claim.status,
+            "rationale": claim.rationale,
+            "reviewed_by": claim.reviewed_by,
+            "reviewed_at": claim.reviewed_at.isoformat() if claim.reviewed_at else None,
+            "review_note": claim.review_note,
+        }, ensure_ascii=False, sort_keys=True, default=str)[:1000]
+        for evidence in claim.evidence:
+            interpretation_evidence.append(AnalysisEvidence(
+                property_path=claim.property_path,
+                method=f"vision:{interpretation.provider_id}"[:120],
+                source_timestamp_ms=evidence.timestamp_ms,
+                asset_id=evidence.asset_id,
+                note=note,
+            ))
+
+    analysis_data["evidence"].extend(
+        item.model_dump(mode="python") for item in interpretation_evidence
+    )
+    analysis_data["limitations"] = list(dict.fromkeys(
+        [*analysis_data["limitations"], *interpretation.limitations]
+    ))
+    analysis = TemplateAnalysis.model_validate(analysis_data)
+
+    now = datetime.now(timezone.utc)
+    origin = TemplateOrigin(
+        kind="reference_video",
+        source_name=analysis_result.probe.source_name,
+        source_fingerprint=f"sha256:{analysis_result.probe.source_fingerprint}",
+        analyzed_at=now,
+    )
+    capability_documents = [
+        RendererCompatibilityDocument.model_validate(report.as_dict())
+        for report in synthesis.compatibility_reports
+    ]
+    return TemplateDocument.model_validate({
+        "id": template_id,
+        "name": name,
+        "description": description,
+        "category": category,
+        "tags": list(tags),
+        "origin": origin.model_dump(mode="python"),
+        "analysis": analysis.model_dump(mode="python"),
+        "interpretation": interpretation.model_dump(mode="python", by_alias=True),
+        "recipe": synthesis.recipe.model_dump(mode="python"),
+        "capabilities": [item.model_dump(mode="python") for item in capability_documents],
+        "assets": [asset.model_dump(mode="python") for asset in assets],
+        "created_at": now,
+        "updated_at": now,
+    })
