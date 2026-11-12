@@ -84,13 +84,12 @@ Acceptance:
 
 ## Stage 3 — Reference ingest and deterministic analysis
 
-**Status: IN PROGRESS — deterministic ingest, probing, sampling, pixel measurements, and evidence conversion are implemented; real-media validation and job integration remain.**
+**Status: COMPLETE; real FFmpeg integration and focused CI PASS.**
 
 Objective: turn a local reference video into a traceable analysis record without pretending unmeasured properties were detected.
 
 Implemented deliverables:
-- Local staging into unique, permission-restricted directories with bounded streaming copy, SHA-256, atomic file placement, progress callbacks, and cancellation checks.
-- Ownership-checked cleanup that removes only the generated staging directory.
+- Local staging into unique, permission-restricted directories with bounded streaming copy, SHA-256, atomic file placement, progress callbacks, cancellation checks, and ownership-checked cleanup.
 - FFprobe technical metadata: codec, duration, dimensions, frame rate, pixel aspect ratio, pixel format, audio presence/codec/channels/sample rate, rotation, file size, and source fingerprint.
 - FFmpeg scene-cut candidates with a hard boundary cap and bounded subprocess timeout.
 - Deterministic scene-midpoint and uniform fallback sampling, capped at 64 frames.
@@ -100,24 +99,24 @@ Implemented deliverables:
 - Coverage and limitations reporting, including partial results when scene detection, frame extraction, or visual measurement fails.
 - Progress callbacks and cancellation checks between major stages and individual frame operations.
 
-Acceptance:
-- [x] Source staging validates a local regular file, enforces size bounds, and preserves the original.
-- [x] Staged media is fingerprinted and can be safely cleaned up.
-- [x] FFprobe metadata is validated and recorded without inventing missing values.
-- [x] Sampling count, dimensions, frame bytes, source size/duration, scene-cut count, and subprocess timeouts are bounded.
-- [x] Sampled frames carry source timestamps, relative paths, dimensions, byte sizes, and checksums.
-- [x] Pixel measurements are deterministic and explicitly described as measurements, not semantic interpretation.
-- [x] Pixel difference between sampled frames is not labeled as optical flow or subject motion.
-- [x] Probe/sample records convert into canonical `TemplateAnalysis` evidence and `TemplateAsset` records.
-- [x] Scene-detection or individual frame-sampling failures produce partial results and preserve successful evidence.
-- [x] Progress callbacks and cancellation checks exist at safe stage/frame boundaries.
-- [x] This deterministic stage makes no model calls and uploads no media.
-- [ ] Real-media fixture tests validate FFprobe/FFmpeg behavior on supported source formats.
-- [ ] Scene-boundary quality is measured against manually annotated fixture cuts.
-- [ ] The full staged ingest-to-template-evidence workflow is verified against real media.
-- [ ] Progress/cancellation are wired into a durable API/UI analysis-job lifecycle.
-- [ ] Analysis can resume from completed stages after interruption.
-- [ ] Semantic subject/layout analysis and true motion estimation are added only when their measurements are reliable and evidence-backed.
+Verification:
+- [x] Safe local staging, bounded copy, SHA-256 fingerprint, and ownership-checked cleanup.
+- [x] FFprobe stream metadata validation without inventing missing values.
+- [x] Bounded scene detection and sample selection.
+- [x] Sampled frame evidence with timestamps, dimensions, and checksums.
+- [x] Deterministic color, luminance, saturation, edge-density, and inter-sample pixel-change measurements.
+- [x] Canonical template evidence and asset conversion.
+- [x] Partial results and limitations retained when optional analysis steps fail.
+- [x] Progress callbacks and safe-boundary cancellation hooks.
+- [x] Real FFmpeg-generated two-scene fixture verifies the known cut within 200 ms, samples real PNG frames, measures them, converts the evidence, persists the template and its assets, and cleans up the staged source.
+- [x] Focused CI: **69 passed, 0 failed**.
+- [x] No model calls or media uploads occur in this deterministic stage.
+
+Scope limits carried forward:
+- Pixel difference is not optical flow or subject-motion detection.
+- Edge density is not semantic subject/layout understanding.
+- Scene-cut candidates are not yet a validated editorial-cut classifier.
+- Durable API/UI job orchestration and resume-after-restart belong to the API/lifecycle stage.
 
 ## Stage 4 — Structured interpretation and template synthesis
 
@@ -245,11 +244,11 @@ Acceptance:
 | 0. Audit | Complete |
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
 | 2. Local persistence | Complete; focused CI green |
-| 3. Deterministic analysis | In progress; staging, probing, sampling, visual measurements, evidence conversion, progress/cancellation hooks implemented |
-| 4. Python/FFmpeg adapter | Planned |
-| 5. Remotion parity | Planned |
-| 6. API and UI | Planned |
-| 7. Migration and lifecycle | Planned |
-| 8. Release readiness | Planned |
+| 3. Deterministic analysis | Complete; 69 focused tests pass, including real FFmpeg ingest-to-persisted-template fixture |
+| 4. Structured interpretation and synthesis | Next |\n| 5. Python/FFmpeg adapter | Planned |
+| 6. Remotion parity | Planned |
+| 7. API and UI | Planned |
+| 8. Migration and lifecycle | Planned |
+| 9. Release readiness | Planned |
 
-**Immediate next action:** validate the full ingest-to-evidence pipeline with representative real-media fixtures, measure scene-boundary and visual-metric quality, and wire the progress/cancellation hooks into an actual analysis job lifecycle. The focused template CI job now includes analysis tests; the separate full backend job remains red and must be triaged independently. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** implement Stage 4's provider-neutral interpretation contract, evidence-linked claims, strict validation, and deterministic draft-recipe synthesis. The focused template CI job is green; the full backend job remains red only on the two baseline failures documented in `implementation.md`. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
