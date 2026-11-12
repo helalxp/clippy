@@ -4726,6 +4726,165 @@ async def delete_template(template_id: str, request: Request):
     return {"success": True, "template_id": template_id}
 
 
+@app.post("/api/templates/{template_id}/assets", status_code=201)
+async def upload_template_asset(template_id: str, request: Request):
+    """Upload one bounded raster image using a server-generated opaque asset ID."""
+    import io
+    import warnings
+    from PIL import Image, UnidentifiedImageError
+    from template_system.models import TemplateAsset
+    from template_system.storage import (
+        TemplateIntegrityError,
+        TemplateNotFound,
+        TemplateRevisionConflict,
+    )
+
+    max_asset_bytes = 20 * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdecimal():
+        if int(content_length) > max_asset_bytes + 64 * 1024:
+            raise HTTPException(status_code=413, detail="Template asset exceeds the 20 MB limit")
+
+    try:
+        form = await request.form(max_files=1, max_fields=1)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Expected a multipart upload") from exc
+    upload = form.get("file")
+    raw_expected_revision = form.get("expected_revision")
+    if not hasattr(upload, "read") or not hasattr(upload, "filename"):
+        raise HTTPException(status_code=422, detail="A file field is required")
+    if not isinstance(raw_expected_revision, str) or not raw_expected_revision.isdecimal():
+        raise HTTPException(status_code=422, detail="expected_revision must be a positive integer")
+    expected_revision = int(raw_expected_revision)
+    if expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be positive")
+
+    try:
+        payload = await upload.read(max_asset_bytes + 1)
+    finally:
+        close = getattr(upload, "close", None)
+        if close is not None:
+            await close()
+    if not payload:
+        raise HTTPException(status_code=422, detail="Template asset is empty")
+    if len(payload) > max_asset_bytes:
+        raise HTTPException(status_code=413, detail="Template asset exceeds the 20 MB limit")
+
+    signatures = (
+        (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
+        (b"\xff\xd8\xff", "image/jpeg", "jpg"),
+    )
+    detected = next(
+        (item for signature, mime, extension in signatures
+         if payload.startswith(signature) for item in [(mime, extension)]),
+        None,
+    )
+    if detected is None and payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
+        detected = ("image/webp", "webp")
+    if detected is None:
+        raise HTTPException(status_code=415, detail="Only PNG, JPEG, and WebP images are supported")
+
+    media_type, extension = detected
+    supplied_type = getattr(upload, "content_type", None)
+    if supplied_type and supplied_type not in {media_type, "application/octet-stream"}:
+        raise HTTPException(status_code=415, detail="Uploaded MIME type does not match the file content")
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as image:
+                image_format = image.format
+                width, height = image.size
+                if width < 1 or height < 1 or width > 16384 or height > 16384:
+                    raise HTTPException(status_code=413, detail="Image dimensions exceed the supported limit")
+                if width * height > 50_000_000:
+                    raise HTTPException(status_code=413, detail="Image pixel count exceeds the supported limit")
+                image.verify()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning, OSError) as exc:
+        raise HTTPException(status_code=415, detail="Uploaded image is invalid or unsafe") from exc
+
+    expected_format = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[media_type]
+    if image_format != expected_format:
+        raise HTTPException(status_code=415, detail="Image signature and decoded format do not match")
+
+    asset_id = f"asset_{uuid.uuid4().hex}"
+    asset = TemplateAsset(
+        id=asset_id,
+        path=f"assets/{asset_id}.{extension}",
+        media_type=media_type,
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        width=width,
+        height=height,
+    )
+    storage = await _template_library_for_request(request)
+    try:
+        updated = await asyncio.to_thread(
+            storage.add_asset,
+            template_id,
+            asset,
+            payload,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (TemplateIntegrityError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "asset": asset.model_dump(mode="json"),
+        "template_revision": updated.revision,
+    }
+
+
+@app.delete("/api/templates/{template_id}/assets/{asset_id}")
+async def delete_template_asset(template_id: str, asset_id: str, request: Request):
+    """Remove an unreferenced asset with optimistic revision protection."""
+    from template_system.storage import (
+        TemplateAssetInUse,
+        TemplateAssetNotFound,
+        TemplateNotFound,
+        TemplateRevisionConflict,
+    )
+
+    raw_expected_revision = request.query_params.get("expected_revision")
+    if not raw_expected_revision or not raw_expected_revision.isdecimal():
+        raise HTTPException(
+            status_code=422,
+            detail="expected_revision query parameter must be a positive integer",
+        )
+    expected_revision = int(raw_expected_revision)
+    if expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be positive")
+
+    storage = await _template_library_for_request(request)
+    try:
+        updated = await asyncio.to_thread(
+            storage.remove_asset,
+            template_id,
+            asset_id,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateAssetNotFound:
+        raise HTTPException(status_code=404, detail="Template asset not found")
+    except TemplateAssetInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "success": True,
+        "asset_id": asset_id,
+        "template_revision": updated.revision,
+    }
+
+
 class TemplateApplyRequest(BaseModel):
     job_id: str
     clip_index: int
