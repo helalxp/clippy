@@ -1,7 +1,7 @@
 # Template Reference System — Implementation Tracker
 
 **Repository:** `helalxp/clippy`  
-**Branch:** `feature/template-reference-system`  
+**Branch:** `feature/template-reference-system-clean`  
 **Status:** Stages 0–3 complete; Stage 4 interpretation/synthesis and Stage 5 Python/FFmpeg adapter plus local clip-application API are in progress.  
 **Last implementation update:** 2026-11-12 (shared edit-lock code committed; CI validation pending)
 
@@ -171,4 +171,17 @@ The red backend check was compared against the latest `main` workflow, not assum
 
 The latest pre-fix template branch run had 1,321 passing, 50 skipped, and those same two baseline failures. The four new edit-lock tests passed in the backend run. The focused template workflow is being expanded to include the API and locking tests, with the lightweight backend dependencies needed to import the application.
 
-Validation on the clean isolated branch is pending. No claim of a green full suite is made until GitHub Actions confirms it.
+Clean-branch validation passed in GitHub Actions run `43304254324` on 2026-11-12: focused template/API/locking suite **115 passed**, full backend suite **1,323 passed, 50 skipped**, and frontend production build **passed**. No backend failures remain in this run.
+
+
+### Verified clean-branch CI
+
+- Branch: `feature/template-reference-system-clean`
+- Base: current `main` at `0d8fe1fa4f9d8493adf2b8e6aff2bdaf6e64b4eb`
+- CI run: [43304254324](https://github.com/helalxp/clippy/actions/runs/43304254324)
+- Template, API and edit-lock tests: **115 passed**
+- Full backend suite: **1,323 passed, 50 skipped**
+- Frontend production build: **passed**
+- Overall workflow: **passed**
+
+The previous `feature/template-reference-system` branch was 205 commits ahead of main and its tree included desktop-installer files outside this feature. It was left untouched. The isolated clean branch contains the template implementation and its two baseline test fixes in one commit, and is exactly one commit ahead of main at the time of this verification.

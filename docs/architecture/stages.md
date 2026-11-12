@@ -1,6 +1,6 @@
 # Template Reference System — Stages and Acceptance Gates
 
-**Branch:** `feature/template-reference-system`  
+**Branch:** `feature/template-reference-system-clean`  
 **Planning status:** Active staged implementation  
 **Rule:** A stage is complete only when its exit criteria are evidenced. Committed code or a passing unit test subset alone does not prove an end-to-end feature.
 
@@ -322,4 +322,14 @@ The backend failures were reproduced on the pre-feature `main` workflow: the sam
 - Duration fallback now consistently uses the five-second minimum range already required by the tests.
 - Recut watermark application no longer passes unsupported background arguments to the watermark function.
 
-The four shared edit-lock tests passed in the backend suite. The dedicated template workflow now also includes API and edit-lock tests, so these important integration checks do not rely solely on the broad backend job. Await the clean-branch Actions run before calling the suite green.
+The four shared edit-lock tests passed in the backend suite. The dedicated template workflow now also includes API and edit-lock tests, so these important integration checks do not rely solely on the broad backend job. Clean-branch Actions run `43304254324` passed: 115 focused template/API/locking tests, 1,323 backend tests passed with 50 skipped, and frontend build passed.
+
+
+### Verified acceptance evidence
+
+GitHub Actions run [43304254324](https://github.com/helalxp/clippy/actions/runs/43304254324) passed on `feature/template-reference-system-clean`:
+- Template/API/edit-lock suite: 115 passed.
+- Full backend suite: 1,323 passed, 50 skipped.
+- Frontend production build: passed.
+
+The clean branch is based directly on current `main` and is one commit ahead. The previous feature branch was left untouched because its history contained 205 commits beyond main and included desktop-installer artifacts unrelated to the template work. Use the clean branch for subsequent template implementation.
