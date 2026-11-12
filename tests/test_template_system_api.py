@@ -234,6 +234,7 @@ def test_template_library_api_supports_owner_scoped_crud_and_revision_checks(
     assert updated["template"]["revision"] == 2
     assert updated["template"]["name"] == "Updated template"
     assert updated["template"]["recipe"]["canvas"]["width"] == 900
+    assert updated["template"]["updated_at"] > created["template"]["updated_at"]
 
     with pytest.raises(HTTPException) as stale:
         asyncio.run(
@@ -248,7 +249,19 @@ def test_template_library_api_supports_owner_scoped_crud_and_revision_checks(
         )
     assert stale.value.status_code == 409
 
-    deleted = asyncio.run(app_module.delete_template(original.id, request))
+    stale_delete_request = SimpleNamespace(
+        owner_id="creator-a",
+        query_params={"expected_revision": "1"},
+    )
+    with pytest.raises(HTTPException) as stale_delete:
+        asyncio.run(app_module.delete_template(original.id, stale_delete_request))
+    assert stale_delete.value.status_code == 409
+
+    delete_request = SimpleNamespace(
+        owner_id="creator-a",
+        query_params={"expected_revision": "2"},
+    )
+    deleted = asyncio.run(app_module.delete_template(original.id, delete_request))
     assert deleted == {"success": True, "template_id": original.id}
     with pytest.raises(HTTPException) as missing:
         asyncio.run(app_module.get_template(original.id, request))
