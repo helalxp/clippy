@@ -164,6 +164,11 @@ class PythonFFmpegAdapter:
             raise RenderAdapterError("render output path is a directory")
         if destination.is_symlink():
             raise RenderAdapterError("render output must not be a symbolic link")
+        try:
+            if os.path.samefile(source, destination):
+                raise RenderAdapterError("render output must not overwrite its clean source")
+        except FileNotFoundError:
+            pass
 
         temporary = parent / f".{destination.stem}.{uuid.uuid4().hex}.tmp.mp4"
         command = [
