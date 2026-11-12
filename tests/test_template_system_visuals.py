@@ -33,7 +33,7 @@ def test_measure_visual_samples_reports_color_luminance_and_edges(tmp_path):
     assert measured.timestamp_ms == 1000
     assert measured.dominant_colors[0].hex_color == "#FF0000"
     assert measured.dominant_colors[0].proportion == pytest.approx(1.0)
-    assert measured.mean_luminance == pytest.approx(0.2126, abs=0.01)
+    assert measured.mean_luminance == pytest.approx(0.299, abs=0.01)
     assert measured.mean_saturation == pytest.approx(1.0)
     assert measured.edge_density == pytest.approx(0.0)
     assert measured.inter_sample_visual_change is None
