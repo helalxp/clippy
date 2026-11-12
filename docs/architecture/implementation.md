@@ -144,11 +144,18 @@ Only the bounded sampled PNG evidence and deterministic measurements are passed 
 Commit: `733bec520a7759a5dd92a0d6a194bca4078e8027`
 
 - Added a reusable async endpoint decorator that resolves the job identifier from either a request model or form-style keyword argument and acquires the existing per-job edit lock.
-- Applied it to background, watermark, subtitle-add, subtitle-remove, and hook routes.
+- Applied it to background, watermark, effects-generation, subtitle-add, subtitle-remove, hook, and translation routes.
 - Rerender, reframe, and template application retain their existing explicit lock scopes. They are not decorated, avoiding re-entrant deadlocks.
 - The lock covers each decorated endpoint's complete operation, including metadata reads, derivative generation, and metadata writes. Edits to different jobs remain independent.
-- Added concurrency tests for same-job serialization, cross-job independence, and form-style job ID extraction in `tests/test_template_system_edit_locking.py`.
+- Added concurrency tests for same-job serialization, cross-job independence, form-style job ID extraction, and route-registration coverage for all seven decorated endpoints in `tests/test_template_system_edit_locking.py`.
 
 Verification status: implementation and tests are committed; CI validation is pending. Do not treat this as verified until the focused and full backend workflows complete.
 
-Next: complete CI validation, inspect every remaining metadata-mutating route for lock coverage, then implement caption styling and hook/title template adapters with explicit capability reports and real FFmpeg fixtures. The existing hook endpoint is now race-serialized, but template-driven hook rendering is still unsupported.
+Next: complete CI validation, finish auditing the remaining job-creation and restore lifecycle paths for lock interactions, then implement caption styling and hook/title template adapters with explicit capability reports and real FFmpeg fixtures. The existing hook endpoint is now race-serialized, but template-driven hook rendering is still unsupported.
+
+
+### Lock coverage audit
+
+The source audit identified seven additional editor routes that perform clip-level work against job metadata. All seven now use the shared lock decorator: background, watermark, effects generation, subtitle addition, subtitle removal, hook, and translation. The existing rerender, reframe, template-apply, and general edit routes retain their explicit lock scopes. New-job processing is a job-creation path rather than an edit to an existing clip; project restoration remains a separate storage lifecycle operation and is not folded into the local edit lock in this change.
+
+The route-registration test guards against accidentally removing the decorator from any of the seven wrapped routes. This is code-level coverage only; CI must still execute the tests before this change is considered validated.
