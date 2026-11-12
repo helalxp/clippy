@@ -76,6 +76,9 @@ def test_probe_media_returns_stream_facts_and_content_fingerprint(tmp_path, monk
     assert result.frame_rate == pytest.approx(29.97002997)
     assert result.has_audio is True
     assert result.audio_codec == "aac"
+    assert result.video_stream_count == 1
+    assert result.audio_stream_count == 1
+    assert result.other_stream_types == ()
     assert result.rotation_degrees == 90
 
 
