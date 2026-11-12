@@ -649,3 +649,18 @@ Recommended starting defaults:
 **Decision:** Treat the existing reference-template implementation as a prototype, not as the required foundation. Reuse only the parts that survive review. Build the new system around a versioned canonical template recipe, evidence-backed analysis, a shared capability model, and a deterministic application resolver. Rework or replace existing renderer/editor subsystems when parity, correctness, or maintainability evidence justifies it.
 
 **Rationale:** The existing prototype stores a source video and a narrow technical/pacing record. The target product requires a full editing recipe and reliable application to actual renders. Extending the current manifest and UI without first establishing the domain and render contract would create a larger but still fragile prototype.
+
+
+---
+
+## Phase 0 audit addendum
+
+The source-level Phase 0 audit is recorded separately in [TEMPLATE_REFERENCE_SYSTEM_PHASE0_AUDIT.md](./TEMPLATE_REFERENCE_SYSTEM_PHASE0_AUDIT.md).
+
+The audit confirmed two critical architecture issues that must be addressed before broad implementation:
+1. Browser preview and server-side Remotion rendering use two diverged composition trees.
+2. The primary Python/FFmpeg clip-generation and editing pipeline is a separate rendering path with capabilities and semantics that are not represented by the Remotion contract.
+
+It also recorded the current `main` CI baseline (frontend build passed; backend had 1,226 passed, 30 skipped, and 2 failed), and the branch integration risk between current `main` and the older Windows-native migration branch.
+
+**Updated implementation gate:** do not expand the editor or commit to replacing either renderer until a canonical recipe has been proven through a small preview-to-final-render vertical slice. The user's current local Windows worktree must also be inspected before choosing the final implementation base.
