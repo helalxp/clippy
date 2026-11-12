@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -23,7 +23,7 @@ class ContractModel(BaseModel):
     )
 
 
-HexColor = str
+HexColor = Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
 
 
 class CanvasRecipe(ContractModel):
@@ -34,6 +34,12 @@ class CanvasRecipe(ContractModel):
     safe_right: float = Field(default=0.05, ge=0, lt=0.4)
     safe_bottom: float = Field(default=0.08, ge=0, lt=0.4)
     safe_left: float = Field(default=0.05, ge=0, lt=0.4)
+
+    @model_validator(mode="after")
+    def safe_area_fits_canvas(self) -> "CanvasRecipe":
+        if self.safe_left + self.safe_right >= 1 or self.safe_top + self.safe_bottom >= 1:
+            raise ValueError("opposing safe-area margins must sum to less than 1")
+        return self
 
 
 class FramingRecipe(ContractModel):
@@ -275,7 +281,13 @@ class TemplateDocument(ContractModel):
         }
         if evidence_assets - asset_ids:
             raise ValueError("analysis evidence references an unknown asset")
+        if self.updated_at < self.created_at:
+            raise ValueError("updated_at cannot be earlier than created_at")
         return self
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        """Serialize using the public contract keys, including the `schema` alias."""
+        return self.model_dump(mode="json", by_alias=True)
 
 
 class AdaptationProposal(ContractModel):
