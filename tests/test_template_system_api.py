@@ -487,6 +487,3 @@ class _FakeMultipartRequest:
         assert kwargs.get("max_fields") == 1
         return self._form_data
 
-
-async def _request_owner_id(request):
-    return request.owner_id
