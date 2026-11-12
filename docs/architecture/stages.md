@@ -215,12 +215,12 @@ Acceptance:
 
 ## Stage 7 — API, library, and visual editor
 
-**Status: PARTIAL.** Local owner-scoped CRUD endpoints are implemented; asset upload/import, library UI, and editor workflow remain outstanding.
+**Status: PARTIAL.** Local owner-scoped CRUD and raster image asset lifecycle endpoints are implemented; package import/export, font upload, library UI, and editor workflow remain outstanding.
 
 Objective: expose template management and application through a cohesive user workflow.
 
 Deliverables:
-- Authenticated/local-safe template API. Asset-free list/create/read/update/delete endpoints are implemented; asset upload is not yet available.
+- Authenticated/local-safe template API. List/create/read/update/delete and PNG/JPEG/WebP asset upload/read/delete endpoints are implemented.
 - Library browse/search/filter and template details.
 - Reference upload and analysis progress/cancellation UI.
 - Editor controls mapped directly to canonical schema properties.
@@ -228,7 +228,8 @@ Deliverables:
 - Apply to one clip or batch, adaptation review, clip overrides, and explicit locks.
 
 Acceptance:
-- [x] Local CRUD API is implemented with owner isolation and optimistic revision checks; four lifecycle tests passed in CI run `43309965692`.
+- [x] Local CRUD API is implemented with owner isolation and optimistic revision checks.
+- [x] Raster image assets support bounded upload, verified retrieval, and reference-safe deletion; API/storage tests passed in CI run `43310755521`.
 - [ ] UI controls round-trip without losing schema fields.
 - [ ] User can review analysis evidence and limitations.
 - [ ] User can save, duplicate, rename, edit, and apply templates.
@@ -283,11 +284,11 @@ Acceptance:
 | 4. Structured interpretation and synthesis | In progress; strict claims, consent-gated Gemini adapter, human review, persistent draft assembly, and capability reports implemented |
 | 5. Python/FFmpeg adapter | In progress; real FFmpeg adapter, application service, and local clip-application API implemented |
 | 6. Remotion parity | Planned |
-| 7. API and UI | Planned |
+| 7. API and UI | Partial; local CRUD and image asset APIs implemented, UI planned |
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** add the safe local asset upload/import lifecycle, then connect canonical caption styling to the existing subtitle pipeline and implement hook/title rendering as separately tested adapter capabilities. Keep live Gemini validation opt-in. Latest CI run `43309965692` passed: 119 focused template/API/edit-lock tests, 1,327 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+**Immediate next action:** add font asset support and versioned template package import/export, then connect canonical caption styling to the existing subtitle pipeline and implement hook/title rendering as separately tested adapter capabilities. Keep live Gemini validation opt-in. Latest CI run `43310755521` passed: 123 focused template/API/edit-lock tests, 1,331 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -328,9 +329,9 @@ The four shared edit-lock tests passed in the backend suite. The dedicated templ
 
 ### Verified acceptance evidence
 
-GitHub Actions run [43309965692](https://github.com/helalxp/clippy/actions/runs/43309965692) passed on `feature/template-reference-system-clean`:
-- Template/API/edit-lock suite: 119 passed.
-- Full backend suite: 1,327 passed, 50 skipped.
+GitHub Actions run [43310755521](https://github.com/helalxp/clippy/actions/runs/43310755521) passed on `feature/template-reference-system-clean`:
+- Template/API/edit-lock suite: 123 passed.
+- Full backend suite: 1,331 passed, 50 skipped.
 - Frontend production build: passed.
 
 The clean branch was created directly from `main` to isolate template work. It has since received implementation, documentation, and local CRUD API commits. The previous feature branch remains untouched because its history contained 205 commits beyond main and included desktop-installer artifacts unrelated to this feature.
@@ -345,6 +346,6 @@ The local API slice now includes:
 - `PUT /api/templates/{template_id}` with `expected_revision` conflict protection.
 - `DELETE /api/templates/{template_id}` for owned template removal.
 
-The same hashed owner scope is used by template application and library CRUD. Updates are server-versioned and deletes require an expected revision, preventing stale clients from overwriting or removing newer work. Managed mode remains blocked. Asset-bearing creates are rejected until the dedicated upload flow can validate content type, size, checksums, opaque IDs, and safe paths.
+The same hashed owner scope is used by template application and library CRUD. Updates, asset uploads, and deletions use revision checks, preventing stale clients from overwriting or removing newer work. Raster image upload accepts PNG, JPEG, and WebP up to 20 MB, checks file signatures and decoded formats, enforces dimension/pixel bounds, generates opaque IDs and safe paths, and stores size/SHA-256 metadata. Verified assets are served through an owner-scoped route. Removing an asset still referenced by a recipe or evidence is rejected. Font uploads and template package import/export remain outstanding. Managed mode remains blocked.
 
-Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Revision-safety hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, `be791d4746e167a78ab8e7d463282ec26ce19be0`, and `6e49046629eca2b41f4cd5a19aae668536c8758d`. The latest CI run `43309965692` covers the API and revision-safety additions; the asset upload/import flow remains unimplemented.
+Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Revision-safety hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, `be791d4746e167a78ab8e7d463282ec26ce19be0`, and `6e49046629eca2b41f4cd5a19aae668536c8758d`. Image asset storage/API: `46f4c1b7ed231a084acdd5a8c865adb73f708845`, `9448c8d030549e7fb35d2b59758e92a99b0f1622`, `caf8e21ea26120519df36f5a700264c1098b042a`, `c689c65540aa245b5622ca8f5c64786a674c1eac`, `a5ef16f9b9e5cf5f83e1da5eb2acc1a1742bfed8`, `a6ba2ff34d924679ec7a52ba037881b0c6e1f1de`, `11a50ebd49be06c0249fe5d54aaebf3fc4346560`, and `f92a52ffcec39d5c65fe12dc22bb64c39650968c`. CI run `43310755521` passed the current image asset lifecycle code.
