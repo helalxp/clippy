@@ -41,6 +41,15 @@ UPLOAD_DIR = "uploads"
 OUTPUT_DIR = "output"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Template assets and manifests have a separate lifecycle from generated job
+# outputs. Never place the template library under OUTPUT_DIR: output cleanup,
+# job archival, and regeneration must not delete user-created templates.
+TEMPLATE_LIBRARY_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get(
+        "TEMPLATE_LIBRARY_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "template_library"),
+    )
+))
 
 # Configuration
 # Default to 1 if not set, but user can set higher for powerful servers
@@ -4608,7 +4617,7 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
         storage_scope = hashlib.sha256(
             str(owner_id or "local-installation").encode("utf-8")
         ).hexdigest()[:32]
-        template_root = os.path.join(OUTPUT_DIR, "template_library", storage_scope)
+        template_root = os.path.join(TEMPLATE_LIBRARY_DIR, storage_scope)
 
         from template_system.service import TemplateApplicationService
         from template_system.storage import LocalTemplateStorage, TemplateNotFound
