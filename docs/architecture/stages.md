@@ -54,7 +54,7 @@ Stage 1 is complete as a domain-contract milestone, not as a usable product feat
 
 ## Stage 2 — Local persistence and asset integrity
 
-**Status: IMPLEMENTED IN SOURCE; VERIFICATION PENDING.**
+**Status: COMPLETE; focused CI PASS.**
 
 Objective: persist templates safely and reproducibly before adding public API or UI.
 
@@ -69,22 +69,22 @@ Deliverables:
 
 Acceptance:
 - [x] Local storage methods for create, load, update, list, and delete are implemented.
-- [ ] CRUD behavior passes the new automated storage test module.
+- [x] CRUD behavior passes the new automated storage test module.
 - [x] Invalid manifests are rejected on read; atomic replacement preserves the prior manifest if writing fails.
-- [ ] Failure-preservation tests pass in CI.
+- [x] Failure-preservation tests pass in CI.
 - [x] Template ID/path containment and symlink checks are implemented.
-- [ ] Path/symlink adversarial tests pass in CI.
+- [x] Path/symlink adversarial tests pass in CI.
 - [x] Asset byte length and SHA-256 are verified on create and read.
-- [ ] Asset-integrity tests pass in CI.
+- [x] Asset-integrity tests pass in CI.
 - [x] Manifest writes use same-directory temp files, fsync, and atomic replace.
-- [ ] Simulated write-failure test passes.
+- [x] Simulated write-failure test passes.
 - [x] Thread locks, OS-backed file locks, and expected-revision compare-and-swap are implemented.
-- [ ] Concurrent thread and cross-process create/update tests pass.
+- [x] Concurrent thread and cross-process create/update tests pass.
 - [x] Storage is explicitly rooted by caller and does not reference upload/output directories.
 
 ## Stage 3 — Reference ingest and deterministic analysis
 
-**Status: PLANNED.**
+**Status: NEXT / NOT STARTED.**
 
 Objective: turn a local reference video into a traceable analysis record without pretending unmeasured properties were detected.
 
@@ -230,7 +230,7 @@ Acceptance:
 |---|---|
 | 0. Audit | Complete |
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
-| 2. Local persistence | Implemented; tests pending |
+| 2. Local persistence | Complete; focused CI green |
 | 3. Deterministic analysis | Planned |
 | 4. Python/FFmpeg adapter | Planned |
 | 5. Remotion parity | Planned |
@@ -238,4 +238,4 @@ Acceptance:
 | 7. Migration and lifecycle | Planned |
 | 8. Release readiness | Planned |
 
-**Immediate next action:** execute and review `tests/test_template_system_storage.py`, fix any failures, then proceed to Stage 3 deterministic media probing and evidence sampling. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
+**Immediate next action:** implement Stage 3 deterministic media probing, bounded scene-aware frame sampling, and evidence capture. The focused Stage 1+2 CI job is green; the separate full backend job remains red and must be triaged without conflating its failures with the template-specific result. Do not begin broad UI work or claim end-to-end template functionality until Stages 2–5 produce a real, reproducible Python/FFmpeg render.
