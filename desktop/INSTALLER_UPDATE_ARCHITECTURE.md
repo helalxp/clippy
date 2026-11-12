@@ -124,6 +124,11 @@ There is no measured production installer size yet. The repository does not cont
 
 The first complete installer will be materially larger than the current installer because the current first-run script downloads the Python and PyTorch environments and browser separately. The actual size must be measured from the finished CPU and NVIDIA installers, not guessed from repository size.
 
+Distribution constraints also matter:
+- GitHub Release assets must each be smaller than 2 GiB. A single 5 GB setup executable cannot be published as one GitHub Release asset.
+- Tauri's Windows updater artifact is a ZIP containing the NSIS setup executable. It is not a binary-delta patch. If the NSIS installer embeds all multi-gigabyte runtimes, the updater download will also be multi-gigabyte.
+- Therefore, the long-term design must keep large runtime components outside the frequently updated Tauri shell bundle. A single customer-facing bootstrapper can still orchestrate installation of signed, independently downloadable components with progress, retry, and verification. If a truly offline installer is offered, it should be a separate distribution assembled from component archives and tested against the distribution host's per-file limits.
+
 After component separation:
 - a UI/backend-only update should download only the changed application component archives;
 - a renderer-only update should download the renderer component;
