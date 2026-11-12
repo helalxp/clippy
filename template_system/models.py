@@ -26,6 +26,84 @@ class ContractModel(BaseModel):
 HexColor = Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
 
 
+
+InterpretationProperty = Literal[
+    "canvas.width", "canvas.height", "canvas.fps",
+    "canvas.safe_top", "canvas.safe_right", "canvas.safe_bottom", "canvas.safe_left",
+    "framing.mode", "framing.anchor_x", "framing.anchor_y", "framing.subject_tracking",
+    "captions.enabled", "captions.font_family", "captions.font_size_ratio",
+    "captions.font_color", "captions.highlight_color", "captions.outline_color",
+    "captions.outline_ratio", "captions.shadow_ratio", "captions.position",
+    "captions.anchor_x", "captions.anchor_y", "captions.max_lines",
+    "captions.word_highlight", "captions.uppercase", "captions.reveal_by_word",
+    "hook.enabled", "hook.font_family", "hook.font_size_ratio", "hook.color",
+    "hook.background_color", "hook.position", "hook.anchor_x", "hook.anchor_y",
+    "hook.entrance", "hook.start_seconds", "hook.duration_seconds",
+    "background.mode", "background.color", "background.blur_radius_ratio",
+    "rhythm.pace", "rhythm.target_shot_seconds", "rhythm.target_cuts_per_minute",
+]
+ClaimValue = Annotated[
+    str | int | float | bool | None,
+    Field(strict=True),
+]
+
+
+class InterpretationEvidence(ContractModel):
+    asset_id: str = Field(min_length=1, max_length=80)
+    timestamp_ms: int = Field(ge=0)
+
+
+class InterpretationClaim(ContractModel):
+    property_path: InterpretationProperty
+    value: ClaimValue
+    confidence: Literal["high", "medium", "low", "uncertain"]
+    source: Literal["visual_observation", "inference", "deterministic_measurement", "human_correction"]
+    status: Literal["pending", "accepted", "rejected", "corrected"] = "pending"
+    evidence: list[InterpretationEvidence] = Field(min_length=1, max_length=4)
+    rationale: str = Field(min_length=1, max_length=500)
+    reviewed_by: str | None = Field(default=None, min_length=1, max_length=128)
+    reviewed_at: datetime | None = None
+    review_note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def review_provenance(self) -> "InterpretationClaim":
+        if self.status == "pending":
+            if self.reviewed_by is not None or self.reviewed_at is not None or self.review_note is not None:
+                raise ValueError("pending claims cannot contain review provenance")
+        else:
+            if not self.reviewed_by or not self.reviewed_by.strip() or self.reviewed_at is None:
+                raise ValueError("reviewed claims require reviewer identity and timestamp")
+            if self.reviewed_at.tzinfo is None or self.reviewed_at.utcoffset() is None:
+                raise ValueError("reviewed_at must include a timezone")
+        if self.status == "corrected" and self.source != "human_correction":
+            raise ValueError("corrected claims must use human_correction as their source")
+        if self.source == "human_correction" and self.status != "corrected":
+            raise ValueError("human_correction claims must have corrected status")
+        keys = [(item.asset_id, item.timestamp_ms) for item in self.evidence]
+        if len(keys) != len(set(keys)):
+            raise ValueError("claim evidence references must be unique")
+        return self
+
+
+class TemplateInterpretation(ContractModel):
+    interpretation_type: Literal["clippy.template_interpretation"] = Field(
+        default="clippy.template_interpretation", alias="schema"
+    )
+    schema_version: Literal[1] = 1
+    provider_id: str = Field(min_length=1, max_length=80)
+    model_id: str = Field(min_length=1, max_length=120)
+    summary: str = Field(default="", max_length=1200)
+    claims: list[InterpretationClaim] = Field(default_factory=list, max_length=128)
+    limitations: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_claim_paths(self) -> "TemplateInterpretation":
+        paths = [claim.property_path for claim in self.claims]
+        if len(paths) != len(set(paths)):
+            raise ValueError("interpretation must contain at most one claim per property path")
+        return self
+
+
 class CanvasRecipe(ContractModel):
     width: int = Field(default=1080, ge=144, le=4096)
     height: int = Field(default=1920, ge=144, le=4096)
@@ -231,7 +309,7 @@ class AnalysisEvidence(ContractModel):
 class TemplateAnalysis(ContractModel):
     status: Literal["not_started", "partial", "complete", "failed"] = "not_started"
     coverage: dict[str, float] = Field(default_factory=dict)
-    evidence: list[AnalysisEvidence] = Field(default_factory=list, max_length=1000)
+    evidence: list[AnalysisEvidence] = Field(default_factory=list, max_length=2048)
     limitations: list[str] = Field(default_factory=list, max_length=200)
 
     @field_validator("coverage")
@@ -240,6 +318,36 @@ class TemplateAnalysis(ContractModel):
         if any(not 0 <= score <= 1 for score in value.values()):
             raise ValueError("analysis coverage values must be between 0 and 1")
         return value
+
+
+
+class RendererCapabilityFinding(ContractModel):
+    feature: str = Field(min_length=1, max_length=80)
+    level: Literal["exact", "approximate", "unsupported"]
+    explanation: str = Field(min_length=1, max_length=500)
+
+
+class RendererCompatibilityDocument(ContractModel):
+    backend: Literal["python_ffmpeg", "remotion_preview", "remotion_render"]
+    status: Literal["compatible", "partial", "incompatible"]
+    exact: list[RendererCapabilityFinding] = Field(default_factory=list, max_length=32)
+    approximate: list[RendererCapabilityFinding] = Field(default_factory=list, max_length=32)
+    unsupported: list[RendererCapabilityFinding] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def findings_match_status(self) -> "RendererCompatibilityDocument":
+        features = [
+            item.feature for item in self.exact + self.approximate + self.unsupported
+        ]
+        if len(features) != len(set(features)):
+            raise ValueError("renderer capability features must be unique")
+        if self.unsupported and self.status != "incompatible":
+            raise ValueError("unsupported features require incompatible status")
+        if not self.unsupported and self.approximate and self.status != "partial":
+            raise ValueError("approximate features require partial status")
+        if not self.unsupported and not self.approximate and self.status != "compatible":
+            raise ValueError("exact-only capabilities require compatible status")
+        return self
 
 
 class TemplateDocument(ContractModel):
@@ -253,7 +361,9 @@ class TemplateDocument(ContractModel):
     tags: list[str] = Field(default_factory=list, max_length=40)
     origin: TemplateOrigin = Field(default_factory=TemplateOrigin)
     analysis: TemplateAnalysis = Field(default_factory=TemplateAnalysis)
+    interpretation: TemplateInterpretation | None = None
     recipe: TemplateRecipe = Field(default_factory=TemplateRecipe)
+    capabilities: list[RendererCompatibilityDocument] = Field(default_factory=list, max_length=3)
     assets: list[TemplateAsset] = Field(default_factory=list, max_length=256)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -298,8 +408,17 @@ class TemplateDocument(ContractModel):
         evidence_assets = {
             item.asset_id for item in self.analysis.evidence if item.asset_id
         }
+        if self.interpretation is not None:
+            evidence_assets.update(
+                evidence.asset_id
+                for claim in self.interpretation.claims
+                for evidence in claim.evidence
+            )
         if evidence_assets - asset_ids:
-            raise ValueError("analysis evidence references an unknown asset")
+            raise ValueError("analysis or interpretation evidence references an unknown asset")
+        backends = [item.backend for item in self.capabilities]
+        if len(backends) != len(set(backends)):
+            raise ValueError("template renderer capability assessments must be unique")
         if self.updated_at < self.created_at:
             raise ValueError("updated_at cannot be earlier than created_at")
         return self
