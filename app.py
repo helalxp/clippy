@@ -4376,14 +4376,6 @@ async def rerender_clip(req: RerenderRequest, request: Request):
       re-reframe with the same engine the pipeline used. 409 when the source
       already aged out.
     """
-    if BILLING_ENABLED:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Template application is disabled in managed mode until the template "
-                "library has durable per-user storage. Local/self-hosted mode remains available."
-            ),
-        )
     await require_managed_entitlement(request)
     await _ensure_job_files(req.job_id, request)
     if req.job_id not in jobs:
@@ -4572,6 +4564,14 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
     currently served derivative. Reapplying a template therefore replaces the
     previous delivery treatment instead of stacking filters and burned pixels.
     """
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Template application is disabled in managed mode until the template "
+                "library has durable per-user storage. Local/self-hosted mode remains available."
+            ),
+        )
     await require_managed_entitlement(request)
     await _ensure_job_files(req.job_id, request)
     if req.job_id not in jobs:
@@ -4700,8 +4700,6 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
                 rendered.render.output_path.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail=str(exc))
         except Exception as exc:
-            if reservation_id:
-                await _metering.release_reservation(reservation_id)
             if not metadata_committed and rendered is not None:
                 rendered.render.output_path.unlink(missing_ok=True)
             if not metadata_committed and served_name and served_name != output_name:
