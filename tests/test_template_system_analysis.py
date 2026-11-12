@@ -13,6 +13,7 @@ from template_system.analysis import (
     FrameSample,
     FrameVisualMeasurement,
     MediaProbe,
+    ReferenceAnalysisCancelled,
     ReferenceAnalysisError,
     ReferenceAnalysisResult,
     choose_sample_timestamps,
@@ -290,8 +291,17 @@ def test_analyze_reference_video_returns_evidence_and_coverage(tmp_path, monkeyp
             for sample in samples
         ),
     )
-    result = analysis_module.analyze_reference_video("unused.mp4", tmp_path / "frames")
+    progress = []
+    result = analysis_module.analyze_reference_video(
+        "unused.mp4",
+        tmp_path / "frames",
+        progress_callback=lambda stage, value: progress.append((stage, value)),
+        cancel_check=lambda: False,
+    )
 
+    assert progress[0] == ("probing", 0.02)
+    assert progress[-1] == ("complete", 1.0)
+    assert [value for _, value in progress] == sorted(value for _, value in progress)
     assert result.status == "complete"
     assert result.coverage == {
         "media_probe": 1.0,
@@ -391,3 +401,22 @@ def test_analysis_result_builds_valid_template_evidence_and_assets():
         item.property_path == "reference.color_palette"
         for item in document.analysis.evidence
     )
+
+
+
+def test_analyze_reference_video_can_be_cancelled_before_probe(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        analysis_module,
+        "probe_media",
+        lambda *args, **kwargs: called.append(True),
+    )
+
+    with pytest.raises(ReferenceAnalysisCancelled, match="cancelled"):
+        analysis_module.analyze_reference_video(
+            "unused.mp4",
+            tmp_path / "frames",
+            cancel_check=lambda: True,
+        )
+
+    assert called == []
