@@ -16,6 +16,7 @@ from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, Valid
 
 from .analysis import FrameSample
 from .models import AdaptationProposal, ContractModel, TemplateAsset, TemplateRecipe
+from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement
 
 
@@ -336,4 +337,25 @@ def synthesize_draft_recipe(
         pending_paths=tuple(pending),
         rejected_paths=tuple(rejected),
         limitations=tuple(interpretation.limitations),
+    )
+
+
+
+def resolve_interpreted_recipe(
+    base_recipe: TemplateRecipe,
+    interpretation: TemplateInterpretation,
+    *,
+    revision: Mapping[str, Any] | None = None,
+    job_overrides: Mapping[str, Any] | None = None,
+    clip_overrides: Mapping[str, Any] | None = None,
+    locks: Mapping[str, Any] | None = None,
+) -> ResolvedRecipe:
+    """Feed reviewed interpretation claims through the canonical precedence resolver."""
+    return resolve_recipe(
+        template=base_recipe,
+        revision=revision,
+        job_overrides=job_overrides,
+        adaptations=interpretation_to_proposals(interpretation),
+        clip_overrides=clip_overrides,
+        locks=locks,
     )
