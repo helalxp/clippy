@@ -13,102 +13,28 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping, Sequence
 
-from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, ValidationError, model_validator
+from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, ValidationError
 
 from .analysis import FrameSample
 from .capabilities import CompatibilityReport, RendererBackend, check_compatibility
-from .models import AdaptationProposal, ContractModel, TemplateAsset, TemplateRecipe
+from .models import (
+    AdaptationProposal,
+    AnalysisEvidence,
+    ClaimValue,
+    ContractModel,
+    InterpretationClaim,
+    InterpretationEvidence,
+    InterpretationProperty,
+    RendererCompatibilityDocument,
+    TemplateAnalysis,
+    TemplateAsset,
+    TemplateDocument,
+    TemplateInterpretation,
+    TemplateOrigin,
+    TemplateRecipe,
+)
 from .resolver import ResolvedRecipe, resolve_recipe
 from .visuals import FrameVisualMeasurement
-
-
-InterpretationProperty = Literal[
-    "canvas.width",
-    "canvas.height",
-    "canvas.fps",
-    "canvas.safe_top",
-    "canvas.safe_right",
-    "canvas.safe_bottom",
-    "canvas.safe_left",
-    "framing.mode",
-    "framing.anchor_x",
-    "framing.anchor_y",
-    "framing.subject_tracking",
-    "captions.enabled",
-    "captions.font_family",
-    "captions.font_size_ratio",
-    "captions.font_color",
-    "captions.highlight_color",
-    "captions.outline_color",
-    "captions.outline_ratio",
-    "captions.shadow_ratio",
-    "captions.position",
-    "captions.anchor_x",
-    "captions.anchor_y",
-    "captions.max_lines",
-    "captions.word_highlight",
-    "captions.uppercase",
-    "captions.reveal_by_word",
-    "hook.enabled",
-    "hook.font_family",
-    "hook.font_size_ratio",
-    "hook.color",
-    "hook.background_color",
-    "hook.position",
-    "hook.anchor_x",
-    "hook.anchor_y",
-    "hook.entrance",
-    "hook.start_seconds",
-    "hook.duration_seconds",
-    "background.mode",
-    "background.color",
-    "background.blur_radius_ratio",
-    "rhythm.pace",
-    "rhythm.target_shot_seconds",
-    "rhythm.target_cuts_per_minute",
-]
-ClaimValue = StrictStr | StrictInt | StrictFloat | StrictBool | None
-
-
-class InterpretationEvidence(ContractModel):
-    asset_id: str = Field(min_length=1, max_length=80)
-    timestamp_ms: int = Field(ge=0)
-
-
-class InterpretationClaim(ContractModel):
-    property_path: InterpretationProperty
-    value: ClaimValue
-    confidence: Literal["high", "medium", "low", "uncertain"]
-    source: Literal["visual_observation", "inference", "deterministic_measurement", "human_correction"]
-    status: Literal["pending", "accepted", "rejected", "corrected"] = "pending"
-    evidence: list[InterpretationEvidence] = Field(min_length=1, max_length=8)
-    rationale: str = Field(min_length=1, max_length=500)
-    reviewed_by: str | None = Field(default=None, min_length=1, max_length=128)
-    reviewed_at: datetime | None = None
-    review_note: str | None = Field(default=None, max_length=500)
-
-    @model_validator(mode="after")
-    def review_provenance(self) -> "InterpretationClaim":
-        if self.status == "pending":
-            if self.reviewed_by is not None or self.reviewed_at is not None or self.review_note is not None:
-                raise ValueError("pending claims cannot contain review provenance")
-        else:
-            if not self.reviewed_by or not self.reviewed_by.strip() or self.reviewed_at is None:
-                raise ValueError("reviewed claims require reviewer identity and timestamp")
-            if self.reviewed_at.tzinfo is None or self.reviewed_at.utcoffset() is None:
-                raise ValueError("reviewed_at must include a timezone")
-        if self.status == "corrected" and self.source != "human_correction":
-            raise ValueError("corrected claims must use human_correction as their source")
-        if self.source == "human_correction" and self.status != "corrected":
-            raise ValueError("human_correction claims must have corrected status")
-        return self
-
-    @model_validator(mode="after")
-    def unique_evidence(self) -> "InterpretationClaim":
-        keys = [(item.asset_id, item.timestamp_ms) for item in self.evidence]
-        if len(keys) != len(set(keys)):
-            raise ValueError("claim evidence references must be unique")
-        return self
 
 
 class ProviderInterpretationClaim(ContractModel):
@@ -117,34 +43,15 @@ class ProviderInterpretationClaim(ContractModel):
     value: ClaimValue
     confidence: Literal["high", "medium", "low", "uncertain"]
     source: Literal["visual_observation", "inference"]
-    evidence: list[InterpretationEvidence] = Field(min_length=1, max_length=8)
+    evidence: list[InterpretationEvidence] = Field(min_length=1, max_length=4)
     rationale: str = Field(min_length=1, max_length=500)
 
 
 class ProviderInterpretationPayload(ContractModel):
     """Provider response schema without caller-owned provider/model metadata."""
     summary: str = Field(default="", max_length=1200)
-    claims: list[ProviderInterpretationClaim] = Field(default_factory=list, max_length=256)
+    claims: list[ProviderInterpretationClaim] = Field(default_factory=list, max_length=128)
     limitations: list[str] = Field(default_factory=list, max_length=100)
-
-
-class TemplateInterpretation(ContractModel):
-    interpretation_type: Literal["clippy.template_interpretation"] = Field(
-        default="clippy.template_interpretation", alias="schema"
-    )
-    schema_version: Literal[1] = 1
-    provider_id: str = Field(min_length=1, max_length=80)
-    model_id: str = Field(min_length=1, max_length=120)
-    summary: str = Field(default="", max_length=1200)
-    claims: list[InterpretationClaim] = Field(default_factory=list, max_length=256)
-    limitations: list[str] = Field(default_factory=list, max_length=100)
-
-    @model_validator(mode="after")
-    def unique_claim_paths(self) -> "TemplateInterpretation":
-        paths = [claim.property_path for claim in self.claims]
-        if len(paths) != len(set(paths)):
-            raise ValueError("interpretation must contain at most one claim per property path")
-        return self
 
 
 @dataclass(frozen=True)
