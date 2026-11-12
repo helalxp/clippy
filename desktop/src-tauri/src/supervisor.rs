@@ -91,6 +91,48 @@ impl RuntimePaths {
     }
 }
 
+
+/// Build a deterministic PATH for Clippy's child processes. In particular,
+/// never append the user's PATH: it can contain another Python/Node install,
+/// Conda, or a user-controlled executable that shadows an application tool.
+fn managed_child_path(paths: &RuntimePaths) -> Result<std::ffi::OsString, String> {
+    let mut directories = Vec::new();
+
+    if let Some(python_root) = paths.python.parent() {
+        directories.push(python_root.to_path_buf());
+        let nvidia_root = python_root.join("Lib").join("site-packages").join("nvidia");
+        for relative in ["cublas\\bin", "cudnn\\bin", "cuda_runtime\\bin"] {
+            let dll_dir = nvidia_root.join(relative);
+            if dll_dir.is_dir() {
+                directories.push(dll_dir);
+            }
+        }
+    }
+    if let Some(node_root) = paths.node.parent() {
+        directories.push(node_root.to_path_buf());
+    }
+    directories.push(paths.ffmpeg.clone());
+
+    // Keep Windows system executables and DLLs available without inheriting
+    // arbitrary user PATH entries. nvidia-smi is normally in System32 or the
+    // NVIDIA NVSMI directory.
+    if let Some(system_root) = env::var_os("SystemRoot") {
+        let system_root = PathBuf::from(system_root);
+        directories.push(system_root.join("System32"));
+        directories.push(system_root);
+    }
+    if let Some(program_files) = env::var_os("ProgramFiles") {
+        directories.push(
+            PathBuf::from(program_files)
+                .join("NVIDIA Corporation")
+                .join("NVSMI"),
+        );
+    }
+
+    env::join_paths(directories)
+        .map_err(|error| format!("Cannot construct isolated Clippy PATH: {error}"))
+}
+
 impl Drop for Supervisor {
     fn drop(&mut self) {
         // Child handles do not terminate their processes when dropped. Stop
@@ -117,24 +159,7 @@ impl Supervisor {
         fs::create_dir_all(&paths.uploads).map_err(|e| format!("Cannot create uploads directory: {e}"))?;
         fs::create_dir_all(&paths.models).map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
-        let mut child_path = vec![paths.ffmpeg.clone()];
-        // PyTorch's CUDA wheels place cuBLAS/cuDNN DLLs inside the managed
-        // Python environment. CTranslate2 (used by faster-whisper) needs those
-        // DLL directories on PATH on Windows.
-        if let Some(python_root) = paths.python.parent() {
-            let nvidia_root = python_root.join("Lib").join("site-packages").join("nvidia");
-            for relative in ["cublas\\bin", "cudnn\\bin", "cuda_runtime\\bin"] {
-                let dll_dir = nvidia_root.join(relative);
-                if dll_dir.is_dir() {
-                    child_path.push(dll_dir);
-                }
-            }
-        }
-        if let Some(existing) = env::var_os("PATH") {
-            child_path.extend(env::split_paths(&existing));
-        }
-        let child_path = env::join_paths(child_path)
-            .map_err(|e| format!("Cannot construct application PATH: {e}"))?;
+        let child_path = managed_child_path(&paths)?;
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
@@ -142,7 +167,20 @@ impl Supervisor {
         let mut backend = Command::new(&paths.python)
             .args(["-m", "uvicorn", "app:app", "--host", BACKEND_HOST, "--port", "8000"])
             .current_dir(&paths.root)
+            // Do not allow a user's Python/Conda environment to influence the
+            // interpreter or imports. The executable is always Clippy's private
+            // Python and the only application import path is the packaged app.
+            .env_remove("PYTHONHOME")
+            .env_remove("PYTHONPATH")
+            .env_remove("PYTHONUSERBASE")
+            .env_remove("PYTHONSTARTUP")
+            .env_remove("PYTHONEXECUTABLE")
+            .env_remove("VIRTUAL_ENV")
+            .env_remove("CONDA_PREFIX")
+            .env_remove("CONDA_DEFAULT_ENV")
+            .env_remove("CONDA_EXE")
             .env("PYTHONPATH", &paths.root)
+            .env("PYTHONNOUSERSITE", "1")
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONUTF8", "1")
             .env("OUTPUT_DIR", &paths.output)
@@ -153,6 +191,10 @@ impl Supervisor {
             .env("HUGGINGFACE_HUB_CACHE", paths.models.join("huggingface").join("hub"))
             .env("TORCH_HOME", paths.models.join("torch"))
             .env("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+            .env_remove("NODE_PATH")
+            .env_remove("NODE_OPTIONS")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
             .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{RENDERER_PORT}"))
             .env("HOST", BACKEND_HOST)
@@ -169,6 +211,10 @@ impl Supervisor {
             .env("NODE_ENV", "production")
             .env("PORT", RENDERER_PORT.to_string())
             .env("OUTPUT_DIR", &paths.output)
+            .env_remove("NODE_PATH")
+            .env_remove("NODE_OPTIONS")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
             .env("REMOTION_BUNDLE_PATH", paths.root.join("remotion"))
             .stdout(Stdio::from(renderer_stdout))
