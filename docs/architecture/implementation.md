@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Phase 1 contract foundation implemented; Phase 2 persistence is the next active implementation slice.  
+**Status:** Phase 1 contract foundation verified; Phase 2 local persistence implemented in source, awaiting execution of its new test module.  
 **Last verified update:** 2026-11-12
 
 This file is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone gates live in [stages.md](./stages.md).
@@ -29,7 +29,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Not yet implemented
 
-- [ ] Durable local template storage, atomic writes, locking, and asset integrity verification.
+- [~] Local template storage, atomic writes, per-template locking, revision compare-and-swap, and asset integrity verification implemented; storage tests are committed but not yet executed.
 - [ ] Migration of the legacy v1 reference-template manifest.
 - [ ] Reference-video ingest, media probing, temporal sampling, evidence capture, and staged analysis jobs.
 - [ ] Deterministic visual measurements and optional structured vision interpretation.
@@ -49,7 +49,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 | Recipe resolver | `template_system/resolver.py` | Implemented; focused tests pass |
 | Public exports | `template_system/__init__.py` | Implemented |
 | Contract tests | `tests/test_template_system_contracts.py` | 18/18 passed in user-run focused test |
-| Storage | Not implemented | Next |
+| Storage | `template_system/storage.py` | Implemented; 16 tests added, execution pending |
 | Analysis | Not implemented | Pending |
 | Python/FFmpeg adapter | Not implemented | Pending |
 | Remotion adapters/parity | Not implemented | Pending |
@@ -86,6 +86,10 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 The Python 3.12 installer/runtime issue is tracked separately and is not a blocker for continuing repository implementation.
 
 ## 6. Active work: Phase 2 local persistence
+
+**Implementation update (2026-11-12):** `template_system/storage.py` now provides local-only create/get/list/update/delete operations, canonical manifest serialization, atomic replacement, per-template in-process locks, optimistic revision checks, and asset size/SHA-256 verification. `tests/test_template_system_storage.py` adds coverage for CRUD, malformed manifests, asset corruption, path/symlink escape, failed writes, and concurrent operations. These tests are committed but not yet verified. Stage 2 remains open until they execute successfully and edge cases are reviewed.
+
+
 
 Implement a storage boundary that is safe and testable before exposing APIs.
 
