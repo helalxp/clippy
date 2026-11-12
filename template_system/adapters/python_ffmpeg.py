@@ -142,6 +142,13 @@ class PythonFFmpegAdapter:
             source_probe = probe_media(source, ffprobe_bin=self.ffprobe_bin)
         except ReferenceAnalysisError as exc:
             raise RenderAdapterError(str(exc)) from exc
+        if source_probe.video_stream_count != 1:
+            raise RenderAdapterError("the first FFmpeg adapter requires exactly one video stream")
+        if source_probe.other_stream_types:
+            stream_types = ", ".join(source_probe.other_stream_types)
+            raise RenderAdapterError(
+                f"the first FFmpeg adapter cannot preserve these source stream types: {stream_types}"
+            )
 
         destination_input = Path(output_path).expanduser()
         if destination_input.suffix.lower() != ".mp4":
@@ -246,6 +253,10 @@ class PythonFFmpegAdapter:
                 )
             if output_probe.has_audio != source_probe.has_audio:
                 raise RenderAdapterError("render did not preserve source audio presence")
+            if output_probe.audio_stream_count != source_probe.audio_stream_count:
+                raise RenderAdapterError("render did not preserve all source audio streams")
+            if output_probe.video_stream_count != 1:
+                raise RenderAdapterError("render output contains an unexpected video stream count")
 
             os.replace(temporary, destination)
             result = RenderResult(
