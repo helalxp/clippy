@@ -87,6 +87,8 @@ def test_interpretation_provider_receives_verified_frames_and_claims_stay_pendin
     assert result.provider_id == "fake-vision"
     assert result.model_id == "fake-model-v1"
     assert result.claims[0].status == "pending"
+    assert result.claims[0].reviewed_by is None
+    assert result.claims[0].reviewed_at is None
 
 
 def test_interpretation_rejects_claims_without_supplied_evidence(tmp_path):
