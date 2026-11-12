@@ -15,7 +15,7 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 
 from pydantic import Field, ValidationError
 
-from .analysis import FrameSample
+from .analysis import FrameSample, ReferenceAnalysisResult
 from .capabilities import CompatibilityReport, check_compatibility
 from .models import (
     AdaptationProposal,
@@ -360,7 +360,7 @@ def review_interpretation_claim(
 
 
 def build_template_draft(
-    analysis_result,
+    analysis_result: ReferenceAnalysisResult,
     interpretation: TemplateInterpretation,
     base_recipe: TemplateRecipe,
     *,
@@ -375,6 +375,10 @@ def build_template_draft(
     synthesis = synthesize_draft_recipe(base_recipe, interpretation)
     analysis_data = analysis.model_dump(mode="python")
     interpretation_evidence = []
+    valid_evidence_pairs = {
+        (f"reference_frame_{index:03d}", sample.timestamp_ms)
+        for index, sample in enumerate(analysis_result.samples, start=1)
+    }
 
     for claim in interpretation.claims:
         note = json.dumps({
@@ -388,6 +392,10 @@ def build_template_draft(
             "review_note": claim.review_note,
         }, ensure_ascii=False, sort_keys=True, default=str)[:1000]
         for evidence in claim.evidence:
+            if (evidence.asset_id, evidence.timestamp_ms) not in valid_evidence_pairs:
+                raise InterpretationSynthesisError(
+                    f"claim {claim.property_path!r} cites evidence outside the analyzed reference"
+                )
             interpretation_evidence.append(AnalysisEvidence(
                 property_path=claim.property_path,
                 method=f"vision:{interpretation.provider_id}"[:120],
