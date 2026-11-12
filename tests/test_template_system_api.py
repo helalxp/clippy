@@ -347,3 +347,146 @@ def test_template_library_api_is_disabled_in_managed_mode(monkeypatch):
 
 async def _request_owner_id(request):
     return request.owner_id
+
+
+def test_template_library_api_uploads_and_removes_owner_scoped_image_assets(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import io
+    from PIL import Image
+    import app as app_module
+    from fastapi import HTTPException
+    from template_system.models import TemplateDocument
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _request_owner_id)
+
+    document = TemplateDocument(
+        id="tpl_asset_upload01",
+        name="Asset upload fixture",
+    )
+    owner = SimpleNamespace(owner_id="asset-owner")
+    asyncio.run(app_module.create_template(document.to_storage_dict(), owner))
+
+    image_bytes = io.BytesIO()
+    Image.new("RGBA", (32, 16), (20, 40, 60, 255)).save(image_bytes, format="PNG")
+    payload = image_bytes.getvalue()
+    upload = _FakeTemplateUpload(payload, "image/png")
+    upload_request = _FakeMultipartRequest(
+        owner_id="asset-owner",
+        form_data={"file": upload, "expected_revision": "1"},
+    )
+
+    response = asyncio.run(
+        app_module.upload_template_asset(document.id, upload_request)
+    )
+    asset = response["asset"]
+    assert asset["id"].startswith("asset_")
+    assert asset["path"] == f"assets/{asset['id']}.png"
+    assert asset["media_type"] == "image/png"
+    assert (asset["width"], asset["height"]) == (32, 16)
+    assert asset["size_bytes"] == len(payload)
+    assert asset["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert response["template_revision"] == 2
+
+    scope = hashlib.sha256(b"asset-owner").hexdigest()[:32]
+    asset_path = (
+        tmp_path / "libraries" / scope / document.id / asset["path"]
+    )
+    assert asset_path.read_bytes() == payload
+
+    stale_delete = _FakeMultipartRequest(
+        owner_id="asset-owner",
+        query_params={"expected_revision": "1"},
+    )
+    with pytest.raises(HTTPException) as stale:
+        asyncio.run(
+            app_module.delete_template_asset(document.id, asset["id"], stale_delete)
+        )
+    assert stale.value.status_code == 409
+    assert asset_path.is_file()
+
+    delete_request = _FakeMultipartRequest(
+        owner_id="asset-owner",
+        query_params={"expected_revision": "2"},
+    )
+    deleted = asyncio.run(
+        app_module.delete_template_asset(document.id, asset["id"], delete_request)
+    )
+    assert deleted == {
+        "success": True,
+        "asset_id": asset["id"],
+        "template_revision": 3,
+    }
+    assert not asset_path.exists()
+
+    final = asyncio.run(app_module.get_template(document.id, owner))
+    assert final["template"]["assets"] == []
+    assert final["template"]["revision"] == 3
+
+
+def test_template_library_api_rejects_mismatched_asset_mime_type(
+    tmp_path, monkeypatch
+):
+    import io
+    from PIL import Image
+    import app as app_module
+    from fastapi import HTTPException
+    from template_system.models import TemplateDocument
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _request_owner_id)
+
+    document = TemplateDocument(id="tpl_asset_mime01", name="MIME fixture")
+    owner = SimpleNamespace(owner_id="asset-owner")
+    asyncio.run(app_module.create_template(document.to_storage_dict(), owner))
+
+    image_bytes = io.BytesIO()
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(image_bytes, format="PNG")
+    request = _FakeMultipartRequest(
+        owner_id="asset-owner",
+        form_data={
+            "file": _FakeTemplateUpload(image_bytes.getvalue(), "image/jpeg"),
+            "expected_revision": "1",
+        },
+    )
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(app_module.upload_template_asset(document.id, request))
+    assert rejected.value.status_code == 415
+    assert asyncio.run(app_module.get_template(document.id, owner))["template"]["assets"] == []
+
+
+class _FakeTemplateUpload:
+    def __init__(self, payload, content_type):
+        self.payload = payload
+        self.content_type = content_type
+        self.filename = "untrusted-client-name.png"
+        self.closed = False
+
+    async def read(self, size=-1):
+        return self.payload if size < 0 else self.payload[:size]
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeMultipartRequest:
+    def __init__(self, *, owner_id, form_data=None, query_params=None):
+        self.owner_id = owner_id
+        self.headers = {}
+        self.query_params = query_params or {}
+        self._form_data = form_data or {}
+
+    async def form(self, **kwargs):
+        assert kwargs.get("max_files") == 1
+        assert kwargs.get("max_fields") == 1
+        return self._form_data
+
+
+async def _request_owner_id(request):
+    return request.owner_id
