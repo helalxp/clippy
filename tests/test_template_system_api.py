@@ -398,6 +398,12 @@ def test_template_library_api_uploads_and_removes_owner_scoped_image_assets(
     )
     assert asset_path.read_bytes() == payload
 
+    served = asyncio.run(
+        app_module.get_template_asset(document.id, asset["id"], owner)
+    )
+    assert Path(served.path) == asset_path
+    assert served.media_type == "image/png"
+
     stale_delete = _FakeMultipartRequest(
         owner_id="asset-owner",
         query_params={"expected_revision": "1"},
@@ -422,6 +428,9 @@ def test_template_library_api_uploads_and_removes_owner_scoped_image_assets(
         "template_revision": 3,
     }
     assert not asset_path.exists()
+    with pytest.raises(HTTPException) as missing_asset:
+        asyncio.run(app_module.get_template_asset(document.id, asset["id"], owner))
+    assert missing_asset.value.status_code == 404
 
     final = asyncio.run(app_module.get_template(document.id, owner))
     assert final["template"]["assets"] == []
