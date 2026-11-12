@@ -120,7 +120,7 @@ Scope limits carried forward:
 
 ## Stage 4 — Structured interpretation and template synthesis
 
-**Status: PLANNED.**
+**Status: NEXT / NOT STARTED.**
 
 Objective: convert measurements and optional vision interpretation into a reviewable draft template.
 
