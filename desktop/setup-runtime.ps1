@@ -29,7 +29,10 @@ $LogDir = Join-Path $Root "logs"
 $SetupLogPath = Join-Path $LogDir "runtime-setup.log"
 
 $PythonVersion = "3.12.10"
-$PythonInstallerUrl = "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
+$PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
+$PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
+$PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
+$PipBootstrapUrl = "https://bootstrap.pypa.io/pip/3.12/get-pip.py"
 $NodeVersion = "22.23.3"
 $NodeArchiveName = "node-v$NodeVersion-win-x64.zip"
 $NodeArchiveUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName"
@@ -190,57 +193,42 @@ if (-not $VcRuntimeInstalled) {
     }
 }
 
-# Python is installed privately into Clippy's runtime folder. Its Authenticode
-# signature is checked before the silent installer is allowed to run.
+# Use the official CPython embeddable distribution instead of the EXE bootstrapper.
+# The EXE bootstrapper is a machine-registered Burn bundle: if any prior Python
+# 3.12 installation registered CPython-3.12, it can enter repair mode, return 0,
+# and silently ignore Clippy's TargetDir. The embeddable ZIP has no machine-wide
+# installer state and is designed to be shipped inside another application.
 $PythonExe = Join-Path $PythonDir "python.exe"
-if (-not (Test-Path $PythonExe)) {
-    $Installer = Join-Path $Downloads "python-$PythonVersion-amd64.exe"
-    Download-File $PythonInstallerUrl $Installer
-    $Signature = Get-AuthenticodeSignature -FilePath $Installer
-    if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
-        Write-Stage "Cached Python installer failed signature verification; downloading a fresh copy."
-        Remove-Item $Installer -Force -ErrorAction SilentlyContinue
-        Download-File $PythonInstallerUrl $Installer
-        $Signature = Get-AuthenticodeSignature -FilePath $Installer
-        if ($Signature.Status -ne "Valid" -or $Signature.SignerCertificate.Subject -notmatch "Python Software Foundation") {
-            throw "Python installer signature is not valid or is not issued to the Python Software Foundation."
-        }
-    }
-    Write-Stage "Installing private Python $PythonVersion runtime..."
-    # Remove an incomplete installation from an earlier interrupted attempt.
-    # Never remove a working runtime: this block runs only when python.exe is absent.
+if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
+    $PythonArchive = Join-Path $Downloads $PythonArchiveName
+    Download-File $PythonArchiveUrl $PythonArchive
+    Assert-Sha256 $PythonArchive $PythonArchiveSha256
+
     if (Test-Path $PythonDir) {
         Remove-Item -LiteralPath $PythonDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path $PythonDir -Force | Out-Null
+    Write-Stage "Extracting isolated CPython $PythonVersion embeddable runtime..."
+    Expand-Archive -LiteralPath $PythonArchive -DestinationPath $PythonDir -Force
 
-    # Python's installer expects ordinary quoted Windows arguments. Backslash-
-    # escaped quotes (\\") are not PowerShell escapes and were passed literally.
-    $PythonInstallLog = Join-Path $LogDir "python-install.log"
-    Remove-Item -LiteralPath $PythonInstallLog -Force -ErrorAction SilentlyContinue
-    $InstallerArgs = '/quiet InstallAllUsers=0 TargetDir="' + $PythonDir + '" Include_pip=1 Include_launcher=0 Include_test=0 Shortcuts=0 PrependPath=0 /log "' + $PythonInstallLog + '"'
-    Write-Stage ("Running signed Python installer with target directory: " + $PythonDir)
-    $Process = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -Wait -PassThru
-    Write-Stage ("Python installer process exit code: " + $Process.ExitCode)
-
-    if ($Process.ExitCode -notin @(0, 3010)) {
-        throw "Private Python installer process failed with exit code $($Process.ExitCode). See $PythonInstallLog"
+    # The embeddable package intentionally disables site initialization and
+    # omits pip. Enable only Clippy-local library/package paths, then bootstrap
+    # pip into this private runtime. No global Python registry or PATH changes.
+    $PythonPth = Join-Path $PythonDir "python312._pth"
+    if (-not (Test-Path -LiteralPath $PythonPth -PathType Leaf)) {
+        throw "Official Python embeddable archive is missing python312._pth."
     }
-    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-        $PythonDirContents = if (Test-Path $PythonDir) {
-            (Get-ChildItem -LiteralPath $PythonDir -Force -ErrorAction SilentlyContinue |
-                Select-Object -ExpandProperty Name) -join ", "
-        } else {
-            "<directory missing>"
-        }
-        $InstallerLogTail = if (Test-Path $PythonInstallLog) {
-            (Get-Content -LiteralPath $PythonInstallLog -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine
-        } else {
-            "<Python installer did not create its log>"
-        }
-        Write-Stage ("Python target directory contents: " + $PythonDirContents)
-        Write-Stage ("Python installer log: " + $PythonInstallLog)
-        throw "Python installer returned exit code $($Process.ExitCode), but the expected executable was not created at $PythonExe. Target contents: $PythonDirContents. Installer log tail: $InstallerLogTail"
+    $PthEntries = @("python312.zip", ".", "Lib", "Lib\\site-packages", "import site")
+    [System.IO.File]::WriteAllLines($PythonPth, $PthEntries, [System.Text.Encoding]::ASCII)
+    $PythonSitePackages = Join-Path $PythonDir "Lib\\site-packages"
+    New-Item -ItemType Directory -Path $PythonSitePackages -Force | Out-Null
+
+    $PipBootstrap = Join-Path $Downloads "get-pip.py"
+    Download-File $PipBootstrapUrl $PipBootstrap
+    Write-Stage "Bootstrapping pip into Clippy's private Python runtime..."
+    & $PythonExe $PipBootstrap --disable-pip-version-check --no-warn-script-location
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip bootstrap failed for the private Python runtime. See $PipBootstrap"
     }
 }
 if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
@@ -249,8 +237,12 @@ if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
 $PythonVersionOutput = (& $PythonExe --version 2>&1 | Out-String).Trim()
 $PythonVersionExitCode = $LASTEXITCODE
 Write-Stage ("Managed Python version check: " + $PythonVersionOutput)
-if ($PythonVersionExitCode -ne 0 -or $PythonVersionOutput -notmatch ("^Python\s+" + [regex]::Escape($PythonVersion) + "$")) {
+if ($PythonVersionExitCode -ne 0 -or $PythonVersionOutput -notmatch ("^Python\\s+" + [regex]::Escape($PythonVersion) + "$")) {
     throw "Managed Python version check failed. Expected Python $PythonVersion, got '$PythonVersionOutput' (exit code $PythonVersionExitCode)."
+}
+& $PythonExe -m pip --version
+if ($LASTEXITCODE -ne 0) {
+    throw "pip is not available in Clippy's private Python runtime."
 }
 
 # Node's archive is checked against the SHA-256 value published alongside the
