@@ -355,6 +355,18 @@ class LocalTemplateStorage:
                 raise
             return updated
 
+    def get_asset(self, template_id: str, asset_id: str) -> tuple[TemplateAsset, Path]:
+        """Return a verified asset record and its path inside the template root."""
+        template_dir = self._template_dir(template_id)
+        with self._synchronized(template_id):
+            if not template_dir.is_dir():
+                raise TemplateNotFound(template_id)
+            document = self._read_document(template_dir)
+            asset = next((item for item in document.assets if item.id == asset_id), None)
+            if asset is None:
+                raise TemplateAssetNotFound(asset_id)
+            return asset, self._asset_path(template_dir, asset.path)
+
     def remove_asset(
         self,
         template_id: str,
