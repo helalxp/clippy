@@ -31,7 +31,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 - [x] Local template storage, atomic writes, per-template thread and OS-backed file locks, revision compare-and-swap, and asset integrity verification implemented and focused-test verified.
 - [ ] Migration of the legacy v1 reference-template manifest.
-- [~] Deterministic media probing, scene-boundary candidates, bounded sample selection, timestamped PNG evidence, SHA-256 fingerprints, and partial-result reporting implemented. Staged ingest/jobs, cancellation, and broader visual measurements remain.
+- [~] Deterministic media probing, transactional local staging/cleanup, scene-boundary candidates, bounded sample selection, timestamped PNG evidence, SHA-256 fingerprints, canonical TemplateAnalysis/TemplateAsset conversion, and partial-result reporting implemented. Analysis-job progress/cancellation and broader visual measurements remain.
 - [ ] Deterministic visual measurements and optional structured vision interpretation.
 - [ ] A production Python/FFmpeg adapter consuming the resolved recipe.
 - [ ] A shared recipe contract consumed by browser preview and Remotion final render.
@@ -114,9 +114,9 @@ Do not add API routes until storage behavior and its failure modes are covered.
 
 ## 7. Active work: Stage 3 deterministic reference analysis
 
-**Implemented slice:** `template_system/analysis.py` probes local files with FFprobe, validates streams/duration/dimensions/size, records codec/FPS/pixel-aspect/audio/rotation metadata and a streaming SHA-256 fingerprint, detects bounded FFmpeg scene-cut candidates, chooses scene-midpoint plus uniform timestamps, extracts bounded PNG evidence frames, and reports coverage/limitations while retaining partial successes. `tests/test_template_system_analysis.py` covers probe parsing, invalid media, bounds, sampling, frame integrity, collisions, and partial analysis.
+**Implemented slice:** `template_system/ingest.py` stages local media into unique, permission-restricted directories using bounded streaming copies, SHA-256, atomic file replacement, and ownership-checked cleanup. `template_system/analysis.py` probes local files with FFprobe, validates streams/duration/dimensions/size, records codec/FPS/pixel-aspect/audio/rotation metadata and a streaming SHA-256 fingerprint, detects bounded FFmpeg scene-cut candidates, chooses scene-midpoint plus uniform timestamps, extracts bounded PNG evidence frames, converts samples into canonical `TemplateAsset` and `TemplateAnalysis` records, and reports coverage/limitations while retaining partial successes. Dedicated tests cover staging, cleanup, probe parsing, invalid media, bounds, sampling, evidence conversion, frame integrity, collisions, and partial analysis.
 
-**Still required before Stage 3 closes:** staged ingest/copy and cleanup, explicit cancellation/progress integration, deterministic color/layout/motion measurements, attaching frame evidence to the canonical template asset inventory and `TemplateAnalysis`, and end-to-end fixture validation against real FFmpeg binaries.
+**Still required before Stage 3 closes:** explicit cancellation/progress integration, deterministic color/layout/motion measurements, scene-boundary quality evaluation on representative fixtures, and end-to-end fixture validation against real FFmpeg binaries.
 
 ## 8. Next vertical slice after Stage 3
 
