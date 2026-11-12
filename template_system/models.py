@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class ContractModel(BaseModel):
-    """Immutable contract object that rejects undocumented fields."""
+    """Field-assignment-frozen contract object that rejects undocumented fields."""
 
     model_config = ConfigDict(
         extra="forbid",
