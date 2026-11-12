@@ -397,3 +397,29 @@ def test_reviewed_claims_require_reviewer_provenance():
             evidence=evidence,
             rationale="Observed in the reference.",
         )
+
+
+
+def test_human_review_rejects_naive_timestamp():
+    evidence = [InterpretationEvidence(asset_id="frame_asset", timestamp_ms=1000)]
+    interpretation = TemplateInterpretation(
+        provider_id="fake",
+        model_id="v1",
+        claims=[InterpretationClaim(
+            property_path="captions.enabled",
+            value=True,
+            confidence="high",
+            source="visual_observation",
+            evidence=evidence,
+            rationale="Visible caption treatment.",
+        )],
+    )
+
+    with pytest.raises(ValueError, match="timezone"):
+        review_interpretation_claim(
+            interpretation,
+            "captions.enabled",
+            decision="accepted",
+            reviewed_by="local-user",
+            reviewed_at=datetime(2026, 11, 12),
+        )
