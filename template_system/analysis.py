@@ -18,6 +18,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Sequence
 
+from .models import AnalysisEvidence, TemplateAnalysis, TemplateAsset
+
 
 class ReferenceAnalysisError(RuntimeError):
     """A reference source could not be safely probed or sampled."""
@@ -89,6 +91,45 @@ class ReferenceAnalysisResult:
     coverage: dict[str, float]
     limitations: tuple[str, ...]
     status: str
+
+    def to_template_parts(self) -> tuple[TemplateAnalysis, list[TemplateAsset]]:
+        """Convert measured evidence into canonical analysis and asset records."""
+        assets: list[TemplateAsset] = []
+        evidence: list[AnalysisEvidence] = [
+            AnalysisEvidence(
+                property_path="source.media_metadata",
+                method="ffprobe",
+                note=json.dumps(self.probe.to_dict(), ensure_ascii=False, sort_keys=True)[:1000],
+            )
+        ]
+        for boundary in self.scene_boundaries_seconds:
+            evidence.append(AnalysisEvidence(
+                property_path="source.scene_cut_candidate",
+                method="ffmpeg_scene_score",
+                source_timestamp_ms=int(round(boundary * 1000)),
+            ))
+        for index, sample in enumerate(self.samples, start=1):
+            asset_id = f"reference_frame_{index:03d}"
+            assets.append(TemplateAsset(
+                id=asset_id,
+                path=sample.relative_path,
+                media_type="image/png",
+                size_bytes=sample.size_bytes,
+                sha256=sample.sha256,
+            ))
+            evidence.append(AnalysisEvidence(
+                property_path="reference.frame_sample",
+                method="ffmpeg_png_sample",
+                source_timestamp_ms=sample.timestamp_ms,
+                asset_id=asset_id,
+            ))
+        analysis = TemplateAnalysis(
+            status=self.status,
+            coverage=self.coverage,
+            evidence=evidence,
+            limitations=list(self.limitations),
+        )
+        return analysis, assets
 
 
 def _local_video_path(path: str | Path) -> Path:
