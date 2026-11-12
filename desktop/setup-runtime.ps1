@@ -207,15 +207,51 @@ if (-not (Test-Path $PythonExe)) {
         }
     }
     Write-Stage "Installing private Python $PythonVersion runtime..."
+    # Remove an incomplete installation from an earlier interrupted attempt.
+    # Never remove a working runtime: this block runs only when python.exe is absent.
+    if (Test-Path $PythonDir) {
+        Remove-Item -LiteralPath $PythonDir -Recurse -Force
+    }
     New-Item -ItemType Directory -Path $PythonDir -Force | Out-Null
-    $InstallerArgs = '/quiet InstallAllUsers=0 TargetDir="' + $PythonDir + '" Include_pip=1 Include_launcher=0 Include_test=0 Shortcuts=0 PrependPath=0'
+
+    # Python's installer expects ordinary quoted Windows arguments. Backslash-
+    # escaped quotes (\\") are not PowerShell escapes and were passed literally.
+    $PythonInstallLog = Join-Path $LogDir "python-install.log"
+    Remove-Item -LiteralPath $PythonInstallLog -Force -ErrorAction SilentlyContinue
+    $InstallerArgs = '/quiet InstallAllUsers=0 TargetDir="' + $PythonDir + '" Include_pip=1 Include_launcher=0 Include_test=0 Shortcuts=0 PrependPath=0 /log "' + $PythonInstallLog + '"'
+    Write-Stage ("Running signed Python installer with target directory: " + $PythonDir)
     $Process = Start-Process -FilePath $Installer -ArgumentList $InstallerArgs -Wait -PassThru
-    if ($Process.ExitCode -notin @(0, 3010) -or -not (Test-Path $PythonExe)) {
-        throw "Private Python installation failed with exit code $($Process.ExitCode)."
+    Write-Stage ("Python installer process exit code: " + $Process.ExitCode)
+
+    if ($Process.ExitCode -notin @(0, 3010)) {
+        throw "Private Python installer process failed with exit code $($Process.ExitCode). See $PythonInstallLog"
+    }
+    if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
+        $PythonDirContents = if (Test-Path $PythonDir) {
+            (Get-ChildItem -LiteralPath $PythonDir -Force -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Name) -join ", "
+        } else {
+            "<directory missing>"
+        }
+        $InstallerLogTail = if (Test-Path $PythonInstallLog) {
+            (Get-Content -LiteralPath $PythonInstallLog -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+        } else {
+            "<Python installer did not create its log>"
+        }
+        Write-Stage ("Python target directory contents: " + $PythonDirContents)
+        Write-Stage ("Python installer log: " + $PythonInstallLog)
+        throw "Python installer returned exit code $($Process.ExitCode), but the expected executable was not created at $PythonExe. Target contents: $PythonDirContents. Installer log tail: $InstallerLogTail"
     }
 }
-& $PythonExe --version
-if ($LASTEXITCODE -ne 0) { throw "Managed Python runtime failed its version check." }
+if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
+    throw "Managed Python executable is missing: $PythonExe"
+}
+$PythonVersionOutput = (& $PythonExe --version 2>&1 | Out-String).Trim()
+$PythonVersionExitCode = $LASTEXITCODE
+Write-Stage ("Managed Python version check: " + $PythonVersionOutput)
+if ($PythonVersionExitCode -ne 0 -or $PythonVersionOutput -notmatch ("^Python\s+" + [regex]::Escape($PythonVersion) + "$")) {
+    throw "Managed Python version check failed. Expected Python $PythonVersion, got '$PythonVersionOutput' (exit code $PythonVersionExitCode)."
+}
 
 # Node's archive is checked against the SHA-256 value published alongside the
 # official Node.js release archive.
