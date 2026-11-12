@@ -6,13 +6,14 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-undefineddef test_template_apply_api_updates_clip_from_clean_canonical_and_persists_provenance(
+
+def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_provenance(
     tmp_path, monkeypatch
 ):
     import app as app_module
     from template_system.models import TemplateDocument, TemplateRecipe
-    from template_system.storage import LocalTemplateStorage
     from template_system.service import TemplateApplicationService
+    from template_system.storage import LocalTemplateStorage
 
     job_id = "template-api-fixture"
     output_dir = tmp_path / "output"
@@ -21,7 +22,7 @@ undefineddef test_template_apply_api_updates_clip_from_clean_canonical_and_persi
     metadata_path = job_dir / "fixture_metadata.json"
     clean_source = job_dir / "fixture_clip_1.mp4"
     previous_delivery = job_dir / "previous-style.mp4"
-    clean_source.write_bytes(b\"clean canonical source fixture\")
+    clean_source.write_bytes(b"clean canonical source fixture")
     previous_delivery.write_bytes(b"previous derivative is deliberately not a video")
 
     metadata = {
