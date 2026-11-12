@@ -340,6 +340,9 @@ def test_application_service_loads_template_resolves_and_returns_provenance(tmp_
     serialized = result.to_dict()
     assert serialized["template_id"] == template.id
     assert serialized["output_fingerprint"] == result.render.output_fingerprint
+    assert serialized["output_filename"] == output.name
+    assert "output_path" not in serialized
+    assert serialized["resolved_recipe"]["canvas"]["width"] == 360
 
 
 def test_application_service_refuses_template_with_unsupported_features(tmp_path):
