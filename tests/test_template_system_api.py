@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_template_apply_api_updates_clip_from_clean_canonical_and_persists_provenance(
     tmp_path, monkeypatch
@@ -136,3 +138,22 @@ async def _async_none(*args, **kwargs):
 
 async def _async_filename(request, job_id, filename):
     return filename
+
+
+
+def test_template_apply_api_blocks_managed_mode_without_durable_user_storage(monkeypatch):
+    import app as app_module
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+    req = app_module.TemplateApplyRequest(
+        job_id="job-not-read",
+        clip_index=0,
+        template_id="tpl_api_fixture001",
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(app_module.apply_template_to_clip(req, SimpleNamespace()))
+
+    assert raised.value.status_code == 503
+    assert "durable per-user storage" in raised.value.detail
