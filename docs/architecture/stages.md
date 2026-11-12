@@ -274,10 +274,10 @@ Acceptance:
 | 1. Domain foundation | Implemented; 18/18 focused tests pass |
 | 2. Local persistence | Complete; focused CI green |
 | 3. Deterministic analysis | Complete; 69 focused tests pass, including real FFmpeg ingest-to-persisted-template fixture |
-| 4. Structured interpretation and synthesis | In progress; strict claims, consent-gated Gemini adapter, human review, persistent draft assembly, and capability reports implemented |\n| 5. Python/FFmpeg adapter | In progress; real FFmpeg adapter and storage-backed application service implemented, existing API integration pending |
+| 4. Structured interpretation and synthesis | In progress; strict claims, consent-gated Gemini adapter, human review, persistent draft assembly, and capability reports implemented |
+| 5. Python/FFmpeg adapter | In progress; real FFmpeg adapter, application service, and local clip-application API implemented |
 | 6. Remotion parity | Planned |
 | 7. API and UI | Planned |
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
-
 **Immediate next action:** extend metadata locking to all clip-edit routes, add failure-injection coverage, then implement caption/hook adapters with measured capability claims. Keep live Gemini validation opt-in. Focused template CI is green at 109 passed; the full backend run reports 1,317 passed, 50 skipped, and the same two pre-existing failures documented in `implementation.md`. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
