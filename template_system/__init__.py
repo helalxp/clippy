@@ -1,5 +1,16 @@
-"""Clippy's canonical template domain, storage, and recipe resolution primitives."""
+"""Clippy's canonical template domain, analysis, storage, and resolution primitives."""
 
+from .analysis import (
+    FrameSample,
+    MediaProbe,
+    ReferenceAnalysisError,
+    ReferenceAnalysisResult,
+    analyze_reference_video,
+    choose_sample_timestamps,
+    detect_scene_boundaries,
+    extract_sample_frames,
+    probe_media,
+)
 from .capabilities import check_compatibility, registered_capabilities
 from .models import TemplateDocument, TemplateRecipe
 from .resolver import ResolvedRecipe, resolve_recipe
@@ -13,7 +24,11 @@ from .storage import (
 )
 
 __all__ = [
+    "FrameSample",
     "LocalTemplateStorage",
+    "MediaProbe",
+    "ReferenceAnalysisError",
+    "ReferenceAnalysisResult",
     "ResolvedRecipe",
     "TemplateAlreadyExists",
     "TemplateDocument",
@@ -22,7 +37,12 @@ __all__ = [
     "TemplateRecipe",
     "TemplateRevisionConflict",
     "TemplateStorageError",
+    "analyze_reference_video",
     "check_compatibility",
+    "choose_sample_timestamps",
+    "detect_scene_boundaries",
+    "extract_sample_frames",
+    "probe_media",
     "registered_capabilities",
     "resolve_recipe",
 ]
