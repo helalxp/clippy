@@ -32,11 +32,13 @@ class MediaProbe:
     width: int
     height: int
     frame_rate: float | None
+    pixel_aspect_ratio: float | None
     video_codec: str
     pixel_format: str | None
     has_audio: bool
     audio_codec: str | None
     audio_channels: int | None
+    audio_sample_rate: int | None
     rotation_degrees: int
 
     def to_dict(self) -> dict:
@@ -118,6 +120,16 @@ def _parse_frame_rate(value: str | None) -> float | None:
     return rate if math.isfinite(rate) and 0 < rate <= 1000 else None
 
 
+def _parse_aspect_ratio(value: str | None) -> float | None:
+    if not value or value in {"0:1", "N/A"}:
+        return None
+    try:
+        ratio = float(Fraction(value.replace(":", "/")))
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return None
+    return ratio if math.isfinite(ratio) and 0 < ratio <= 100 else None
+
+
 def probe_media(
     video_path: str | Path,
     *,
@@ -190,6 +202,15 @@ def probe_media(
         except (TypeError, ValueError):
             rotation = 0
 
+    try:
+        audio_channels = int(audio["channels"]) if audio and audio.get("channels") is not None else None
+    except (TypeError, ValueError):
+        audio_channels = None
+    try:
+        audio_sample_rate = int(audio["sample_rate"]) if audio and audio.get("sample_rate") is not None else None
+    except (TypeError, ValueError):
+        audio_sample_rate = None
+
     return MediaProbe(
         source_name=source.name,
         source_fingerprint=_sha256_file(source),
@@ -198,11 +219,13 @@ def probe_media(
         width=width,
         height=height,
         frame_rate=_parse_frame_rate(video.get("avg_frame_rate") or video.get("r_frame_rate")),
+        pixel_aspect_ratio=_parse_aspect_ratio(video.get("sample_aspect_ratio")),
         video_codec=str(video.get("codec_name") or "unknown"),
         pixel_format=video.get("pix_fmt"),
         has_audio=audio is not None,
         audio_codec=(str(audio.get("codec_name") or "unknown") if audio else None),
-        audio_channels=(int(audio["channels"]) if audio and audio.get("channels") is not None else None),
+        audio_channels=audio_channels,
+        audio_sample_rate=audio_sample_rate,
         rotation_degrees=rotation,
     )
 
