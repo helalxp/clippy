@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -420,3 +421,40 @@ def test_analyze_reference_video_can_be_cancelled_before_probe(tmp_path, monkeyp
         )
 
     assert called == []
+
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="real-media integration requires FFmpeg and FFprobe",
+)
+def test_real_ffmpeg_reference_analysis_pipeline(tmp_path):
+    source = tmp_path / "two-scene-reference.mp4"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=red:s=320x240:r=24:d=1",
+        "-f", "lavfi", "-i", "color=c=blue:s=320x240:r=24:d=1",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        str(source),
+    ]
+    built = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert built.returncode == 0, built.stderr
+
+    result = analysis_module.analyze_reference_video(
+        source,
+        tmp_path / "evidence",
+        max_samples=4,
+        scene_threshold=0.2,
+    )
+
+    assert result.status == "complete"
+    assert result.probe.duration_seconds == pytest.approx(2.0, abs=0.15)
+    assert result.probe.width == 320
+    assert result.probe.height == 240
+    assert result.samples
+    assert len(result.visual_measurements) == len(result.samples)
+    assert result.coverage["visual_measurements"] == 1.0
+    analysis, assets = result.to_template_parts()
+    assert analysis.status == "complete"
+    assert len(assets) == len(result.samples)
