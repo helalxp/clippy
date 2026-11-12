@@ -13,6 +13,7 @@ from template_system.models import TemplateAsset, TemplateDocument
 from template_system.storage import (
     LocalTemplateStorage,
     TemplateAlreadyExists,
+    TemplateAssetInUse,
     TemplateIntegrityError,
     TemplateNotFound,
     TemplateRevisionConflict,
@@ -326,3 +327,73 @@ def test_cross_process_revision_updates_use_file_lock(tmp_path):
     assert outcomes.count("saved") == 1
     assert outcomes.count("conflict") == 1
     assert storage.get(original.id).revision == 2
+
+
+def test_add_and_remove_asset_uses_revision_checks_and_preserves_manifest(
+    tmp_path,
+):
+    storage = LocalTemplateStorage(tmp_path / "library")
+    document = make_document()
+    storage.create(document)
+
+    payload = b"new-template-image-bytes"
+    asset = make_asset(payload, path="assets/asset_logo.png", asset_id="asset_logo")
+    updated = storage.add_asset(
+        document.id,
+        asset,
+        payload,
+        expected_revision=1,
+    )
+    assert updated.revision == 2
+    assert storage.get(document.id).assets == [asset]
+    stored_path = tmp_path / "library" / document.id / asset.path
+    assert stored_path.read_bytes() == payload
+
+    with pytest.raises(TemplateRevisionConflict):
+        storage.add_asset(document.id, asset, payload, expected_revision=1)
+
+    with pytest.raises(TemplateRevisionConflict):
+        storage.remove_asset(document.id, asset.id, expected_revision=1)
+    assert stored_path.is_file()
+
+    removed = storage.remove_asset(document.id, asset.id, expected_revision=2)
+    assert removed.revision == 3
+    assert removed.assets == []
+    assert not stored_path.exists()
+    assert storage.get(document.id).assets == []
+
+
+def test_remove_asset_refuses_to_delete_an_asset_still_referenced_by_recipe(
+    tmp_path,
+):
+    from datetime import datetime, timezone
+
+    from template_system.models import TemplateDocument
+
+    storage = LocalTemplateStorage(tmp_path / "library")
+    document = make_document()
+    storage.create(document)
+    payload = b"referenced-image"
+    asset = make_asset(payload, path="assets/referenced.png", asset_id="asset_ref")
+    added = storage.add_asset(document.id, asset, payload, expected_revision=1)
+
+    data = added.model_dump(mode="python", by_alias=True)
+    data["revision"] = 3
+    data["updated_at"] = datetime.now(timezone.utc)
+    data["recipe"] = {
+        "overlays": [
+            {
+                "id": "brand-mark",
+                "kind": "image",
+                "asset_id": asset.id,
+            }
+        ]
+    }
+    referenced = TemplateDocument.model_validate(data)
+    storage.update(referenced, expected_revision=2)
+
+    with pytest.raises(TemplateAssetInUse):
+        storage.remove_asset(document.id, asset.id, expected_revision=3)
+
+    assert storage.get(document.id).assets == [asset]
+    assert (tmp_path / "library" / document.id / asset.path).read_bytes() == payload
