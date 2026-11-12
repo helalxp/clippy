@@ -57,8 +57,9 @@ def _leaf_paths(value: Mapping[str, Any], prefix: str = "") -> set[str]:
     paths: set[str] = set()
     for key, child in value.items():
         path = f"{prefix}.{key}" if prefix else str(key)
-        if isinstance(child, Mapping) and child:
-            paths.update(_leaf_paths(child, path))
+        if isinstance(child, Mapping):
+            if child:
+                paths.update(_leaf_paths(child, path))
         else:
             paths.add(path)
     return paths
