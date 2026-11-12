@@ -254,7 +254,7 @@ class LocalTemplateStorage:
 
     def list(self) -> list[TemplateDocument]:
         documents: list[TemplateDocument] = []
-        with self._root_lock:
+        with self._root_lock, self._synchronized("_library"):
             entries = sorted(self.root.iterdir(), key=lambda item: item.name.casefold())
             for entry in entries:
                 if not _TEMPLATE_ID.fullmatch(entry.name):
