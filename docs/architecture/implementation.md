@@ -2,7 +2,7 @@
 
 **Repository:** `helalxp/clippy`  
 **Branch:** `feature/template-reference-system`  
-**Status:** Phase 1 contract foundation verified; Phase 2 local persistence implemented in source, awaiting execution of its new test module.  
+**Status:** Phases 1 and 2 implemented and focused-test verified; Stage 3 deterministic reference analysis is next.  
 **Last verified update:** 2026-11-12
 
 This file is the execution-level source of truth. Product intent and architecture rationale live in [TEMPLATE_REFERENCE_SYSTEM_SPEC.md](./TEMPLATE_REFERENCE_SYSTEM_SPEC.md); milestone gates live in [stages.md](./stages.md).
@@ -29,7 +29,7 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 ### Not yet implemented
 
-- [~] Local template storage, atomic writes, per-template thread and OS-backed file locks, revision compare-and-swap, and asset integrity verification implemented; storage tests are committed but not yet executed.
+- [x] Local template storage, atomic writes, per-template thread and OS-backed file locks, revision compare-and-swap, and asset integrity verification implemented and focused-test verified.
 - [ ] Migration of the legacy v1 reference-template manifest.
 - [ ] Reference-video ingest, media probing, temporal sampling, evidence capture, and staged analysis jobs.
 - [ ] Deterministic visual measurements and optional structured vision interpretation.
@@ -85,7 +85,11 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 
 The Python 3.12 installer/runtime issue is tracked separately and is not a blocker for continuing repository implementation.
 
-## 6. Active work: Phase 2 local persistence
+## 6. Completed: Phase 2 local persistence
+
+**Verification (2026-11-12):** GitHub Actions focused job passed for `tests/test_template_system_contracts.py` and `tests/test_template_system_storage.py` on commit `ee6a46f302cfecac935c400ab3697425f5e9f9ed`. The suite contains 18 contract tests and 18 storage tests. The focused job is green. The separate full backend job is red; its exact failures have not yet been extracted from the run log, and the audit already records two pre-existing main-branch failures. The frontend build job passed.
+
+
 
 **Implementation update (2026-11-12):** `template_system/storage.py` now provides local-only create/get/list/update/delete operations, canonical manifest serialization, atomic replacement, per-template in-process locks, optimistic revision checks, and asset size/SHA-256 verification. `tests/test_template_system_storage.py` adds coverage for CRUD, malformed manifests, asset corruption, path/symlink escape, failed writes, and concurrent operations. These tests are committed but not yet verified. Stage 2 remains open until they execute successfully and edge cases are reviewed.
 
