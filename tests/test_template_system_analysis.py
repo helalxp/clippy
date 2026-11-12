@@ -297,6 +297,7 @@ def test_analyze_reference_video_returns_evidence_and_coverage(tmp_path, monkeyp
         "media_probe": 1.0,
         "scene_detection": 1.0,
         "frame_sampling": 1.0,
+        "visual_measurements": 1.0,
     }
     assert [sample.relative_path for sample in result.samples] == [
         "frame_001_0000002500ms.png",
@@ -386,3 +387,7 @@ def test_analysis_result_builds_valid_template_evidence_and_assets():
     frame_evidence = next(item for item in document.analysis.evidence if item.asset_id)
     assert frame_evidence.asset_id == document.assets[0].id
     assert frame_evidence.source_timestamp_ms == 2500
+    assert any(
+        item.property_path == "reference.color_palette"
+        for item in document.analysis.evidence
+    )
