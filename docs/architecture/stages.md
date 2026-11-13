@@ -193,6 +193,7 @@ Remaining:
 - [x] Implement template-driven hook/title rendering as a separate capability, with exact compatibility reporting and real FFmpeg timing/placement tests.
 - [x] Implement image/watermark overlays with preserved aspect ratio, normalized center anchors, opacity, rotation, and deterministic back-to-front order.
 - [ ] Add text overlays only after the canonical contract includes font, size, color, background, and line-layout properties.
+- [x] Implement deterministic punch-in, slow-zoom, and pan motion plus time-bounded brightness/contrast/saturation with real FFmpeg fixtures and capability rejection for unsupported values.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
 - [ ] Prove repeated template application is deterministic and never stacks burned-in derivatives.
 - [x] Run the full backend suite green: 1,371 passed, 63 skipped.
@@ -392,11 +393,12 @@ Implemented in this update:
 - The application service resolves image assets from the template's own asset store. Missing, symbolic-link, non-image, or unsupported-extension assets fail safely.
 - Text overlays remain explicitly unsupported because the current recipe has no font, size, color, backing, or line-layout fields.
 
-Motion/effect implementation added after the image-overlay milestone; CI validation is pending:
+Motion/effect implementation added after the image-overlay milestone and verified in CI:
 - Added frame-timed `punch_in`, `slow_zoom`, and `pan` recipes. Punch-in ramps over the first 20% of its interval and holds; slow zoom ramps linearly; pan moves from center to a normalized target while zoomed.
 - Added time-bounded brightness, contrast, and saturation effects using FFmpeg EQ.
 - Motion and effects are applied before image overlays, captions, and hook/title layers. Recipe timeline values are translated to output-frame indices using the configured FPS.
 - Capability checks reject unsupported effect zoom/crop-center values and EQ values outside the exact FFmpeg range. Motion/effect intervals starting after the clip ends fail clearly.
 - Added preflight and real-render regression tests for timed motion, timed brightness, and unsupported effect values.
+- GitHub Actions run [43427264281](https://github.com/helalxp/clippy/actions/runs/43427264281) passed: **166 focused template tests**, **1,371 backend tests with 67 skipped**, and frontend production build.
 
-Remaining in Stage 5: text-overlay schema/rendering, subject tracking, transitions, render-provenance hardening, deterministic repeated-application checks, and CI verification of this motion/effect slice. Stage 6 Remotion preview/final parity remains a separate release gate.
+Remaining in Stage 5: text-overlay schema/rendering, subject tracking, transitions, render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
