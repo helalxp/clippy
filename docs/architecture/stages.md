@@ -162,7 +162,7 @@ Implemented:
 - Atomic temporary-output replacement. Failed renders do not replace an existing output.
 - Progress callbacks, cancellation before and during render, bounded runtime, and temporary-file cleanup.
 - Refusal of source/output path aliases, including hard links, so a render cannot overwrite its clean source.
-- Capability preflight rejects unsupported captions, hooks, overlays, effects, motion, transitions, subject tracking, subtitle/other stream types, and conflicting crop/background combinations.
+- Capability preflight supports canonical captions and hooks/titles; it rejects unsupported overlays, effects, motion, transitions, subject tracking, subtitle/other stream types, and conflicting crop/background combinations.
 - `TemplateApplicationService` loads a persisted template, resolves job/clip overrides and explicit locks, applies the FFmpeg adapter, and returns template revision, resolved recipe, recipe hash, source/output fingerprints, compatibility, adaptation decisions, and lock provenance.
 - `POST /api/template/apply` is connected to local/self-hosted Clippy jobs. It checks job ownership, serializes against rerender/reframe, renders from the clean canonical clip rather than the currently served derivative, atomically replaces metadata, updates in-memory job state, and archives the new delivery.
 - Template manifests and assets use a dedicated `TEMPLATE_LIBRARY_DIR`, explicitly rejected if configured inside `OUTPUT_DIR`, so job cleanup and archival cannot erase the library. Managed/cloud template application is deliberately blocked until durable per-user storage, tenant isolation, backup, and deletion semantics are implemented.
@@ -190,7 +190,7 @@ Remaining:
 - [ ] Confirm concurrency tests and full backend CI are green.
 - [x] Failure-injection test verifies metadata replacement failure preserves the last valid manifest/render and removes only the uncommitted output.
 - [x] Canonical caption styling is translated through the existing ASS subtitle generator, including transcript remapping for recut clips and optional uploaded font assets.
-- [ ] Implement template-driven hook/title rendering as a separate capability.
+- [x] Implement template-driven hook/title rendering as a separate capability, with exact compatibility reporting and real FFmpeg timing/placement tests.
 - [ ] Implement overlays only after asset sizing, alpha, and normalized-position semantics are validated.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
 - [ ] Prove repeated template application is deterministic and never stacks burned-in derivatives.
@@ -289,7 +289,7 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** connect canonical caption styling to the existing subtitle pipeline as a separately tested adapter capability, then implement hook/title rendering. Preserve explicit compatibility reporting and real rendered-output tests. Keep live Gemini validation opt-in. Latest CI run `43310755521` passed: 123 focused template/API/edit-lock tests, 1,331 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+**Immediate next action:** implement generic image/text overlays with validated asset sizing, alpha, and normalized-position semantics. Canonical captions and hook/title rendering are now implemented in the Python/FFmpeg adapter with real-render tests and explicit compatibility reporting. Keep live Gemini validation opt-in. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: overlays, tracking, motion/effects, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -311,12 +311,12 @@ The background, watermark, effects-generation, subtitle-add, subtitle-remove, ho
 
 1. Run focused locking and template tests in CI, then run the full backend suite and record any baseline or newly introduced failures accurately.
 2. Audit remaining lifecycle interactions, especially project restore versus active edit operations, and add a shared lock only if the ownership and concurrency model supports it.
-3. Implement caption styling and template-driven hook/title rendering as separate adapter capabilities with real FFmpeg fixtures, preflight rejection, and deterministic output tests.
-4. Add safe template asset upload/import APIs so templates can reference uploaded fonts, logos, and other assets.
+3. Implement generic overlays and then measurable motion/effect capabilities with real FFmpeg fixtures, preflight reporting, and deterministic output tests.
+4. Reconcile the existing asset lifecycle with overlay rendering, including alpha, sizing, and safe placement.
 5. Reconcile browser-preview and final-render Remotion contracts before claiming preview/render parity.
 6. Continue with editor UI, migration/import/export, lifecycle/security review, and release gates.
 
-The branch is not release-ready. Managed/cloud template application remains blocked, asset upload/import and the library/editor UI are not implemented, and CI for the latest local CRUD API commits is pending.
+The branch is not release-ready. Managed/cloud template application remains blocked, the library/editor UI and full preview/final parity are not implemented, and overlays, tracking, motion/effects, and release lifecycle checks remain outstanding.
 
 
 ## CI reliability review — 2026-11-12
@@ -357,12 +357,12 @@ Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit
 Implemented on feature/template-reference-system-clean:
 
 - The template asset upload endpoint now accepts TrueType and OpenType SFNT fonts in addition to PNG/JPEG/WebP images. Font uploads are bounded to 25 MB and validated for supported signatures, table-directory bounds, duplicate tags, overlapping tables, required metadata tables, and supported outline tables.
-- Font asset metadata, opaque storage paths, SHA-256 integrity, revision conflict protection, retrieval, and reference-safe deletion use the existing asset lifecycle. Renderer-side font loading is not implemented yet.
+- Font asset metadata, opaque storage paths, SHA-256 integrity, revision conflict protection, retrieval, and reference-safe deletion use the existing asset lifecycle. Caption and hook adapters resolve and stage referenced font assets for FFmpeg.
 - Added versioned .clippy-template ZIP export/import. Packages carry the canonical template document and its assets. Import validates safe paths, archive entry types, compression, sizes, package version, exact asset inventory, decoded image/font structure, and checksums. Imported templates receive a new local ID and revision 1.
 - Added owner-scoped export and import API endpoints.
 - GitHub Actions run 43420728540 passed: 149 focused template tests, 1,371 backend tests passed with 50 skipped, and frontend production build passed.
 
-Next vertical slice: implement caption styling in the Python/FFmpeg adapter using canonical font references and normalized style properties, then add hook/title rendering as a separate capability. Keep preview/Remotion parity as a later explicit gate.
+Next vertical slice: implement generic image/text overlays with explicit alpha, sizing, asset resolution, and normalized placement. Keep preview/Remotion parity as a later explicit gate.
 
 
 ## Latest update — template-driven captions (2026-11-13)
