@@ -8,5 +8,8 @@ export const getApiUrl = (path) => {
     if (path.startsWith('http')) return path;
     // Ensure path starts with / if not present
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    return `${API_BASE_URL}${normalizedPath}`;
+    const runtimeBase = typeof window !== 'undefined' && window.__CLIPPY_API_BASE_URL__
+        ? window.__CLIPPY_API_BASE_URL__
+        : API_BASE_URL;
+    return `${runtimeBase}${normalizedPath}`;
 };
