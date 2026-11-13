@@ -109,7 +109,7 @@ foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1")) {
 }
 
 $RequirementsHash = (Get-FileHash (Join-Path $App "requirements.txt") -Algorithm SHA256).Hash.ToLowerInvariant()
-$ExpectedState = "python=$PythonVersion;node=$NodeVersion;ffmpeg=gyan-release-essentials;requirements=$RequirementsHash"
+$ExpectedState = "python=$PythonVersion;pythonVariant=$TorchVariant;node=$NodeVersion;ffmpeg=gyan-release-essentials;requirements=$RequirementsHash"
 if (Test-Path $ManifestPath) {
     try {
         $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
@@ -193,56 +193,81 @@ if (-not $VcRuntimeInstalled) {
     }
 }
 
-# Use the official CPython embeddable distribution instead of the EXE bootstrapper.
-# The EXE bootstrapper is a machine-registered Burn bundle: if any prior Python
-# 3.12 installation registered CPython-3.12, it can enter repair mode, return 0,
-# and silently ignore Clippy's TargetDir. The embeddable ZIP has no machine-wide
-# installer state and is designed to be shipped inside another application.
-$PythonExe = Join-Path $PythonDir "python.exe"
-if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    $PythonArchive = Join-Path $Downloads $PythonArchiveName
-    Download-File $PythonArchiveUrl $PythonArchive
-    Assert-Sha256 $PythonArchive $PythonArchiveSha256
+# Select a prebuilt, tested Python runtime. Customer machines never run pip.
+$AppVersion = (Get-Content -LiteralPath (Join-Path $App "VERSION") -Raw).Trim()
+if ($AppVersion -notmatch "^\d+\.\d+\.\d+$") { throw "Application VERSION file is missing or invalid." }
 
-    if (Test-Path $PythonDir) {
-        Remove-Item -LiteralPath $PythonDir -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path $PythonDir -Force | Out-Null
-    Write-Stage "Extracting isolated CPython $PythonVersion embeddable runtime..."
-    Expand-Archive -LiteralPath $PythonArchive -DestinationPath $PythonDir -Force
-
-    # The embeddable package intentionally disables site initialization and
-    # omits pip. Enable only Clippy-local library/package paths, then bootstrap
-    # pip into this private runtime. No global Python registry or PATH changes.
-    $PythonPth = Join-Path $PythonDir "python312._pth"
-    if (-not (Test-Path -LiteralPath $PythonPth -PathType Leaf)) {
-        throw "Official Python embeddable archive is missing python312._pth."
-    }
-    $PthEntries = @("python312.zip", ".", "Lib", "Lib\site-packages", "import site")
-    [System.IO.File]::WriteAllLines($PythonPth, $PthEntries, [System.Text.Encoding]::ASCII)
-    $PythonSitePackages = Join-Path $PythonDir "Lib\site-packages"
-    New-Item -ItemType Directory -Path $PythonSitePackages -Force | Out-Null
-
-    $PipBootstrap = Join-Path $Downloads "get-pip.py"
-    Download-File $PipBootstrapUrl $PipBootstrap
-    Write-Stage "Bootstrapping pip into Clippy's private Python runtime..."
-    & $PythonExe $PipBootstrap --disable-pip-version-check --no-warn-script-location
-    if ($LASTEXITCODE -ne 0) {
-        throw "pip bootstrap failed for the private Python runtime. See $PipBootstrap"
+$TorchVariant = "cpu"
+$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($Nvidia) {
+    & $Nvidia.Source *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $TorchVariant = "cuda"
+        Write-Stage "NVIDIA driver detected; selecting the prebuilt CUDA 12.6 Python runtime."
     }
 }
-if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    throw "Managed Python executable is missing: $PythonExe"
+$PythonRuntimeName = "clippy-python-$TorchVariant.zip"
+$PythonRuntimeUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeName"
+$PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
+$PythonRuntimeChecksum = "$PythonRuntimeArchive.sha256"
+
+$PythonRuntimeVerified = $false
+for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
+    if ($Attempt -eq 2) {
+        Write-Stage "Cached Python runtime failed verification; downloading a fresh copy."
+        Remove-Item -LiteralPath $PythonRuntimeArchive, $PythonRuntimeChecksum -Force -ErrorAction SilentlyContinue
+    }
+    Download-File $PythonRuntimeUrl $PythonRuntimeArchive
+    Download-File "$PythonRuntimeUrl.sha256" $PythonRuntimeChecksum
+    $ChecksumText = Get-Content -LiteralPath $PythonRuntimeChecksum -Raw
+    if ($ChecksumText -notmatch "(?i)\b([a-f0-9]{64})\b") {
+        if ($Attempt -eq 2) { throw "Python runtime checksum asset is invalid." }
+        continue
+    }
+    try {
+        Assert-Sha256 $PythonRuntimeArchive $Matches[1]
+        $PythonRuntimeVerified = $true
+        break
+    } catch {
+        if ($Attempt -eq 2) { throw }
+    }
 }
-$PythonVersionOutput = (& $PythonExe --version 2>&1 | Out-String).Trim()
-$PythonVersionExitCode = $LASTEXITCODE
-Write-Stage ("Managed Python version check: " + $PythonVersionOutput)
-if ($PythonVersionExitCode -ne 0 -or $PythonVersionOutput -notmatch ("^Python\s+" + [regex]::Escape($PythonVersion) + "$")) {
-    throw "Managed Python version check failed. Expected Python $PythonVersion, got '$PythonVersionOutput' (exit code $PythonVersionExitCode)."
+if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python runtime." }
+
+$PythonStage = Join-Path $ScratchRoot "python-runtime-staging"
+$PythonBackup = Join-Path $Runtime "python.previous"
+if (Test-Path $PythonStage) { Remove-Item $PythonStage -Recurse -Force }
+if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
+Write-Stage "Extracting the verified $TorchVariant Python runtime..."
+Expand-Archive -LiteralPath $PythonRuntimeArchive -DestinationPath $PythonStage -Force
+$StagedPython = Join-Path $PythonStage "python.exe"
+if (-not (Test-Path -LiteralPath $StagedPython -PathType Leaf)) {
+    throw "Verified Python runtime archive does not contain python.exe at its root."
 }
-& $PythonExe -m pip --version
-if ($LASTEXITCODE -ne 0) {
-    throw "pip is not available in Clippy's private Python runtime."
+$StagedVersion = (& $StagedPython --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $StagedVersion -ne "Python $PythonVersion") {
+    throw "Packaged Python version check failed: $StagedVersion"
+}
+$StagedImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper; print('torch=' + torch.__version__); print('cuda_build=' + str(torch.version.cuda))"
+& $StagedPython -c $StagedImportCheck
+if ($LASTEXITCODE -ne 0) { throw "Packaged Python dependency verification failed." }
+if ($TorchVariant -eq "cuda") {
+    & $StagedPython -c "import torch; assert torch.version.cuda is not None, 'CUDA-enabled PyTorch is missing'"
+    if ($LASTEXITCODE -ne 0) { throw "Selected CUDA runtime does not contain CUDA-enabled PyTorch." }
+}
+
+# Activate only after archive hash, Python version, and critical imports pass.
+if (Test-Path $PythonDir) { Move-Item -LiteralPath $PythonDir -Destination $PythonBackup }
+try {
+    Move-Item -LiteralPath $PythonStage -Destination $PythonDir
+    $PythonExe = Join-Path $PythonDir "python.exe"
+    & $PythonExe -c "import torch, fastapi, faster_whisper; print(torch.__version__)"
+    if ($LASTEXITCODE -ne 0) { throw "Activated Python runtime failed its health check." }
+    if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
+} catch {
+    if (Test-Path $PythonDir) { Remove-Item $PythonDir -Recurse -Force }
+    if (Test-Path $PythonBackup) { Move-Item -LiteralPath $PythonBackup -Destination $PythonDir }
+    throw
 }
 
 # Node's archive is checked against the SHA-256 value published alongside the
@@ -320,36 +345,6 @@ if (-not (Test-Path $FfmpegExe)) {
 & $FfmpegExe -version
 if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg runtime failed its version check." }
 
-# Install the CUDA-enabled PyTorch wheel when an NVIDIA driver is present;
-# otherwise install the official CPU wheel. Other pinned application packages
-# are installed from requirements.txt without replacing that selected wheel.
-$TorchIndex = "https://download.pytorch.org/whl/cpu"
-$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-if ($Nvidia) {
-    & nvidia-smi
-    if ($LASTEXITCODE -eq 0) {
-        $TorchIndex = "https://download.pytorch.org/whl/cu126"
-        Write-Stage "NVIDIA GPU detected; selecting the CUDA 12.6 PyTorch wheels."
-    }
-}
-Write-Stage "Installing pinned PyTorch and application Python dependencies. This can take several minutes."
-& $PythonExe -m pip install --disable-pip-version-check --no-cache-dir --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "Could not prepare pip in the managed Python runtime." }
-& $PythonExe -m pip install --disable-pip-version-check --no-cache-dir "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
-if ($LASTEXITCODE -ne 0 -and $TorchIndex -match "cu126") {
-    Write-Stage "CUDA wheel installation failed; falling back to the official CPU PyTorch wheels."
-    $TorchIndex = "https://download.pytorch.org/whl/cpu"
-    & $PythonExe -m pip install --disable-pip-version-check --no-cache-dir "torch==2.11.0" "torchvision==0.26.0" --index-url $TorchIndex
-}
-if ($LASTEXITCODE -ne 0) { throw "PyTorch installation failed from $TorchIndex." }
-
-$FilteredRequirements = Join-Path $Downloads "requirements-runtime.txt"
-Get-Content (Join-Path $App "requirements.txt") |
-    Where-Object { $_ -notmatch "^\s*(torch|torchvision)\s*==" } |
-    Set-Content -Path $FilteredRequirements -Encoding ASCII
-& $PythonExe -m pip install --disable-pip-version-check --no-cache-dir -r $FilteredRequirements
-if ($LASTEXITCODE -ne 0) { throw "Application Python dependency installation failed." }
-
 Write-Stage "Verifying backend imports..."
 Push-Location $App
 try {
@@ -385,7 +380,7 @@ $Manifest = @{
     state = $ExpectedState
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
     requirementsSha256 = $RequirementsHash
-    gpuMode = if ($TorchIndex -match "cu126") { "cuda126" } else { "cpu" }
+    gpuMode = if ($TorchVariant -eq "cuda") { "cuda126" } else { "cpu" }
 }
 $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
 # Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
