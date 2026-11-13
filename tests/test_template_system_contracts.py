@@ -52,6 +52,55 @@ def test_overlay_asset_reference_must_resolve():
         })
 
 
+def test_text_overlay_contract_requires_explicit_line_break_budget():
+    with pytest.raises(ValidationError, match="max_lines"):
+        TemplateRecipe.model_validate({
+            "overlays": [{
+                "id": "two-lines",
+                "kind": "text",
+                "text": "first\\nsecond",
+                "max_lines": 1,
+            }],
+        })
+
+
+def test_text_overlay_box_must_fit_inside_canvas():
+    with pytest.raises(ValidationError, match="outside the canvas"):
+        TemplateRecipe.model_validate({
+            "overlays": [{
+                "id": "edge-copy",
+                "kind": "text",
+                "text": "brand",
+                "text_anchor_x": 0.95,
+            }],
+        })
+
+
+def test_text_overlay_font_asset_must_be_a_font():
+    with pytest.raises(ValidationError, match="font reference"):
+        TemplateDocument.model_validate({
+            "id": "tpl_12345678",
+            "name": "Wrong text font",
+            "assets": [{
+                "id": "logo",
+                "path": "assets/logo.png",
+                "media_type": "image/png",
+                "size_bytes": 100,
+                "sha256": "c" * 64,
+                "width": 10,
+                "height": 10,
+            }],
+            "recipe": {
+                "overlays": [{
+                    "id": "title",
+                    "kind": "text",
+                    "text": "Hello",
+                    "font_asset_id": "logo",
+                }],
+            },
+        })
+
+
 def test_asset_paths_cannot_escape_template_directory():
     with pytest.raises(ValidationError):
         TemplateDocument.model_validate({
