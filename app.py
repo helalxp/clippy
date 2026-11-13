@@ -5083,6 +5083,43 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
         try:
             storage = LocalTemplateStorage(template_root)
             service = TemplateApplicationService(storage)
+            template_document = await asyncio.to_thread(storage.get, req.template_id)
+            caption_transcript = None
+            caption_split_ranges = None
+            clip_data = clips[req.clip_index]
+            if template_document.recipe.captions.enabled:
+                source_transcript = metadata.get("transcript")
+                if not isinstance(source_transcript, dict):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This template enables captions, but the source job has no saved transcript.",
+                    )
+                recipe_segments = (clip_data.get("recipe") or {}).get("segments")
+                if not recipe_segments:
+                    clip_start = float(clip_data.get("start", 0) or 0)
+                    clip_end = float(clip_data.get("end", 0) or 0)
+                    if clip_end <= clip_start:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="This clip has no valid transcript time range for template captions.",
+                        )
+                    recipe_segments = [{"start": clip_start, "end": clip_end}]
+
+                edited_caption_words = clip_data.get("caption_words")
+                if edited_caption_words:
+                    caption_transcript = _words_transcript(
+                        edited_caption_words,
+                        source_transcript.get("language", "en"),
+                    )
+                else:
+                    caption_transcript = recut.virtual_transcript(
+                        source_transcript,
+                        recipe_segments,
+                    )
+                caption_split_ranges = layout_ranges.split_ranges(
+                    clip_data.get("layout_ranges") or layout_ranges.read(clean_source)
+                )
+
             rendered = await asyncio.to_thread(
                 service.apply,
                 req.template_id,
@@ -5092,6 +5129,8 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
                 clip_overrides=req.clip_overrides,
                 locks=req.locks,
                 allow_approximate=req.allow_approximate,
+                caption_transcript=caption_transcript,
+                caption_split_ranges=caption_split_ranges,
             )
             served_name = await _deliver(request, req.job_id, output_name)
             new_video_url = f"/videos/{req.job_id}/{served_name}"
