@@ -321,14 +321,39 @@ if (Test-Path $ManifestPath) {
             $FfmpegHealthy = ($LASTEXITCODE -eq 0)
             $PythonHealthy = $false
             $NodeHealthy = $false
+            $CudaDllDirectories = @()
+            $CudaDllsHealthy = $true
+            if ($TorchVariant -eq "cuda") {
+                $CudaDllRoot = Join-Path $PythonDir "Lib\site-packages\nvidia"
+                $CudaDllDirectories = @(
+                    (Join-Path $CudaDllRoot "cublas\bin"),
+                    (Join-Path $CudaDllRoot "cudnn\bin"),
+                    (Join-Path $CudaDllRoot "cuda_runtime\bin")
+                )
+                $RequiredCudaDlls = @(
+                    (Join-Path $CudaDllDirectories[0] "cublas64_12.dll"),
+                    (Join-Path $CudaDllDirectories[1] "cudnn64_9.dll"),
+                    (Join-Path $CudaDllDirectories[2] "cudart64_12.dll")
+                )
+                foreach ($dll in $RequiredCudaDlls) {
+                    if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { $CudaDllsHealthy = $false }
+                }
+                if ($CudaDllsHealthy) { $env:PATH = (($CudaDllDirectories -join ";") + ";" + $env:PATH) }
+            }
             Push-Location $App
             try {
                 $env:OUTPUT_DIR = Join-Path $Root "data\output"
                 $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
                 $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
                 $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
-                & $PythonExe -c "import app; import torch; import faster_whisper" *> $null
-                $PythonHealthy = ($PythonVersionHealthy -and $LASTEXITCODE -eq 0)
+                $PythonHealthScript = "import app, torch, faster_whisper"
+                if ($TorchVariant -eq "cuda") {
+                    $PythonHealthScript += "; import ctranslate2; assert torch.version.cuda and torch.version.cuda.startswith('12.8'); assert torch.cuda.is_available(); x=torch.ones((64,64),device='cuda'); y=x @ x; torch.cuda.synchronize(); assert float(y[0,0].item()) == 64.0; assert ctranslate2.get_cuda_device_count() > 0"
+                } else {
+                    $PythonHealthScript += "; assert torch.version.cuda is None"
+                }
+                & $PythonExe -c $PythonHealthScript *> $null
+                $PythonHealthy = ($PythonVersionHealthy -and $CudaDllsHealthy -and $LASTEXITCODE -eq 0)
                 $env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
                 $BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); }).catch(e => { console.error(e); process.exit(1); });"
                 Push-Location (Join-Path $App "render-service")
@@ -584,6 +609,26 @@ if (-not $ExistingFfmpegHealthy) {
 }
 & $FfmpegExe -version
 if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg runtime failed its version check." }
+
+if ($TorchVariant -eq "cuda") {
+    $CudaDllRoot = Join-Path $PythonDir "Lib\site-packages\nvidia"
+    $CudaDllDirectories = @(
+        (Join-Path $CudaDllRoot "cublas\bin"),
+        (Join-Path $CudaDllRoot "cudnn\bin"),
+        (Join-Path $CudaDllRoot "cuda_runtime\bin")
+    )
+    $RequiredCudaDlls = @(
+        (Join-Path $CudaDllDirectories[0] "cublas64_12.dll"),
+        (Join-Path $CudaDllDirectories[1] "cudnn64_9.dll"),
+        (Join-Path $CudaDllDirectories[2] "cudart64_12.dll")
+    )
+    foreach ($dll in $RequiredCudaDlls) {
+        if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+            throw "CUDA runtime is missing a required DLL for PyTorch/CTranslate2: $dll"
+        }
+    }
+    $env:PATH = (($CudaDllDirectories -join ";") + ";" + $env:PATH)
+}
 
 Write-Stage "Verifying backend imports..."
 Push-Location $App
