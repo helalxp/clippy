@@ -192,7 +192,7 @@ Remaining:
 - [x] Canonical caption styling is translated through the existing ASS subtitle generator, including transcript remapping for recut clips and optional uploaded font assets.
 - [x] Implement template-driven hook/title rendering as a separate capability, with exact compatibility reporting and real FFmpeg timing/placement tests.
 - [x] Implement image/watermark overlays with preserved aspect ratio, normalized center anchors, opacity, rotation, and deterministic back-to-front order.
-- [ ] Add text overlays only after the canonical contract includes font, size, color, background, and line-layout properties.
+- [x] Add styled text overlays with explicit line breaks, owner-scoped fonts, typography, outline/backing, opacity, normalized layout boxes, and literal text-file input.
 - [x] Implement deterministic punch-in, slow-zoom, and pan motion plus time-bounded brightness/contrast/saturation with real FFmpeg fixtures and capability rejection for unsupported values.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
 - [ ] Prove repeated template application is deterministic and never stacks burned-in derivatives.
@@ -291,7 +291,7 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** finish CI validation of the Python/FFmpeg motion and color-effect slice, then move to the missing text-overlay contract. Image/watermark overlays, canonical captions, hook/title rendering, frame-timed punch-in/slow-zoom/pan, and time-bounded brightness/contrast/saturation are implemented in the Python adapter. Keep live Gemini validation opt-in. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: text overlays, tracking, transitions, and Remotion parity remain unfinished.
+**Immediate next action:** finish CI validation of styled text overlays, then move to measurable subject tracking and transitions. Image/watermark overlays, styled text overlays, canonical captions, hook/title rendering, frame-timed punch-in/slow-zoom/pan, and time-bounded brightness/contrast/saturation are implemented in the Python adapter. Keep live Gemini validation opt-in. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: tracking, transitions, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -401,4 +401,14 @@ Motion/effect implementation added after the image-overlay milestone and verifie
 - Added preflight and real-render regression tests for timed motion, timed brightness, and unsupported effect values.
 - GitHub Actions run [43427264281](https://github.com/helalxp/clippy/actions/runs/43427264281) passed: **166 focused template tests**, **1,371 backend tests with 67 skipped**, and frontend production build.
 
-Remaining in Stage 5: text-overlay schema/rendering, subject tracking, transitions, render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
+Remaining in Stage 5: subject tracking, transitions, render-provenance hardening, deterministic repeated-application checks, and CI verification of the styled text-overlay slice. Stage 6 Remotion preview/final parity remains a separate release gate.
+
+
+## Latest Stage 5 update: styled text overlays
+
+Implemented, with CI validation pending:
+- Extended the canonical overlay schema for font family or uploaded font, font size, font/outline colors, outline width, optional backing, opacity, explicit line count, line spacing, alignment, and normalized text-box dimensions/center anchors.
+- Text and image/watermark layers now composite in the same recipe order. Captions and hook/title remain above the overlay stack.
+- User text is staged in UTF-8 files and passed to FFmpeg drawtext with expansion disabled. Uploaded overlay fonts are resolved from owner-scoped storage and protected from deletion while referenced.
+- Explicit line breaks and max_lines are enforced. Text rotation is rejected. A conservative width estimate marks long lines approximate rather than silently shrinking or wrapping them.
+- Added schema, asset-lifecycle, service, text-injection, and real-render tests.
