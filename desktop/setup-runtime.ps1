@@ -31,10 +31,25 @@ $SetupLogPath = Join-Path $LogDir "runtime-setup.log"
 
 $PythonVersion = "3.12.10"
 $TorchVariant = "cpu"
+$NvidiaDriverVersion = $null
+$NvidiaGpuName = $null
 $Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($Nvidia) {
-    & $Nvidia.Source *> $null
-    if ($LASTEXITCODE -eq 0) { $TorchVariant = "cuda" }
+    $NvidiaInfo = & $Nvidia.Source --query-gpu=name,driver_version --format=csv,noheader 2>$null
+    if ($LASTEXITCODE -eq 0 -and $NvidiaInfo) {
+        $NvidiaFields = ([string]$NvidiaInfo[0]).Split(',')
+        if ($NvidiaFields.Count -ge 2) {
+            $NvidiaGpuName = $NvidiaFields[0].Trim()
+            $DriverText = $NvidiaFields[1].Trim()
+            try { $NvidiaDriverVersion = [Version]$DriverText } catch { $NvidiaDriverVersion = $null }
+            # PyTorch 2.11's cu128 runtime supports modern NVIDIA architectures,
+            # including Blackwell. CUDA 12.8 GA requires Windows driver 570.65.
+            # Do not select CUDA solely because nvidia-smi happens to launch.
+            if ($NvidiaDriverVersion -and $NvidiaDriverVersion -ge [Version]"570.65") {
+                $TorchVariant = "cuda"
+            }
+        }
+    }
 }
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
@@ -67,6 +82,12 @@ trap {
 
 Write-Stage "Runtime setup engine started."
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
+if ($NvidiaGpuName) {
+    Write-Stage ("Detected NVIDIA GPU: " + $NvidiaGpuName + "; driver " + $NvidiaDriverVersion)
+    if ($TorchVariant -eq "cpu") {
+        Write-Stage "NVIDIA driver is older than 570.65 or could not be parsed; using the CPU runtime instead of installing an incompatible CUDA build."
+    }
+}
 
 function Download-File([string]$Url, [string]$Destination) {
     if (Test-Path -LiteralPath $Destination -PathType Leaf) {
@@ -490,7 +511,7 @@ $Manifest = @{
     state = $ExpectedState
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
     requirementsSha256 = $RequirementsHash
-    gpuMode = if ($TorchVariant -eq "cuda") { "cuda126" } else { "cpu" }
+    gpuMode = if ($TorchVariant -eq "cuda") { "cuda128" } else { "cpu" }
 }
 $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
 # Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
