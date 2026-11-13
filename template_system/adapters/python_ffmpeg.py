@@ -15,11 +15,11 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from ..analysis import ReferenceAnalysisError, _local_video_path, probe_media
 from ..capabilities import CompatibilityReport, check_compatibility
-from ..models import TemplateRecipe
+from ..models import OverlayRecipe, TemplateRecipe
 
 
 class RenderAdapterError(RuntimeError):
@@ -81,6 +81,7 @@ class PythonFFmpegAdapter:
         ass_path: str | Path | None = None,
         fonts_dir: str | Path | None = None,
         hook_filter: str | None = None,
+        overlay_inputs: list[tuple[OverlayRecipe, int]] | None = None,
     ) -> str:
         width, height = recipe.canvas.width, recipe.canvas.height
         caption_filter = ""
@@ -93,6 +94,7 @@ class PythonFFmpegAdapter:
             if "'" in str(ass_path) or "'" in str(fonts_dir):
                 raise RenderAdapterError("caption paths cannot contain apostrophes")
             caption_filter = f",ass=filename='{ass_value}':fontsdir='{fonts_value}'"
+
         fps = f"{recipe.canvas.fps:.6f}".rstrip("0").rstrip(".")
         mode = recipe.framing.mode
         background = recipe.background.mode
@@ -102,30 +104,59 @@ class PythonFFmpegAdapter:
         if mode in {"cover", "manual"}:
             x = f"(iw-ow)*{recipe.framing.anchor_x:.6f}"
             y = f"(ih-oh)*{recipe.framing.anchor_y:.6f}"
-            return (
+            base_graph = (
                 f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={width}:{height}:x='{x}':y='{y}',"
-                f"fps={fps},setsar=1,format=yuv420p{caption_filter}{hook_filter or ''}[v]"
+                f"fps={fps},setsar=1,format=yuv420p[base0]"
             )
-
-        if background == "blur":
+        elif background == "blur":
             radius = max(1, min(50, round(min(width, height) * recipe.background.blur_radius_ratio)))
-            return (
+            base_graph = (
                 f"[0:v]split=2[bgsrc][fgsrc];"
                 f"[bgsrc]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={width}:{height},boxblur=luma_radius={radius}:luma_power=2[bg];"
                 f"[fgsrc]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2,"
-                f"fps={fps},setsar=1,format=yuv420p{caption_filter}{hook_filter or ''}[v]"
+                f"fps={fps},setsar=1,format=yuv420p[base0]"
+            )
+        else:
+            pad_color = recipe.background.color if background == "solid" else "#000000"
+            pad_color = "0x" + pad_color.lstrip("#")
+            base_graph = (
+                f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={pad_color},"
+                f"fps={fps},setsar=1,format=yuv420p[base0]"
             )
 
-        pad_color = recipe.background.color if background == "solid" else "#000000"
-        pad_color = "0x" + pad_color.lstrip("#")
-        return (
-            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={pad_color},"
-            f"fps={fps},setsar=1,format=yuv420p{caption_filter}{hook_filter or ''}[v]"
-        )
+        filters = [base_graph]
+        current_label = "base0"
+        for index, (overlay, input_index) in enumerate(overlay_inputs or []):
+            if overlay.kind == "text":
+                raise RenderAdapterError("text overlays are not supported by the first overlay adapter")
+            overlay_width = max(2, round(width * overlay.width_ratio))
+            overlay_label = f"template_overlay_{index}"
+            transforms = [
+                f"[{input_index}:v]scale={overlay_width}:-1:flags=lanczos",
+                "format=rgba",
+                f"colorchannelmixer=aa={overlay.opacity:.6f}",
+            ]
+            if overlay.rotation_degrees:
+                radians = overlay.rotation_degrees * 3.141592653589793 / 180.0
+                transforms.append(
+                    f"rotate={radians:.8f}:ow=rotw(iw):oh=roth(ih):c=none"
+                )
+            filters.append(",".join(transforms) + f"[{overlay_label}]")
+            next_label = f"base{index + 1}"
+            x = f"W*{overlay.anchor_x:.6f}-w/2"
+            y = f"H*{overlay.anchor_y:.6f}-h/2"
+            filters.append(
+                f"[{current_label}][{overlay_label}]"
+                f"overlay=x='{x}':y='{y}':eof_action=repeat[{next_label}]"
+            )
+            current_label = next_label
+
+        filters.append(f"[{current_label}]{caption_filter}{hook_filter or ''}[v]")
+        return ";".join(filters)
 
     @staticmethod
     def _terminate(process: subprocess.Popen, grace_seconds: float = 3.0) -> None:
@@ -151,6 +182,7 @@ class PythonFFmpegAdapter:
         caption_split_ranges: list[tuple[float, float]] | None = None,
         font_path: str | Path | None = None,
         hook_font_path: str | Path | None = None,
+        overlay_asset_paths: Mapping[str, str | Path] | None = None,
     ) -> RenderResult:
         report = self.preflight(recipe)
         if report.status == "partial" and not allow_approximate:
@@ -196,9 +228,30 @@ class PythonFFmpegAdapter:
         ass_path = None
         fonts_dir = None
         hook_filter = None
-        if recipe.captions.enabled or recipe.hook.enabled:
+        overlay_inputs: list[tuple[OverlayRecipe, int, Path]] = []
+        if recipe.captions.enabled or recipe.hook.enabled or recipe.overlays:
             render_temp_dir = tempfile.mkdtemp(prefix="clippy_template_render_")
         try:
+            for index, overlay in enumerate(recipe.overlays):
+                if overlay.kind == "text":
+                    raise RenderAdapterError("text overlays are not supported by the first overlay adapter")
+                if not overlay.asset_id or overlay_asset_paths is None or overlay.asset_id not in overlay_asset_paths:
+                    raise RenderAdapterError(
+                        f"template overlay {overlay.id!r} is missing its resolved image asset"
+                    )
+                original_asset_path = Path(overlay_asset_paths[overlay.asset_id]).expanduser()
+                if original_asset_path.is_symlink():
+                    raise RenderAdapterError("template overlay assets must not be symbolic links")
+                original_asset_path = original_asset_path.resolve(strict=True)
+                if not original_asset_path.is_file():
+                    raise RenderAdapterError("template overlay asset is not a regular file")
+                suffix = original_asset_path.suffix.lower()
+                if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    raise RenderAdapterError("template overlay asset has an unsupported image extension")
+                staged_asset_path = Path(render_temp_dir) / f"overlay_{index}{suffix}"
+                shutil.copyfile(original_asset_path, staged_asset_path)
+                overlay_inputs.append((overlay, index + 1, staged_asset_path))
+
             if recipe.captions.enabled:
                 if caption_transcript is None:
                     raise RenderAdapterError(
@@ -260,6 +313,7 @@ class PythonFFmpegAdapter:
                 ass_path=ass_path,
                 fonts_dir=fonts_dir,
                 hook_filter=hook_filter,
+                overlay_inputs=[(overlay, input_index) for overlay, input_index, _ in overlay_inputs],
             )
         except Exception:
             if render_temp_dir:
@@ -270,13 +324,17 @@ class PythonFFmpegAdapter:
             self.ffmpeg_bin, "-hide_banner", "-nostdin", "-y",
             "-loglevel", "error", "-progress", "pipe:1",
             "-i", str(source),
+        ]
+        for _, _, overlay_path in overlay_inputs:
+            command.extend(["-i", str(overlay_path)])
+        command.extend([
             "-filter_complex", filter_graph,
             "-map", "[v]", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-map_metadata", "-1", "-map_chapters", "-1",
             "-movflags", "+faststart", str(temporary),
-        ]
+        ])
 
         process = None
         stderr_tail: deque[str] = deque(maxlen=120)
