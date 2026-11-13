@@ -529,3 +529,23 @@ def test_template_service_resolves_uploaded_font_and_passes_caption_context(tmp_
 
     assert adapter.kwargs["caption_transcript"] == transcript
     assert Path(adapter.kwargs["font_path"]).read_bytes() == payload
+
+
+def test_adapter_rejects_custom_caption_anchors_instead_of_ignoring_them():
+    recipe = TemplateRecipe.model_validate({
+        "captions": {"enabled": True, "anchor_x": 0.4},
+    })
+
+    with pytest.raises(RendererCompatibilityError, match="custom caption anchor"):
+        PythonFFmpegAdapter().preflight(recipe)
+
+
+def test_adapter_marks_nondefault_caption_line_count_as_approximate():
+    recipe = TemplateRecipe.model_validate({
+        "captions": {"enabled": True, "max_lines": 3},
+    })
+
+    report = PythonFFmpegAdapter().preflight(recipe)
+
+    assert report.status == "partial"
+    assert [item.feature for item in report.approximate] == ["captions"]
