@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
+. (Join-Path $PSScriptRoot "runtime-archive.ps1")
 $ProgressPreference = "SilentlyContinue" # Avoid the extremely slow per-byte progress UI in Windows PowerShell 5.1.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -204,6 +205,14 @@ function Download-File([string]$Url, [string]$Destination) {
             if ($InputStream) { $InputStream.Dispose(); $InputStream = $null }
             if ($Response) { $Response.Close(); $Response = $null }
 
+            # A missing release or asset is permanent until the publisher fixes
+            # it. Do not waste time retrying an HTTP 404 three times.
+            $ErrorResponse = $_.Exception.Response
+            if ($ErrorResponse -is [System.Net.HttpWebResponse] -and [int]$ErrorResponse.StatusCode -eq 404) {
+                $ErrorResponse.Close()
+                throw "HTTP 404: required download asset was not found: $Url. Confirm that the matching Clippy release exists and contains this asset."
+            }
+
             # A completed partial file can legitimately receive HTTP 416 when
             # the server is asked to resume exactly at EOF. Promote it and let
             # the caller's mandatory SHA-256 verification decide whether it is
@@ -287,7 +296,7 @@ $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
 $env:PIP_CACHE_DIR = Join-Path $ScratchRoot "pip-cache"
 Write-Stage ("Using " + $ScratchRoot + " for temporary setup files; managed runtimes remain in " + $Root)
-foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "VERSION")) {
+foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "VERSION")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
     }
@@ -439,16 +448,16 @@ if (-not $VcRuntimeInstalled) {
 $AppVersion = (Get-Content -LiteralPath (Join-Path $App "VERSION") -Raw).Trim()
 if ($AppVersion -notmatch "^\d+\.\d+\.\d+$") { throw "Application VERSION file is missing or invalid." }
 
-$PythonRuntimeAssetName = "clippy-python-$TorchVariant.zip"
 $PythonRuntimeName = "clippy-python-$TorchVariant-$AppVersion.zip"
-$PythonRuntimeUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeAssetName"
 $PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
-$PythonRuntimeChecksum = "$PythonRuntimeArchive.sha256"
+$PythonRuntimeManifestName = "clippy-python-$TorchVariant.manifest.json"
+$PythonRuntimeManifestUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeManifestName"
+$PythonRuntimeReleaseBaseUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion"
 $LocalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $LocalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 
-# Local archive overrides make branch-built installers testable before a
-# matching GitHub release exists. The same SHA-256 verification is mandatory.
+# Local archive overrides remain available for developer diagnostics. Customer
+# installs use only the manifest and assets from the exact matching release.
 if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
     $PythonRuntimeArchive = [System.IO.Path]::GetFullPath($LocalRuntimeArchive)
     if (-not (Test-Path -LiteralPath $PythonRuntimeArchive -PathType Leaf)) {
@@ -470,27 +479,46 @@ if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
     Assert-Sha256 $PythonRuntimeArchive $Matches[1]
     $PythonRuntimeVerified = $true
 } else {
-    $PythonRuntimeVerified = $false
-    for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
-        if ($Attempt -eq 2) {
-            Write-Stage "Cached Python runtime failed verification; downloading a fresh copy."
-            Remove-Item -LiteralPath $PythonRuntimeArchive, $PythonRuntimeChecksum -Force -ErrorAction SilentlyContinue
+    $PythonRuntimeManifestPath = Join-Path $Downloads "$AppVersion-$PythonRuntimeManifestName"
+    Download-File $PythonRuntimeManifestUrl $PythonRuntimeManifestPath
+    try {
+        $RuntimeManifest = Get-Content -LiteralPath $PythonRuntimeManifestPath -Raw | ConvertFrom-Json
+    } catch {
+        Remove-Item -LiteralPath $PythonRuntimeManifestPath -Force -ErrorAction SilentlyContinue
+        throw "The runtime manifest downloaded from release v$AppVersion is not valid JSON: $PythonRuntimeManifestUrl"
+    }
+    Assert-ClippyRuntimeArchiveManifest -Manifest $RuntimeManifest -ExpectedApplicationVersion $AppVersion -ExpectedVariant $TorchVariant | Out-Null
+
+    foreach ($Part in @($RuntimeManifest.parts)) {
+        $PartName = [string]$Part.name
+        $PartUrl = "$PythonRuntimeReleaseBaseUrl/$PartName"
+        $PartPath = Join-Path $Downloads "$AppVersion-$PartName"
+        $PartHealthy = $false
+        if (Test-Path -LiteralPath $PartPath -PathType Leaf) {
+            $PartInfo = Get-Item -LiteralPath $PartPath
+            if ($PartInfo.Length -eq [long]$Part.size -and
+                (Get-ClippyFileSha256 $PartPath) -eq ([string]$Part.sha256).ToLowerInvariant()) {
+                $PartHealthy = $true
+                Write-Stage "Reusing verified runtime part $PartName."
+            } else {
+                Write-Stage "Cached runtime part $PartName failed verification; downloading it again."
+                Remove-Item -LiteralPath $PartPath -Force
+            }
         }
-        Download-File $PythonRuntimeUrl $PythonRuntimeArchive
-        Download-File "$PythonRuntimeUrl.sha256" $PythonRuntimeChecksum
-        $ChecksumText = Get-Content -LiteralPath $PythonRuntimeChecksum -Raw
-        if ($ChecksumText -notmatch "(?i)\b([a-f0-9]{64})\b") {
-            if ($Attempt -eq 2) { throw "Python runtime checksum asset is invalid." }
-            continue
-        }
-        try {
-            Assert-Sha256 $PythonRuntimeArchive $Matches[1]
-            $PythonRuntimeVerified = $true
-            break
-        } catch {
-            if ($Attempt -eq 2) { throw }
+        if (-not $PartHealthy) {
+            Download-File $PartUrl $PartPath
+            $PartInfo = Get-Item -LiteralPath $PartPath
+            if ($PartInfo.Length -ne [long]$Part.size -or
+                (Get-ClippyFileSha256 $PartPath) -ne ([string]$Part.sha256).ToLowerInvariant()) {
+                Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
+                throw "Downloaded runtime part failed size or SHA-256 verification: $PartName"
+            }
         }
     }
+
+    Write-Stage "Reconstructing the verified $TorchVariant Python runtime archive from $($RuntimeManifest.partCount) release asset(s)..."
+    Join-ClippyRuntimeArchiveParts -Manifest $RuntimeManifest -PartsDirectory $Downloads -Destination $PythonRuntimeArchive | Out-Null
+    $PythonRuntimeVerified = $true
 }
 if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python runtime." }
 
