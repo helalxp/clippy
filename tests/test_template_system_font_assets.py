@@ -52,7 +52,7 @@ def test_rejects_zero_or_excessive_table_count():
 
 def test_rejects_truncated_table_directory():
     with pytest.raises(ValueError, match="directory is truncated"):
-        inspect_font_payload(b"\x00\x01\x00\x00" + b"\0" * 8 + b"\0" * 16)
+        inspect_font_payload(b"\x00\x01\x00\x00" + (2).to_bytes(2, "big") + b"\0" * 6 + b"\0" * 16)
 
 
 def test_rejects_missing_required_table():
