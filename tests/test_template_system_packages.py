@@ -6,6 +6,8 @@ import json
 import stat
 import zipfile
 
+from PIL import Image
+
 import pytest
 
 from template_system.models import TemplateAsset, TemplateDocument
@@ -20,7 +22,9 @@ from template_system.storage import LocalTemplateStorage
 
 
 def make_template(storage, template_id="tpl_package123"):
-    payload = b"template-logo-bytes"
+    image_buffer = io.BytesIO()
+    Image.new("RGBA", (12, 8), (10, 20, 30, 255)).save(image_buffer, format="PNG")
+    payload = image_buffer.getvalue()
     asset = TemplateAsset(
         id="asset_logo",
         path="assets/asset_logo.png",
@@ -65,14 +69,14 @@ def test_export_is_deterministic_for_unchanged_template(tmp_path):
     assert export_template_package(storage, document.id) == export_template_package(storage, document.id)
 
 
-def _package_bytes(template_data, files=None, extra_entries=None):
+def _package_bytes(template_data, version=1, files=None, extra_entries=None):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             PACKAGE_MANIFEST,
             json.dumps({
                 "format": PACKAGE_FORMAT,
-                "package_version": 1,
+                "package_version": version,
                 "template": template_data,
             }),
         )
@@ -90,13 +94,7 @@ def test_import_rejects_invalid_zip(tmp_path):
 
 def test_import_rejects_unsupported_package_version(tmp_path):
     document = TemplateDocument(id="tpl_packagever1", name="Version fixture")
-    payload = _package_bytes(document.to_storage_dict())
-    with zipfile.ZipFile(io.BytesIO(payload), "a") as archive:
-        archive.writestr(PACKAGE_MANIFEST, json.dumps({
-            "format": PACKAGE_FORMAT,
-            "package_version": 99,
-            "template": document.to_storage_dict(),
-        }))
+    payload = _package_bytes(document.to_storage_dict(), version=99)
     with pytest.raises(TemplatePackageError, match="version"):
         import_template_package(LocalTemplateStorage(tmp_path), payload)
 
