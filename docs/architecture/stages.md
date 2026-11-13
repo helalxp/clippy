@@ -376,4 +376,11 @@ Implemented on feature/template-reference-system-clean:
 - Missing transcript/word data causes a clear application failure when captions are enabled; the adapter never silently drops requested captions.
 - GitHub Actions run 43421896913 passed on the current branch head: 154 focused template tests, 1,371 backend tests passed with 55 skipped, and frontend build passed.
 
-Remaining in Stage 5: template-driven hook/title rendering, generic overlays, motion/effect recipe support, and further render-provenance hardening. Stage 6 Remotion preview/final parity remains a separate release gate.
+Implemented in this update:
+- Canonical hook/title rendering is supported by the Python/FFmpeg adapter through a dedicated drawtext translator.
+- Hook text is written to a temporary UTF-8 text file rather than interpolated into the FFmpeg filter graph. The adapter supports uploaded font assets, optional solid background backing, normalized top/center/bottom/custom placement, canonical top/bottom safe margins, timed visibility, and none/fade/slide_up/spring/pop entrance behavior.
+- Hook font assets are resolved independently from caption font assets and staged only for the render. Temporary text/font files are cleaned on success and failure.
+- Hook rendering is applied after captions so it remains a distinct top layer.
+- Real FFmpeg fixtures verify visible and expired hook frames across original, blur, and solid background paths. Unit coverage verifies text-file isolation and uploaded-font pass-through.
+
+Remaining in Stage 5: generic overlays, motion/effect recipe support, further render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
