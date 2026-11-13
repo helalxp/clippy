@@ -207,9 +207,9 @@ function Download-File([string]$Url, [string]$Destination) {
                                 Write-Stage "Resumed download was already complete; promoted the verified partial file."
                                 return
                             }
-                            if ($PartialLength -gt $ServerLength) {
+                            if ($PartialLength -ne $ServerLength) {
                                 Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
-                                Write-Stage "Discarded an oversized partial download and will restart from byte zero."
+                                Write-Stage "Discarded an inconsistent partial download after HTTP 416 and will restart from byte zero."
                             }
                         }
                     }
