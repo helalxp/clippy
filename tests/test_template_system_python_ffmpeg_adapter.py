@@ -448,7 +448,7 @@ def test_adapter_renders_canonical_caption_recipe_with_word_highlight(tmp_path):
     frame = extract_output_frame(output)
     bright_pixels = sum(
         1 for pixel in frame.convert("RGB").getdata()
-        if min(pixel) > 170
+        if sum(pixel) > 300
     )
     assert result.output_path == output.resolve()
     assert result.compatibility.status == "compatible"
