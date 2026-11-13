@@ -96,6 +96,17 @@ jobs:
         shell: pwsh
         run: ./desktop/validate-version.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
 
+      - name: Verify public release signing credentials
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
+            throw "Public Windows releases require both Authenticode signing secrets. Configure them before creating a release tag."
+          }
+
       - name: Download verified Python runtime packages
         uses: actions/download-artifact@v4
         with:
