@@ -57,7 +57,15 @@ export default function DesktopRuntimeGate({ children }) {
         phase: 'startup',
         stage: 'Starting Clippy services…',
       }));
-      await invoke('start_services');
+      const services = await invoke('start_services');
+      if (!services?.backend_url) {
+        throw new Error('Clippy services started without returning a backend address.');
+      }
+      // The supervisor selects available loopback ports at runtime. Install the
+      // resolved base URL before rendering the application so every API client
+      // uses the same managed backend rather than a compile-time fixed port.
+      window.__CLIPPY_API_BASE_URL__ = services.backend_url;
+      window.__CLIPPY_RENDERER_URL__ = services.renderer_url || '';
       setState((current) => ({
         ...current,
         status: 'ready',
