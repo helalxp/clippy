@@ -43,7 +43,8 @@ $Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($Nvidia) {
     $NvidiaInfo = & $Nvidia.Source --query-gpu=name,driver_version --format=csv,noheader 2>$null
     if ($LASTEXITCODE -eq 0 -and $NvidiaInfo) {
-        $NvidiaFields = ([string]@($NvidiaInfo)[0]).Split(',')
+        $NvidiaLine = @($NvidiaInfo) | Select-Object -First 1
+        $NvidiaFields = ([string]$NvidiaLine).Split(',')
         if ($NvidiaFields.Count -ge 2) {
             $NvidiaGpuName = $NvidiaFields[0].Trim()
             $DriverText = $NvidiaFields[1].Trim()
