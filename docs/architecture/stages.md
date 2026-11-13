@@ -288,7 +288,7 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** complete CI verification for font assets and package import/export, then connect canonical caption styling to the existing subtitle pipeline and implement hook/title rendering as separately tested adapter capabilities. Keep live Gemini validation opt-in. Latest CI run `43310755521` passed: 123 focused template/API/edit-lock tests, 1,331 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+**Immediate next action:** connect canonical caption styling to the existing subtitle pipeline as a separately tested adapter capability, then implement hook/title rendering. Preserve explicit compatibility reporting and real rendered-output tests. Keep live Gemini validation opt-in. Latest CI run `43310755521` passed: 123 focused template/API/edit-lock tests, 1,331 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -359,6 +359,6 @@ Implemented on feature/template-reference-system-clean:
 - Font asset metadata, opaque storage paths, SHA-256 integrity, revision conflict protection, retrieval, and reference-safe deletion use the existing asset lifecycle. Renderer-side font loading is not implemented yet.
 - Added versioned .clippy-template ZIP export/import. Packages carry the canonical template document and its assets. Import validates safe paths, archive entry types, compression, sizes, package version, exact asset inventory, decoded image/font structure, and checksums. Imported templates receive a new local ID and revision 1.
 - Added owner-scoped export and import API endpoints.
-- Focused and full CI validation is pending for this update. Do not treat it as complete until all workflow jobs pass.
+- GitHub Actions run 43420728540 passed: 149 focused template tests, 1,371 backend tests passed with 50 skipped, and frontend production build passed.
 
 Next vertical slice: implement caption styling in the Python/FFmpeg adapter using canonical font references and normalized style properties, then add hook/title rendering as a separate capability. Keep preview/Remotion parity as a later explicit gate.
