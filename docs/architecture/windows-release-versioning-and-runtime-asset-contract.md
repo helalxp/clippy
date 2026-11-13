@@ -135,6 +135,19 @@ That workflow cannot publish the current 3.35 GB CUDA ZIP as one release asset.
 
 The existing `RELEASING.md` refers to a `windows-installer-release` branch, while this audit is being performed against `windows-installer-hardening`. Before the next release, the project should designate and document one authoritative release branch and update the release instructions accordingly.
 
+### 5.7 Runtime download resilience
+
+The audited setup engine already has useful production-oriented download behavior:
+
+- HTTPS requests with redirects enabled.
+- Three attempts for interrupted downloads.
+- HTTP Range-based continuation of partial downloads.
+- Validation of the server's Content-Range response.
+- Preservation of partial data for retry.
+- SHA-256 verification of the completed runtime archive before extraction.
+
+However, the current downloader treats HTTP 404 like a general download failure and retries it. A missing release or asset is not a transient network interruption. The production implementation should detect 404 explicitly, stop retrying, and report the exact release tag and asset URL that are missing. Retries should be reserved for transient network/server failures and interrupted transfers.
+
 ## 6. Proposed version-mismatch prevention rules
 
 The following rules should be treated as release gates:
