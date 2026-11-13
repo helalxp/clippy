@@ -69,6 +69,8 @@ class TemplateApplicationService:
         allow_approximate: bool = False,
         progress_callback: Callable[[str, float], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        caption_transcript: dict[str, Any] | None = None,
+        caption_split_ranges: list[tuple[float, float]] | None = None,
     ) -> TemplateApplicationResult:
         template: TemplateDocument = self.storage.get(template_id)
         resolved = resolve_recipe(
@@ -77,6 +79,13 @@ class TemplateApplicationService:
             clip_overrides=clip_overrides,
             locks=locks,
         )
+        font_path = None
+        font_asset_id = resolved.recipe.captions.font_asset_id if resolved.recipe.captions.enabled else None
+        if font_asset_id:
+            font_asset, font_path = self.storage.get_asset(template_id, font_asset_id)
+            if not font_asset.media_type.startswith("font/"):
+                raise ValueError("caption font_asset_id must reference a stored font asset")
+
         rendered = self.adapter.render(
             source_path,
             output_path,
@@ -84,6 +93,9 @@ class TemplateApplicationService:
             allow_approximate=allow_approximate,
             progress_callback=progress_callback,
             cancel_check=cancel_check,
+            caption_transcript=caption_transcript,
+            caption_split_ranges=caption_split_ranges,
+            font_path=font_path,
         )
         return TemplateApplicationResult(
             template_id=template.id,
