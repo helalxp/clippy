@@ -353,6 +353,8 @@ def fetch_transcript(video_id: str, lang: Optional[str] = None) -> dict:
                         # although its caption list came back fine.
                         "ignore_no_formats_error": True,
                         "extractor_args": {"youtube": {"player_client": ["default"]}}}
+                if os.environ.get("CLIPPY_NODE_EXE"):
+                    opts["js_runtimes"] = {"node": {"path": os.environ["CLIPPY_NODE_EXE"]}}
                 if proxy:
                     opts["proxy"] = proxy
                 if use_cookies:
