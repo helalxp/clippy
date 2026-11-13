@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue" # Avoid the extremely slow per-byte progress UI in Windows PowerShell 5.1.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Clippy must not inherit another application's Python, Conda, or Node setup.
@@ -194,7 +195,7 @@ if (-not $VcRuntimeInstalled) {
         throw "Microsoft Visual C++ redistributable signature is not valid."
     }
     $VcProcess = Start-Process -FilePath $VcRedist -ArgumentList "/install /quiet /norestart" -Verb RunAs -Wait -PassThru
-    if ($VcProcess.ExitCode -notin @(0, 3010)) {
+    if ($VcProcess.ExitCode -notin @(0, 3010, 1638)) {
         throw "Microsoft Visual C++ runtime installation failed with exit code $($VcProcess.ExitCode)."
     }
 }
@@ -208,26 +209,52 @@ $PythonRuntimeName = "clippy-python-$TorchVariant-$AppVersion.zip"
 $PythonRuntimeUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeAssetName"
 $PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
 $PythonRuntimeChecksum = "$PythonRuntimeArchive.sha256"
+$LocalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
+$LocalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 
-$PythonRuntimeVerified = $false
-for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
-    if ($Attempt -eq 2) {
-        Write-Stage "Cached Python runtime failed verification; downloading a fresh copy."
-        Remove-Item -LiteralPath $PythonRuntimeArchive, $PythonRuntimeChecksum -Force -ErrorAction SilentlyContinue
+# Local archive overrides make branch-built installers testable before a
+# matching GitHub release exists. The same SHA-256 verification is mandatory.
+if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
+    $PythonRuntimeArchive = [System.IO.Path]::GetFullPath($LocalRuntimeArchive)
+    if (-not (Test-Path -LiteralPath $PythonRuntimeArchive -PathType Leaf)) {
+        throw "CLIPPY_PYTHON_RUNTIME_ARCHIVE does not exist: $PythonRuntimeArchive"
     }
-    Download-File $PythonRuntimeUrl $PythonRuntimeArchive
-    Download-File "$PythonRuntimeUrl.sha256" $PythonRuntimeChecksum
+    if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeChecksum)) {
+        $PythonRuntimeChecksum = [System.IO.Path]::GetFullPath($LocalRuntimeChecksum)
+    } else {
+        $PythonRuntimeChecksum = "$PythonRuntimeArchive.sha256"
+    }
+    if (-not (Test-Path -LiteralPath $PythonRuntimeChecksum -PathType Leaf)) {
+        throw "Python runtime checksum file is missing: $PythonRuntimeChecksum"
+    }
+    Write-Stage "Using locally supplied Python runtime archive: $PythonRuntimeArchive"
     $ChecksumText = Get-Content -LiteralPath $PythonRuntimeChecksum -Raw
     if ($ChecksumText -notmatch "(?i)\b([a-f0-9]{64})\b") {
-        if ($Attempt -eq 2) { throw "Python runtime checksum asset is invalid." }
-        continue
+        throw "Local Python runtime checksum file is invalid: $PythonRuntimeChecksum"
     }
-    try {
-        Assert-Sha256 $PythonRuntimeArchive $Matches[1]
-        $PythonRuntimeVerified = $true
-        break
-    } catch {
-        if ($Attempt -eq 2) { throw }
+    Assert-Sha256 $PythonRuntimeArchive $Matches[1]
+    $PythonRuntimeVerified = $true
+} else {
+    $PythonRuntimeVerified = $false
+    for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
+        if ($Attempt -eq 2) {
+            Write-Stage "Cached Python runtime failed verification; downloading a fresh copy."
+            Remove-Item -LiteralPath $PythonRuntimeArchive, $PythonRuntimeChecksum -Force -ErrorAction SilentlyContinue
+        }
+        Download-File $PythonRuntimeUrl $PythonRuntimeArchive
+        Download-File "$PythonRuntimeUrl.sha256" $PythonRuntimeChecksum
+        $ChecksumText = Get-Content -LiteralPath $PythonRuntimeChecksum -Raw
+        if ($ChecksumText -notmatch "(?i)\b([a-f0-9]{64})\b") {
+            if ($Attempt -eq 2) { throw "Python runtime checksum asset is invalid." }
+            continue
+        }
+        try {
+            Assert-Sha256 $PythonRuntimeArchive $Matches[1]
+            $PythonRuntimeVerified = $true
+            break
+        } catch {
+            if ($Attempt -eq 2) { throw }
+        }
     }
 }
 if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python runtime." }
