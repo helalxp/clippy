@@ -28,6 +28,18 @@ def write_caption_ass(
 
     from subtitles import generate_ass
 
+    words = [
+        word
+        for segment in transcript.get("segments", [])
+        for word in segment.get("words", [])
+        if isinstance(word, dict) and isinstance(word.get("end"), (int, float))
+    ]
+    if not words:
+        return False
+    clip_end = max(float(word["end"]) for word in words)
+    if clip_end <= 0:
+        return False
+
     fontsize = max(10, round(caption.font_size_ratio * 288))
     outline_width = round(caption.outline_ratio * 288)
     shadow = round(caption.shadow_ratio * 288)
@@ -50,7 +62,7 @@ def write_caption_ass(
     return generate_ass(
         transcript,
         0.0,
-        24 * 60 * 60.0,
+        clip_end + 0.001,
         str(output_path),
         max_chars=max_chars,
         max_duration=1.4,
