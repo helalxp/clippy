@@ -496,7 +496,13 @@ try {
 # Node's archive is checked against the SHA-256 value published alongside the
 # official Node.js release archive.
 $NodeExe = Join-Path $NodeDir "node.exe"
-if (-not (Test-Path $NodeExe)) {
+$ExistingNodeVersion = if (Test-Path -LiteralPath $NodeExe -PathType Leaf) { (& $NodeExe --version 2>&1 | Out-String).Trim() } else { "" }
+$ExistingNodeHealthy = ($LASTEXITCODE -eq 0 -and $ExistingNodeVersion.TrimStart([char]"v") -eq $NodeVersion)
+if (-not $ExistingNodeHealthy) {
+    if (Test-Path -LiteralPath $NodeDir) {
+        Write-Stage "Managed Node.js runtime is missing, corrupt, or the wrong version; replacing it."
+        Remove-Item -LiteralPath $NodeDir -Recurse -Force
+    }
     $NodeZip = Join-Path $Downloads $NodeArchiveName
     $Checksums = Join-Path $Downloads "node-v$NodeVersion-SHASUMS256.txt"
     Download-File $NodeArchiveUrl $NodeZip
@@ -527,13 +533,24 @@ if (-not (Test-Path $NodeExe)) {
     Get-ChildItem $ExtractedRoot -Force | Move-Item -Destination $NodeDir
     Remove-Item $Extract -Recurse -Force
 }
-& $NodeExe --version
-if ($LASTEXITCODE -ne 0) { throw "Managed Node.js runtime failed its version check." }
+$InstalledNodeVersion = (& $NodeExe --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $InstalledNodeVersion.TrimStart([char]"v") -ne $NodeVersion) {
+    throw "Managed Node.js runtime version check failed. Expected $NodeVersion, found $InstalledNodeVersion."
+}
 
 # FFmpeg is downloaded from the Windows builds publisher and verified against
 # the publisher's SHA-256 sidecar before extraction.
 $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
-if (-not (Test-Path $FfmpegExe)) {
+$ExistingFfmpegHealthy = $false
+if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
+    & $FfmpegExe -version *> $null
+    $ExistingFfmpegHealthy = ($LASTEXITCODE -eq 0)
+}
+if (-not $ExistingFfmpegHealthy) {
+    if (Test-Path -LiteralPath $FfmpegDir) {
+        Write-Stage "Managed FFmpeg runtime is missing or unhealthy; replacing it."
+        Remove-Item -LiteralPath $FfmpegDir -Recurse -Force
+    }
     $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
     $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
     Download-File $FfmpegArchiveUrl $FfmpegZip
