@@ -58,7 +58,7 @@ def test_rejects_truncated_table_directory():
 def test_rejects_missing_required_table():
     payload = bytearray(make_sfnt())
     # Change the final table tag from loca to Loca, preserving a valid directory.
-    payload[12 + 5 * 16:12 + 5 * 16 + 4] = b"Loca"
+    payload[12 + 2 * 16:12 + 2 * 16 + 4] = b"Name"
     with pytest.raises(ValueError, match="missing required"):
         inspect_font_payload(bytes(payload))
 
