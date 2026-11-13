@@ -374,6 +374,6 @@ Implemented on feature/template-reference-system-clean:
 - Template application passes the clip's saved transcript into the renderer. Recut EDL segments are remapped to clip-relative time, and saved user-edited caption words take precedence when present.
 - Referenced font assets are resolved from owner-scoped template storage and staged for FFmpeg. Temporary ASS and font files are removed after render.
 - Missing transcript/word data causes a clear application failure when captions are enabled; the adapter never silently drops requested captions.
-- GitHub Actions run 43421566510 passed: 152 focused template tests, 1,357 backend tests passed with 53 skipped, and frontend build passed.
+- GitHub Actions run 43421896913 passed on the current branch head: 154 focused template tests, 1,371 backend tests passed with 55 skipped, and frontend build passed.
 
 Remaining in Stage 5: template-driven hook/title rendering, generic overlays, motion/effect recipe support, and further render-provenance hardening. Stage 6 Remotion preview/final parity remains a separate release gate.
