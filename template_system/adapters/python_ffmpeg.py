@@ -7,7 +7,9 @@ rejected in preflight rather than silently ignored.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -74,8 +76,23 @@ class PythonFFmpegAdapter:
         return report
 
     @staticmethod
-    def _filter_graph(recipe: TemplateRecipe) -> str:
+    def _filter_graph(
+        recipe: TemplateRecipe,
+        *,
+        ass_path: str | Path | None = None,
+        fonts_dir: str | Path | None = None,
+    ) -> str:
         width, height = recipe.canvas.width, recipe.canvas.height
+        caption_filter = ""
+        if ass_path is not None:
+            if fonts_dir is None:
+                raise RenderAdapterError("caption font directory is required")
+            from subtitles import _escape_ffmpeg_filter_value
+            ass_value = _escape_ffmpeg_filter_value(str(ass_path))
+            fonts_value = _escape_ffmpeg_filter_value(str(fonts_dir))
+            if "'" in str(ass_path) or "'" in str(fonts_dir):
+                raise RenderAdapterError("caption paths cannot contain apostrophes")
+            caption_filter = f",ass=filename='{ass_value}':fontsdir='{fonts_value}'"
         fps = f"{recipe.canvas.fps:.6f}".rstrip("0").rstrip(".")
         mode = recipe.framing.mode
         background = recipe.background.mode
@@ -88,7 +105,7 @@ class PythonFFmpegAdapter:
             return (
                 f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={width}:{height}:x='{x}':y='{y}',"
-                f"fps={fps},setsar=1,format=yuv420p[v]"
+                f"fps={fps},setsar=1,format=yuv420p{caption_filter}[v]"
             )
 
         if background == "blur":
@@ -130,6 +147,9 @@ class PythonFFmpegAdapter:
         allow_approximate: bool = False,
         progress_callback: Callable[[str, float], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        caption_transcript: dict | None = None,
+        caption_split_ranges: list[tuple[float, float]] | None = None,
+        font_path: str | Path | None = None,
     ) -> RenderResult:
         report = self.preflight(recipe)
         if report.status == "partial" and not allow_approximate:
@@ -171,11 +191,60 @@ class PythonFFmpegAdapter:
             pass
 
         temporary = parent / f".{destination.stem}.{uuid.uuid4().hex}.tmp.mp4"
+        caption_temp_dir = None
+        ass_path = None
+        fonts_dir = None
+        if recipe.captions.enabled:
+            if caption_transcript is None:
+                raise RenderAdapterError(
+                    "template captions are enabled, but no clip-relative transcript was supplied"
+                )
+            caption_temp_dir = tempfile.mkdtemp(prefix="clippy_template_caption_")
+            ass_path = Path(caption_temp_dir) / f"subs_template_{uuid.uuid4().hex}.ass"
+            try:
+                if font_path is not None:
+                    source_font = Path(font_path).expanduser().resolve(strict=True)
+                    if not source_font.is_file():
+                        raise RenderAdapterError("template font asset is not a regular file")
+                    fonts_dir = Path(caption_temp_dir) / "fonts"
+                    fonts_dir.mkdir()
+                    shutil.copyfile(source_font, fonts_dir / source_font.name)
+                else:
+                    import subtitles
+                    fonts_dir = Path(subtitles.__file__).resolve().parent / "fonts"
+                from .captions import write_caption_ass
+                if not write_caption_ass(
+                    recipe.captions,
+                    recipe.canvas,
+                    caption_transcript,
+                    ass_path,
+                    split_ranges=caption_split_ranges,
+                ):
+                    raise RenderAdapterError("template caption transcript contains no usable words")
+                if "'" in str(ass_path) or "'" in str(fonts_dir):
+                    raise RenderAdapterError("caption paths cannot contain apostrophes")
+            except Exception as exc:
+                shutil.rmtree(caption_temp_dir, ignore_errors=True)
+                if isinstance(exc, RenderAdapterError):
+                    raise
+                raise RenderAdapterError(f"could not prepare template captions: {exc}") from exc
+
+        try:
+            filter_graph = self._filter_graph(
+                recipe,
+                ass_path=ass_path,
+                fonts_dir=fonts_dir,
+            )
+        except Exception:
+            if caption_temp_dir:
+                shutil.rmtree(caption_temp_dir, ignore_errors=True)
+            raise
+
         command = [
             self.ffmpeg_bin, "-hide_banner", "-nostdin", "-y",
             "-loglevel", "error", "-progress", "pipe:1",
             "-i", str(source),
-            "-filter_complex", self._filter_graph(recipe),
+            "-filter_complex", filter_graph,
             "-map", "[v]", "-map", "0:a?",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
@@ -183,13 +252,13 @@ class PythonFFmpegAdapter:
             "-movflags", "+faststart", str(temporary),
         ]
 
-        if progress_callback is not None:
-            progress_callback("rendering", 0.0)
         process = None
         stderr_tail: deque[str] = deque(maxlen=120)
         stderr_thread = None
         started = time.monotonic()
         try:
+            if progress_callback is not None:
+                progress_callback("rendering", 0.0)
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -288,3 +357,6 @@ class PythonFFmpegAdapter:
                 stderr_thread.join(timeout=2)
             temporary.unlink(missing_ok=True)
             raise
+        finally:
+            if caption_temp_dir:
+                shutil.rmtree(caption_temp_dir, ignore_errors=True)
