@@ -1,8 +1,7 @@
 """Deterministic FFmpeg adapter for the supported template recipe subset.
 
-This adapter intentionally implements canvas, crop/contain framing, and
-original/blur/solid background treatment only. Unsupported recipe features are
-rejected in preflight rather than silently ignored.
+Unsupported recipe features are rejected in preflight rather than silently
+ignored. Captions and hook/title layers are translated through isolated adapters.
 """
 from __future__ import annotations
 
@@ -81,6 +80,7 @@ class PythonFFmpegAdapter:
         *,
         ass_path: str | Path | None = None,
         fonts_dir: str | Path | None = None,
+        hook_filter: str | None = None,
     ) -> str:
         width, height = recipe.canvas.width, recipe.canvas.height
         caption_filter = ""
@@ -105,7 +105,7 @@ class PythonFFmpegAdapter:
             return (
                 f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={width}:{height}:x='{x}':y='{y}',"
-                f"fps={fps},setsar=1,format=yuv420p{caption_filter}[v]"
+                f"fps={fps},setsar=1,format=yuv420p{caption_filter}{hook_filter or ''}[v]"
             )
 
         if background == "blur":
@@ -116,7 +116,7 @@ class PythonFFmpegAdapter:
                 f"crop={width}:{height},boxblur=luma_radius={radius}:luma_power=2[bg];"
                 f"[fgsrc]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2,"
-                f"fps={fps},setsar=1,format=yuv420p{caption_filter}[v]"
+                f"fps={fps},setsar=1,format=yuv420p{caption_filter}{hook_filter or ''}[v]"
             )
 
         pad_color = recipe.background.color if background == "solid" else "#000000"
@@ -150,6 +150,7 @@ class PythonFFmpegAdapter:
         caption_transcript: dict | None = None,
         caption_split_ranges: list[tuple[float, float]] | None = None,
         font_path: str | Path | None = None,
+        hook_font_path: str | Path | None = None,
     ) -> RenderResult:
         report = self.preflight(recipe)
         if report.status == "partial" and not allow_approximate:
@@ -191,22 +192,24 @@ class PythonFFmpegAdapter:
             pass
 
         temporary = parent / f".{destination.stem}.{uuid.uuid4().hex}.tmp.mp4"
-        caption_temp_dir = None
+        render_temp_dir = None
         ass_path = None
         fonts_dir = None
-        if recipe.captions.enabled:
-            if caption_transcript is None:
-                raise RenderAdapterError(
-                    "template captions are enabled, but no clip-relative transcript was supplied"
-                )
-            caption_temp_dir = tempfile.mkdtemp(prefix="clippy_template_caption_")
-            ass_path = Path(caption_temp_dir) / f"subs_template_{uuid.uuid4().hex}.ass"
-            try:
+        hook_filter = None
+        if recipe.captions.enabled or recipe.hook.enabled:
+            render_temp_dir = tempfile.mkdtemp(prefix="clippy_template_render_")
+        try:
+            if recipe.captions.enabled:
+                if caption_transcript is None:
+                    raise RenderAdapterError(
+                        "template captions are enabled, but no clip-relative transcript was supplied"
+                    )
+                ass_path = Path(render_temp_dir) / f"subs_template_{uuid.uuid4().hex}.ass"
                 if font_path is not None:
                     source_font = Path(font_path).expanduser().resolve(strict=True)
                     if not source_font.is_file():
-                        raise RenderAdapterError("template font asset is not a regular file")
-                    fonts_dir = Path(caption_temp_dir) / "fonts"
+                        raise RenderAdapterError("template caption font asset is not a regular file")
+                    fonts_dir = Path(render_temp_dir) / "caption_fonts"
                     fonts_dir.mkdir()
                     shutil.copyfile(source_font, fonts_dir / source_font.name)
                 else:
@@ -223,21 +226,44 @@ class PythonFFmpegAdapter:
                     raise RenderAdapterError("template caption transcript contains no usable words")
                 if "'" in str(ass_path) or "'" in str(fonts_dir):
                     raise RenderAdapterError("caption paths cannot contain apostrophes")
-            except Exception as exc:
-                shutil.rmtree(caption_temp_dir, ignore_errors=True)
-                if isinstance(exc, RenderAdapterError):
-                    raise
-                raise RenderAdapterError(f"could not prepare template captions: {exc}") from exc
+
+            if recipe.hook.enabled:
+                if recipe.hook.start_seconds >= source_probe.duration_seconds:
+                    raise RenderAdapterError("template hook starts after the source clip ends")
+                hook_text_path = Path(render_temp_dir) / f"hook_{uuid.uuid4().hex}.txt"
+                staged_hook_font = None
+                if hook_font_path is not None:
+                    source_font = Path(hook_font_path).expanduser().resolve(strict=True)
+                    if not source_font.is_file():
+                        raise RenderAdapterError("template hook font asset is not a regular file")
+                    staged_hook_font = Path(render_temp_dir) / f"hook_font{source_font.suffix.lower()}"
+                    shutil.copyfile(source_font, staged_hook_font)
+                from .hooks import write_hook_text
+                hook_filter = write_hook_text(
+                    recipe.hook,
+                    recipe.canvas,
+                    hook_text_path,
+                    font_path=staged_hook_font,
+                )
+                if hook_filter is None:
+                    raise RenderAdapterError("enabled template hook did not produce a render layer")
+        except Exception as exc:
+            if render_temp_dir:
+                shutil.rmtree(render_temp_dir, ignore_errors=True)
+            if isinstance(exc, RenderAdapterError):
+                raise
+            raise RenderAdapterError(f"could not prepare template text layers: {exc}") from exc
 
         try:
             filter_graph = self._filter_graph(
                 recipe,
                 ass_path=ass_path,
                 fonts_dir=fonts_dir,
+                hook_filter=hook_filter,
             )
         except Exception:
-            if caption_temp_dir:
-                shutil.rmtree(caption_temp_dir, ignore_errors=True)
+            if render_temp_dir:
+                shutil.rmtree(render_temp_dir, ignore_errors=True)
             raise
 
         command = [
@@ -358,5 +384,5 @@ class PythonFFmpegAdapter:
             temporary.unlink(missing_ok=True)
             raise
         finally:
-            if caption_temp_dir:
-                shutil.rmtree(caption_temp_dir, ignore_errors=True)
+            if render_temp_dir:
+                shutil.rmtree(render_temp_dir, ignore_errors=True)
