@@ -4930,6 +4930,78 @@ async def delete_template_asset(template_id: str, asset_id: str, request: Reques
     }
 
 
+@app.get("/api/templates/{template_id}/export")
+async def export_template(template_id: str, request: Request):
+    """Download one verified template as a versioned .clippy-template ZIP."""
+    from fastapi.responses import Response
+    from template_system.packages import TemplatePackageError, export_template_package
+    from template_system.storage import TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        package = await asyncio.to_thread(export_template_package, storage, template_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except (TemplatePackageError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return Response(
+        content=package,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{template_id}.clippy-template.zip"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/templates/import", status_code=201)
+async def import_template(request: Request):
+    """Import a bounded, versioned .clippy-template package into the local library."""
+    from template_system.packages import (
+        MAX_ARCHIVE_BYTES,
+        TemplatePackageError,
+        import_template_package,
+    )
+    from template_system.storage import TemplateIntegrityError
+
+    storage = await _template_library_for_request(request)
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdecimal():
+        if int(content_length) > MAX_ARCHIVE_BYTES + 64 * 1024:
+            raise HTTPException(status_code=413, detail="Template package exceeds the 100 MB limit")
+    try:
+        form = await request.form(max_files=1, max_fields=1)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Expected a multipart template package upload") from exc
+    upload = form.get("file")
+    if not hasattr(upload, "read") or not hasattr(upload, "filename"):
+        raise HTTPException(status_code=422, detail="A package file field is required")
+    supplied_type = getattr(upload, "content_type", None)
+    if supplied_type and supplied_type not in {
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+    }:
+        raise HTTPException(status_code=415, detail="Template package must be a ZIP file")
+    uploaded_size = getattr(upload, "size", None)
+    if isinstance(uploaded_size, int) and uploaded_size > MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="Template package exceeds the 100 MB limit")
+    try:
+        payload = await upload.read(MAX_ARCHIVE_BYTES + 1)
+    finally:
+        close = getattr(upload, "close", None)
+        if close is not None:
+            await close()
+    if len(payload) > MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="Template package exceeds the 100 MB limit")
+    try:
+        imported = await asyncio.to_thread(import_template_package, storage, payload)
+    except (TemplatePackageError, TemplateIntegrityError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Template package rejected: {exc}") from exc
+    return {"template": _template_document_response(imported)}
+
+
 class TemplateApplyRequest(BaseModel):
     job_id: str
     clip_index: int
