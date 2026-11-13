@@ -61,9 +61,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clippy-python-runtime-${{ matrix.variant }}
-          path: |
-            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip
-            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip.sha256
+          path: desktop/runtime-dist/clippy-python-${{ matrix.variant }}*
+
           if-no-files-found: error
           retention-days: 2
 
@@ -114,26 +113,15 @@ jobs:
           path: desktop/runtime-dist
           merge-multiple: true
 
-      - name: Validate runtime package assets
+      - name: Validate runtime manifests, parts, and reconstructed archives
         shell: pwsh
-        run: |
-          foreach ($variant in @("cpu", "cuda")) {
-            $archive = "./desktop/runtime-dist/clippy-python-$variant.zip"
-            $checksum = "$archive.sha256"
-            if (-not (Test-Path $archive) -or -not (Test-Path $checksum)) {
-              throw "Missing $variant Python runtime release assets."
-            }
-            $line = Get-Content $checksum -Raw
-            if ($line -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "Invalid checksum for $archive" }
-            $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $Matches[1].ToLowerInvariant()) { throw "Checksum mismatch for $archive" }
-          }
+        run: ./desktop/validate-runtime-assets.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
 
       - name: Run PowerShell runtime contract tests
         shell: pwsh
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
-          Invoke-Pester -Path ./desktop/tests/RuntimeManifestState.Tests.ps1 -CI
+          Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Run Rust unit and installer contract tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
@@ -194,8 +182,45 @@ jobs:
         with:
           name: Clippy
           generate_release_notes: true
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             desktop/src-tauri/target/release/bundle/nsis/*.exe
             desktop/src-tauri/target/release/bundle/nsis/*.sha256
-            desktop/runtime-dist/*.zip
-            desktop/runtime-dist/*.zip.sha256
+            desktop/runtime-dist/clippy-python-*
+      
+      - name: Verify draft release assets before publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installerFiles = @(Get-ChildItem "./desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe")
+          if ($installerFiles.Count -ne 1) { throw "Expected exactly one installer when verifying the draft release." }
+          $expectedFiles = @($installerFiles[0], (Get-Item "$($installerFiles[0].FullName).sha256")) +
+            @(Get-ChildItem "./desktop/runtime-dist" -File -Filter "clippy-python-*")
+          $expected = @{}
+          foreach ($file in $expectedFiles) { $expected[$file.Name] = [long]$file.Length }
+
+          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME"
+          if ($LASTEXITCODE -ne 0) { throw "Could not read the newly created draft release." }
+          $release = $releaseJson | ConvertFrom-Json
+          if (-not $release.draft) { throw "Release was published before asset verification; expected a draft." }
+
+          $actual = @{}
+          foreach ($asset in @($release.assets)) { $actual[$asset.name] = [long]$asset.size }
+          foreach ($name in $expected.Keys) {
+            if (-not $actual.ContainsKey($name)) { throw "Draft release is missing required asset: $name" }
+            if ($actual[$name] -ne $expected[$name]) {
+              throw "Draft release asset size mismatch for $name. Expected $($expected[$name]), got $($actual[$name])."
+            }
+          }
+          Write-Host "Verified $($expected.Count) installer/runtime release assets on draft release $env:GITHUB_REF_NAME."
+
+      - name: Publish verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$env:GITHUB_REF_NAME" --repo "$env:GITHUB_REPOSITORY" --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish the verified draft release." }
+          Write-Host "Published verified Clippy release $env:GITHUB_REF_NAME."
