@@ -501,8 +501,15 @@ try {
     $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
     $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
     $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
-    & $PythonExe -c "import app; import torch; print('Backend imports OK; torch CUDA:', torch.cuda.is_available())"
+    & $PythonExe -c "import app; import torch; import faster_whisper; import ctranslate2; print('Backend imports OK; torch CUDA:', torch.cuda.is_available())"
     if ($LASTEXITCODE -ne 0) { throw "Backend import verification failed. Check the Python dependency log." }
+    if ($TorchVariant -eq "cuda") {
+        Write-Stage "Running a real CUDA kernel and faster-whisper device capability check..."
+        & $PythonExe -c "import torch, ctranslate2; assert torch.version.cuda and torch.version.cuda.startswith('12.8'), f'Expected CUDA 12.8, got {torch.version.cuda}'; assert torch.cuda.is_available(), 'PyTorch cannot initialize the NVIDIA device'; x=torch.ones((64,64),device='cuda'); y=x @ x; torch.cuda.synchronize(); assert float(y[0,0].item()) == 64.0, 'CUDA kernel produced an unexpected result'; count=ctranslate2.get_cuda_device_count(); assert count > 0, 'CTranslate2/faster-whisper cannot see a CUDA device'; print('CUDA kernel OK:', torch.cuda.get_device_name(0), '| CTranslate2 devices:', count)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "CUDA runtime verification failed. Clippy will not mark an unusable CUDA installation as healthy. Check the NVIDIA driver, CUDA DLL paths, and GPU compatibility in the setup log."
+        }
+    }
 } finally {
     Pop-Location
 }
