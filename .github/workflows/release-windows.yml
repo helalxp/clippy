@@ -118,6 +118,9 @@ jobs:
             if ($actual -ne $Matches[1].ToLowerInvariant()) { throw "Checksum mismatch for $archive" }
           }
 
+      - name: Run Rust unit and installer contract tests
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
+
       - name: Build NSIS installer
         shell: pwsh
         run: ./desktop/build.ps1
@@ -131,8 +134,7 @@ jobs:
           $files = @(Get-ChildItem "./desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe")
           if ($files.Count -ne 1) { throw "Expected exactly one NSIS installer, found $($files.Count)." }
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)) {
-            Write-Host "::warning::Installer is unsigned. Configure WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 and WINDOWS_CODESIGN_CERTIFICATE_PASSWORD repository secrets before publishing a public release."
-            return
+            throw "Public Windows releases must be Authenticode-signed. Configure WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 and WINDOWS_CODESIGN_CERTIFICATE_PASSWORD before creating a release tag."
           }
           if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
             throw "The code-signing certificate is configured but its password secret is missing."
