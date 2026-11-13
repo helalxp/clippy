@@ -10,6 +10,7 @@ from PIL import Image
 
 from template_system.adapters.python_ffmpeg import (
     PythonFFmpegAdapter,
+    RenderAdapterError,
     RenderCancelledError,
     RendererCompatibilityError,
 )
@@ -390,3 +391,141 @@ def test_adapter_refuses_hardlink_alias_of_clean_source(tmp_path):
 
     assert source.read_bytes() == original_bytes
     assert alias.read_bytes() == original_bytes
+
+
+def make_black_source_video(path: Path):
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=black:size=320x240:rate=24:duration=2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_adapter_renders_canonical_caption_recipe_with_word_highlight(tmp_path):
+    source = tmp_path / "black-source.mp4"
+    output = tmp_path / "captioned.mp4"
+    make_black_source_video(source)
+    recipe = TemplateRecipe.model_validate({
+        "canvas": {"width": 360, "height": 640, "fps": 24},
+        "framing": {"mode": "auto"},
+        "background": {"mode": "solid", "color": "#000000"},
+        "captions": {
+            "enabled": True,
+            "font_family": "DejaVu Sans",
+            "font_size_ratio": 0.035,
+            "font_color": "#FFFFFF",
+            "highlight_color": "#FFE500",
+            "outline_color": "#000000",
+            "outline_ratio": 0.002,
+            "position": "bottom",
+            "max_lines": 2,
+            "word_highlight": True,
+            "uppercase": True,
+            "reveal_by_word": True,
+        },
+    })
+    transcript = {
+        "language": "en",
+        "segments": [{
+            "start": 0.2,
+            "end": 1.4,
+            "words": [
+                {"word": " HELLO", "start": 0.2, "end": 0.7},
+                {"word": " WORLD", "start": 0.7, "end": 1.4},
+            ],
+        }],
+    }
+
+    result = PythonFFmpegAdapter(timeout_seconds=120).render(
+        source,
+        output,
+        recipe,
+        caption_transcript=transcript,
+    )
+
+    frame = extract_output_frame(output)
+    bright_pixels = sum(
+        1 for pixel in frame.convert("RGB").getdata()
+        if min(pixel) > 170
+    )
+    assert result.output_path == output.resolve()
+    assert result.compatibility.status == "compatible"
+    assert bright_pixels > 40
+    assert not list(tmp_path.glob("clippy_template_caption_*"))
+
+
+def test_adapter_requires_transcript_when_template_captions_are_enabled(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "captioned.mp4"
+    make_source_video(source)
+    recipe = TemplateRecipe.model_validate({
+        "captions": {"enabled": True},
+    })
+
+    with pytest.raises(RenderAdapterError, match="no clip-relative transcript"):
+        PythonFFmpegAdapter().render(source, output, recipe)
+
+    assert not output.exists()
+
+
+def test_template_service_resolves_uploaded_font_and_passes_caption_context(tmp_path):
+    import hashlib
+
+    from template_system.capabilities import check_compatibility
+    from template_system.models import TemplateAsset
+    from template_system.adapters.python_ffmpeg import RenderResult
+
+    payload = b"stored-font-fixture"
+    asset = TemplateAsset(
+        id="asset_fontfixture",
+        path="assets/asset_fontfixture.ttf",
+        media_type="font/ttf",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    recipe = TemplateRecipe.model_validate({
+        "captions": {
+            "enabled": True,
+            "font_asset_id": asset.id,
+        },
+    })
+    template = TemplateDocument(
+        id="tpl_caption_font01",
+        name="Caption font fixture",
+        recipe=recipe,
+        assets=[asset],
+    )
+    storage = LocalTemplateStorage(tmp_path / "template-library")
+    storage.create(template, asset_payloads={asset.id: payload})
+
+    class CapturingAdapter:
+        def __init__(self):
+            self.kwargs = None
+
+        def render(self, source, output, resolved_recipe, **kwargs):
+            self.kwargs = kwargs
+            return RenderResult(
+                output_path=Path(output).resolve(),
+                source_fingerprint="source",
+                output_fingerprint="output",
+                duration_seconds=1.0,
+                width=360,
+                height=640,
+                frame_rate=24.0,
+                has_audio=False,
+                compatibility=check_compatibility(resolved_recipe, "python_ffmpeg"),
+            )
+
+    adapter = CapturingAdapter()
+    transcript = {"language": "en", "segments": [{"start": 0, "end": 1, "words": []}]}
+    TemplateApplicationService(storage, adapter=adapter).apply(
+        template.id,
+        tmp_path / "source.mp4",
+        tmp_path / "rendered.mp4",
+        caption_transcript=transcript,
+    )
+
+    assert adapter.kwargs["caption_transcript"] == transcript
+    assert Path(adapter.kwargs["font_path"]).read_bytes() == payload
