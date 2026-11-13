@@ -107,7 +107,7 @@ $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
 $env:PIP_CACHE_DIR = Join-Path $ScratchRoot "pip-cache"
 Write-Stage ("Using " + $ScratchRoot + " for temporary setup files; managed runtimes remain in " + $Root)
-foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1")) {
+foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "VERSION")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
     }
@@ -230,7 +230,7 @@ for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
 }
 if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python runtime." }
 
-$PythonStage = Join-Path $ScratchRoot "python-runtime-staging"
+$PythonStage = Join-Path $Runtime "python.installing"
 $PythonBackup = Join-Path $Runtime "python.previous"
 if (Test-Path $PythonStage) { Remove-Item $PythonStage -Recurse -Force }
 if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
