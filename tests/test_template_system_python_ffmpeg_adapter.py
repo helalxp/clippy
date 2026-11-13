@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from PIL import ImageChops, ImageStat
 import shutil
 import subprocess
 from pathlib import Path
@@ -165,6 +166,116 @@ def test_hook_text_is_written_to_a_file_not_interpolated_into_filter_syntax(tmp_
     assert "textfile=" in filter_value
     assert "expansion=none" in filter_value
     assert "enable='between(t,0,3)'" in filter_value
+
+
+def test_adapter_preflight_accepts_supported_motion_and_color_effects():
+    recipe = TemplateRecipe.model_validate({
+        "motion": [{
+            "kind": "slow_zoom",
+            "start_seconds": 0.25,
+            "end_seconds": 1.5,
+            "intensity": 0.2,
+            "center_x": 0.6,
+            "center_y": 0.4,
+        }],
+        "effects": [{
+            "start_seconds": 0.5,
+            "end_seconds": 1.25,
+            "brightness": 1.1,
+            "contrast": 1.2,
+            "saturation": 0.8,
+        }],
+    })
+
+    report = PythonFFmpegAdapter().preflight(recipe)
+
+    assert report.status == "compatible"
+    assert {item.feature for item in report.exact} >= {"motion", "effects"}
+
+
+def test_effect_segment_zoom_is_rejected_instead_of_silently_ignored():
+    recipe = TemplateRecipe.model_validate({
+        "effects": [{
+            "start_seconds": 0.0,
+            "end_seconds": 1.0,
+            "zoom": 1.2,
+        }],
+    })
+
+    with pytest.raises(RendererCompatibilityError, match="effects"):
+        PythonFFmpegAdapter().preflight(recipe)
+
+
+def test_adapter_renders_frame_timed_slow_zoom_motion(tmp_path):
+    source = tmp_path / "motion-source.mp4"
+    baseline = tmp_path / "motion-baseline.mp4"
+    output = tmp_path / "motion-output.mp4"
+    make_source_video(source)
+    adapter = PythonFFmpegAdapter(timeout_seconds=120)
+    adapter.render(source, baseline, recipe_for())
+    recipe = TemplateRecipe.model_validate({
+        "canvas": {"width": 360, "height": 640, "fps": 24},
+        "framing": {"mode": "cover"},
+        "motion": [{
+            "kind": "slow_zoom",
+            "start_seconds": 0.5,
+            "end_seconds": 1.5,
+            "intensity": 0.45,
+            "center_x": 0.65,
+            "center_y": 0.35,
+        }],
+    })
+
+    result = adapter.render(source, output, recipe)
+    before_delta = ImageStat.Stat(ImageChops.difference(
+        extract_output_frame(baseline, seconds=0.2),
+        extract_output_frame(output, seconds=0.2),
+    )).mean
+    active_delta = ImageStat.Stat(ImageChops.difference(
+        extract_output_frame(baseline, seconds=1.0),
+        extract_output_frame(output, seconds=1.0),
+    )).mean
+    after_delta = ImageStat.Stat(ImageChops.difference(
+        extract_output_frame(baseline, seconds=1.8),
+        extract_output_frame(output, seconds=1.8),
+    )).mean
+
+    assert result.duration_seconds == pytest.approx(2.0, abs=0.15)
+    assert result.frame_rate == pytest.approx(24.0, abs=0.15)
+    assert sum(active_delta) > sum(before_delta) + 8
+    assert sum(active_delta) > sum(after_delta) + 8
+
+
+def test_adapter_renders_time_bounded_brightness_effect(tmp_path):
+    source = tmp_path / "effect-source.mp4"
+    output = tmp_path / "effect-output.mp4"
+    built = subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=0x404040:s=320x240:r=24:d=2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], capture_output=True, text=True, timeout=60, check=False)
+    assert built.returncode == 0, built.stderr
+    recipe = TemplateRecipe.model_validate({
+        "canvas": {"width": 360, "height": 640, "fps": 24},
+        "framing": {"mode": "cover"},
+        "effects": [{
+            "start_seconds": 0.5,
+            "end_seconds": 1.5,
+            "brightness": 1.6,
+            "contrast": 1.0,
+            "saturation": 1.0,
+        }],
+    })
+
+    result = PythonFFmpegAdapter(timeout_seconds=120).render(source, output, recipe)
+    before = extract_output_frame(output, seconds=0.2).getpixel((180, 320))
+    active = extract_output_frame(output, seconds=1.0).getpixel((180, 320))
+    after = extract_output_frame(output, seconds=1.8).getpixel((180, 320))
+
+    assert result.compatibility.status == "compatible"
+    assert sum(active) > sum(before) + 80
+    assert sum(active) > sum(after) + 80
+    assert sum(before) == pytest.approx(sum(after), abs=18)
 
 
 def test_adapter_refuses_subject_tracking_and_conflicting_background():
