@@ -930,7 +930,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
                 'best[height<=1080][ext=mp4]/best[ext=mp4]/best')
 
     def _base_opts(extractor_args, proxy, cookies=True):
-        return {
+        opts = {
             'quiet': False, 'verbose': True, 'no_warnings': False,
             'cookiefile': cookies_path if (cookies and cookies_path) else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
@@ -948,6 +948,11 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
                 ),
             },
         }
+        # Only the native Windows launcher supplies this managed path. Keep the
+        # Docker/self-host Deno default unchanged.
+        if os.environ.get('CLIPPY_NODE_EXE'):
+            opts['js_runtimes'] = {'node': {'path': os.environ['CLIPPY_NODE_EXE']}}
+        return opts
 
     # Wire bytes actually pulled through the (paid) proxy, summed across
     # fragments/streams. Reported to app.py via the PROXY_BYTES= line below.

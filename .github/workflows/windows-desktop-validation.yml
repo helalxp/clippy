@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - windows-installer-release
+      - windows-installer-hardening
   pull_request:
     branches:
       - windows-installer-release
@@ -32,7 +33,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12.10"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,6 +56,10 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
+          Import-Module Pester -MinimumVersion 5.0 -Force
+          Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
@@ -65,6 +70,9 @@ jobs:
 
       - name: Check Tauri Rust application
         run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Run Rust unit and manifest compatibility tests
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
       - name: Build complete NSIS installer
         shell: pwsh
@@ -146,9 +154,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clippy-python-runtime-${{ matrix.variant }}
-          path: |
-            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip
-            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip.sha256
+          path: desktop/runtime-dist/clippy-python-${{ matrix.variant }}*
           if-no-files-found: error
           retention-days: 7
 

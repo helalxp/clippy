@@ -6,6 +6,29 @@ function getDesktopApi() {
 
 const LOG_PATH = '%LOCALAPPDATA%\\Clippy\\logs\\runtime-setup.log';
 
+// Attach the per-launch token to every browser fetch targeting Clippy's local
+// backend, including legacy call sites that do not use the shared apiFetch().
+function installLocalApiAuth(token, baseUrl) {
+  const nativeFetch = window.__CLIPPY_NATIVE_FETCH__ || window.fetch.bind(window);
+  window.__CLIPPY_NATIVE_FETCH__ = nativeFetch;
+  const apiOrigin = new URL(baseUrl).origin;
+  window.fetch = (input, init = {}) => {
+    let target;
+    try {
+      const rawUrl = input instanceof Request ? input.url : input;
+      target = new URL(rawUrl, window.location.href);
+    } catch {
+      return nativeFetch(input, init);
+    }
+    if (target.origin !== apiOrigin) return nativeFetch(input, init);
+
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init.headers || {}).forEach((value, key) => headers.set(key, value));
+    headers.set('X-Clippy-Token', token);
+    return nativeFetch(input, { ...init, headers });
+  };
+}
+
 export default function DesktopRuntimeGate({ children }) {
   const tauri = getDesktopApi();
   const invoke = tauri?.core?.invoke;
@@ -14,6 +37,8 @@ export default function DesktopRuntimeGate({ children }) {
     status: isDesktop ? 'checking' : 'ready',
     phase: 'startup',
     stage: 'Checking your Clippy installation…',
+    component: '',
+    progress: null,
     error: '',
     logPath: LOG_PATH,
   });
@@ -57,7 +82,21 @@ export default function DesktopRuntimeGate({ children }) {
         phase: 'startup',
         stage: 'Starting Clippy services…',
       }));
-      await invoke('start_services');
+      const services = await invoke('start_services');
+      if (!services?.backend_url) {
+        throw new Error('Clippy services started without returning a backend address.');
+      }
+      // The supervisor selects available loopback ports at runtime. Install the
+      // resolved base URL before rendering the application so every API client
+      // uses the same managed backend rather than a compile-time fixed port.
+      window.__CLIPPY_API_BASE_URL__ = services.backend_url;
+      window.__CLIPPY_RENDERER_URL__ = services.renderer_url || '';
+      const localApiToken = await invoke('get_api_token');
+      if (!localApiToken) {
+        throw new Error('Clippy did not provide its per-launch local API token.');
+      }
+      window.__CLIPPY_API_TOKEN__ = localApiToken;
+      installLocalApiAuth(localApiToken, services.backend_url);
       setState((current) => ({
         ...current,
         status: 'ready',
@@ -88,6 +127,8 @@ export default function DesktopRuntimeGate({ children }) {
             ...current,
             phase: 'setup',
             stage: payload.stage || current.stage,
+            component: payload.component || current.component,
+            progress: typeof payload.progress === 'number' ? payload.progress : current.progress,
             logPath: payload.logPath || current.logPath,
           }));
         });
@@ -146,8 +187,17 @@ export default function DesktopRuntimeGate({ children }) {
 
           {!failed ? (
             <div className="space-y-4">
+              {state.component && (
+                <div className="flex items-center justify-between gap-3 text-[11px] text-white/45">
+                  <span className="min-w-0 truncate">{state.component}</span>
+                  {state.progress !== null && <span className="shrink-0 tabular-nums text-amber-100/80">{Math.round(state.progress)}%</span>}
+                </div>
+              )}
               <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
-                <div className="h-full w-1/3 animate-[setup-progress_2.2s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-amber-700 to-amber-200" />
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r from-amber-700 to-amber-200 transition-[width] duration-300 ${state.progress === null ? 'w-1/3 animate-[setup-progress_2.2s_ease-in-out_infinite]' : ''}`}
+                  style={state.progress !== null ? { width: `${Math.max(0, Math.min(100, state.progress))}%` } : undefined}
+                />
               </div>
               {firstRun ? (
                 <>

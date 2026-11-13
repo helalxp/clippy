@@ -22,11 +22,10 @@ expected under desktop\src-tauri\target\release\bundle\nsis.
 
 IMPORTANT: this is still an engineering preview, not yet a production release.
 The first-run script now provisions private Python, Node.js, FFmpeg, Python
-packages, PyTorch (CUDA 12.6 on detected NVIDIA systems, CPU otherwise), and
+packages, PyTorch CUDA 12.8 on supported NVIDIA systems (driver and compute-capability checked), CPU otherwise, and
 Remotion's browser runtime. It verifies upstream signatures/checksums and
 records the installed runtime state. The complete flow still needs clean-
-machine testing, including dependency compatibility, UAC behavior, interrupted
-downloads, GPU variants, and repair before distribution.
+machine testing, including clean-machine install/repair, UAC behavior, interrupted downloads, YouTube URL ingest, GPU variants, process-tree cleanup, and signed release validation before distribution.
 
 ## Expected managed service layout
 
@@ -58,6 +57,4 @@ WebView2, Node.js LTS, and npm. From desktop/src-tauri:
 
     cargo tauri dev
 
-The packaged dashboard build sets VITE_API_URL to
-http://127.0.0.1:8000. The normal web development build retains its Vite
-proxy-based relative API behavior.
+The packaged dashboard build leaves VITE_API_URL empty. The desktop supervisor allocates dynamic loopback ports and provides a per-launch API token; the dashboard receives the resolved backend URL at startup. The normal web development build retains its Vite proxy-based relative API behavior.

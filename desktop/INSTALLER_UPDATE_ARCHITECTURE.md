@@ -1,6 +1,6 @@
 # Windows Installer and Update Architecture
 
-Status: migration design for `windows-installer-release`
+Status: hardening implementation in draft PR #10 (`windows-installer-hardening`); not yet approved for production release
 Scope: Windows desktop packaging, runtime delivery, installation, repair, and updates.
 Out of scope for this migration: accounts, billing, cloud authorization, and brand workspaces.
 
@@ -14,17 +14,17 @@ Out of scope for this migration: accounts, billing, cloud authorization, and bra
 6. Installation and update operations are staged, verified, recoverable, and observable.
 7. The existing video pipeline and exported media behavior remain unchanged.
 
-## Current implementation (verified on windows-installer-release)
+## Current hardening implementation (under validation on windows-installer-hardening)
 
 - Tauri 2 builds an NSIS installer.
 - `prepare-payload.ps1` stages Python source, requirements, assets, renderer output, Remotion source, and production Node dependencies into `app-payload.zip`.
 - The Tauri installer embeds that application payload and its SHA-256 file.
-- On first launch, `setup-runtime.ps1` downloads a release-published CPU or NVIDIA/CUDA 12.6 Python runtime archive. Windows CI assembles the archive from official CPython 3.12.10 and the pinned application requirements, then verifies imports and relocation before publishing it with a SHA-256 sidecar. Customer machines do not run pip or install Python packages individually.
-- Node 22.23.3 and FFmpeg essentials are still provisioned by first-run setup; Remotion still ensures its browser runtime during setup.
+- On first launch, `setup-runtime.ps1` downloads a release-published CPU or NVIDIA/CUDA 12.8 Python runtime archive. CUDA selection checks the minimum Windows driver and GPU compute capability before choosing the CUDA package. Windows CI assembles the archive from official CPython 3.12.10 and the pinned application requirements, then verifies imports and relocation before publishing it with a SHA-256 sidecar. Customer machines do not run pip or install Python packages individually.
+- Node 22.23.3 and FFmpeg essentials are provisioned by first-run setup and verified against publisher SHA-256 sidecars. The Remotion browser is stored outside replaceable app payloads, verified by Authenticode publisher and recorded SHA-256, then reused across app updates.
 - The runtime is installed under `%LOCALAPPDATA%\Clippy\runtime`; application payload is extracted under `%LOCALAPPDATA%\Clippy\app\current`.
 - The current release notes describe a manual installer update. There is no configured Tauri updater in the inspected Tauri configuration.
-- The current installer payload hash detects accidental corruption, but it is not a publisher signature or a complete software-update trust chain.
-- The setup script selects the prebuilt CUDA 12.6 archive when `nvidia-smi` succeeds, otherwise the CPU archive. The two variants are built and validated independently.
+- The installer payload hash detects accidental corruption. Public release automation now refuses to publish an unsigned NSIS installer; it requires the configured Authenticode certificate secrets. This is still separate from the future signed component-manifest updater.
+- The setup script selects the prebuilt CUDA 12.8 archive only when the NVIDIA driver is at least 570.65 and compute capability is at least 7.0; otherwise it selects the CPU archive. Both runtime variants are built independently and checked for package imports, relocation, and required CUDA DLLs. The installed CUDA path is smoke-tested with a real PyTorch kernel and CTranslate2 device enumeration.
 
 ## Target installation layout
 
@@ -55,7 +55,7 @@ Keep the install root private to Clippy and keep mutable user data outside versi
   runtime-manifest.json
 ```
 
-The precise directory names may be adjusted during implementation, but immutable versioned components must not be overwritten in place. A small active-version pointer selects the currently active application/runtime set.
+The current implementation keeps the Remotion browser and user data outside `app/current`; the broader immutable component-version layout remains a future updater milestone. A small active-version pointer selects the currently active application/runtime set.
 
 ## Initial installer
 

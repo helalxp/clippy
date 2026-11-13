@@ -1,11 +1,10 @@
 mod supervisor;
-mod downloader;
 mod bootstrap;
 
 use std::sync::Mutex;
 use supervisor::{ServiceStatus, Supervisor};
 use bootstrap::Bootstrap;
-use tauri::State;
+use tauri::Manager;
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -147,22 +146,48 @@ fn reveal_clip_download(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn start_services(state: State<'_, Mutex<Supervisor>>) -> Result<ServiceStatus, String> {
-    state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.start()
+async fn start_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<Supervisor>>();
+        let result = state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.start();
+        result
+    }).await.map_err(|e| format!("Service startup worker failed: {e}"))?
 }
 
 #[tauri::command]
-fn stop_services(state: State<'_, Mutex<Supervisor>>) -> Result<ServiceStatus, String> {
-    state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.stop()
+fn get_api_token(app: tauri::AppHandle) -> Result<String, String> {
+    let state = app.state::<Mutex<Supervisor>>();
+    let result = state.lock()
+        .map_err(|_| "Service supervisor is unavailable".to_string())?
+        .api_token();
+    result
 }
 
 #[tauri::command]
-fn service_status(state: State<'_, Mutex<Supervisor>>) -> Result<ServiceStatus, String> {
-    state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.status()
+async fn stop_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<Supervisor>>();
+        let result = state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.stop();
+        result
+    }).await.map_err(|e| format!("Service shutdown worker failed: {e}"))?
 }
 
 #[tauri::command]
-fn check_runtime() -> Result<bootstrap::BootstrapStatus, String> {
+async fn service_status(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<Supervisor>>();
+        let result = state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.status();
+        result
+    }).await.map_err(|e| format!("Service status worker failed: {e}"))?
+}
+
+#[tauri::command]
+async fn check_runtime() -> Result<bootstrap::BootstrapStatus, String> {
+    tauri::async_runtime::spawn_blocking(check_runtime_blocking)
+        .await.map_err(|e| format!("Runtime validation worker failed: {e}"))?
+}
+
+fn check_runtime_blocking() -> Result<bootstrap::BootstrapStatus, String> {
     let local = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| "LOCALAPPDATA not found".to_string())?;
@@ -176,9 +201,13 @@ fn check_runtime() -> Result<bootstrap::BootstrapStatus, String> {
     bootstrap.get_status()
 }
 
-
 #[tauri::command]
-fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
+async fn install_app_payload(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install_app_payload_blocking(app))
+        .await.map_err(|e| format!("Application payload worker failed: {e}"))?
+}
+
+fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String> {
     use std::{fs, path::PathBuf};
     use tauri::Manager;
 
@@ -348,8 +377,24 @@ fn setup_runtime_blocking(app: tauri::AppHandle) -> Result<String, String> {
         if recent.len() >= 80 { recent.remove(0); }
         recent.push(line.clone());
         let stage = line.split("[Clippy setup] ").nth(1).unwrap_or(&line).to_string();
+        let mut component: Option<String> = None;
+        let mut progress: Option<f32> = None;
+        if let Some(rest) = stage.strip_prefix("Downloading ") {
+            component = Some(rest.split(';').next().unwrap_or(rest).to_string());
+            progress = Some(0.0);
+        }
+        if let Some((name, rest)) = stage.split_once(": ") {
+            if let Some((value, _)) = rest.split_once('%') {
+                if let Ok(parsed) = value.trim().parse::<f32>() {
+                    component = Some(name.to_string());
+                    progress = Some(parsed.clamp(0.0, 100.0));
+                }
+            }
+        }
         let _ = app.emit("clippy://runtime-setup-progress", serde_json::json!({
             "stage": stage,
+            "component": component,
+            "progress": progress,
             "stream": stream_name,
             "logPath": log_path.to_string_lossy()
         }));
@@ -386,6 +431,7 @@ pub fn run() {
             start_services,
             stop_services,
             service_status,
+            get_api_token,
             check_runtime,
             install_app_payload,
             setup_runtime,

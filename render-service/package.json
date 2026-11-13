@@ -8,7 +8,7 @@
     "test": "node --import tsx --test src/composition-metadata.test.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test:unit": "node --import tsx --test src/paths.test.ts"
+    "test:unit": "node --import tsx --test src/paths.test.ts src/auth.test.ts"
   },
   "dependencies": {
     "@remotion/bundler": "^4.0.0",
