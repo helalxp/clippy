@@ -301,3 +301,30 @@ def test_missing_optional_source_does_not_block_clip_archival(tmp_path):
     assert project["clip_count"] == 1
     assert project["source_video"]["retained"] is False
     assert project["source_video"]["retention_warning"]
+
+
+
+def test_project_deleted_during_archive_cannot_be_published(tmp_path, monkeypatch):
+    import local_library as library_module
+
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    original_copy = library_module._copy_verified
+    deleted_during_copy = False
+
+    def delete_then_copy(source, destination):
+        nonlocal deleted_during_copy
+        if not deleted_during_copy:
+            deleted_during_copy = True
+            library.delete_project(JOB_ID)
+        return original_copy(source, destination)
+
+    monkeypatch.setattr(library_module, "_copy_verified", delete_then_copy)
+
+    with pytest.raises(FileNotFoundError, match="deleted from the Library"):
+        library.archive_job(JOB_ID, output, {}, result)
+
+    assert deleted_during_copy is True
+    assert library.is_deleted(JOB_ID) is True
+    assert not library._project_dir(JOB_ID).exists()
+    assert not any(item.name.startswith(f".{JOB_ID}.") for item in library.projects_dir.iterdir())
