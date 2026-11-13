@@ -87,12 +87,18 @@ class TemplateApplicationService:
                 raise ValueError("caption font_asset_id must reference a stored font asset")
 
         overlay_asset_paths: dict[str, Path] = {}
+        overlay_font_paths: dict[str, Path] = {}
         for overlay in resolved.recipe.overlays:
             if overlay.asset_id:
                 overlay_asset, overlay_asset_path = self.storage.get_asset(template_id, overlay.asset_id)
                 if not overlay_asset.media_type.startswith("image/"):
                     raise ValueError("overlay asset_id must reference a stored image asset")
                 overlay_asset_paths[overlay.asset_id] = overlay_asset_path
+            if overlay.font_asset_id:
+                overlay_font, overlay_font_path = self.storage.get_asset(template_id, overlay.font_asset_id)
+                if not overlay_font.media_type.startswith("font/"):
+                    raise ValueError("text overlay font_asset_id must reference a stored font asset")
+                overlay_font_paths[overlay.font_asset_id] = overlay_font_path
 
         hook_font_path = None
         hook_font_asset_id = resolved.recipe.hook.font_asset_id if resolved.recipe.hook.enabled else None
@@ -113,6 +119,7 @@ class TemplateApplicationService:
             font_path=font_path,
             hook_font_path=hook_font_path,
             overlay_asset_paths=overlay_asset_paths,
+            overlay_font_paths=overlay_font_paths,
         )
         return TemplateApplicationResult(
             template_id=template.id,
