@@ -14,6 +14,7 @@ import time
 import zipfile
 import math
 import itertools
+import inspect
 import functools
 import asyncio
 import signal
@@ -43,6 +44,23 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Template assets and manifests have a separate lifecycle from generated job
+# outputs. Never place the template library under OUTPUT_DIR: output cleanup,
+# job archival, and regeneration must not delete user-created templates.
+TEMPLATE_LIBRARY_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get(
+        "TEMPLATE_LIBRARY_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "template_library"),
+    )
+))
+try:
+    _template_output_common = os.path.commonpath([
+        TEMPLATE_LIBRARY_DIR, os.path.abspath(OUTPUT_DIR)
+    ])
+except ValueError:
+    _template_output_common = None
+if _template_output_common == os.path.abspath(OUTPUT_DIR):
+    raise RuntimeError("TEMPLATE_LIBRARY_DIR must not be inside OUTPUT_DIR")
 
 # First-run wizard state
 _FIRST_RUN = True
@@ -4620,6 +4638,28 @@ _FRAMING_STRATEGIES = {"auto": None, "full": "WIDE", "track": "TRACK"}
 # share metadata.json and the canonical files, so they must not interleave.
 _rerender_locks: Dict[str, asyncio.Lock] = {}
 
+
+def _serialize_job_edit(endpoint):
+    """Serialize metadata-mutating editor routes against the per-job edit lock.
+
+    The lock covers the complete read/modify/render/write operation, not merely
+    the final metadata write. Endpoints that already acquire this lock directly
+    (rerender, reframe, template apply) must not use this decorator.
+    """
+    @functools.wraps(endpoint)
+    async def wrapped(*args, **kwargs):
+        bound = inspect.signature(endpoint).bind_partial(*args, **kwargs)
+        req = bound.arguments.get("req")
+        job_id = getattr(req, "job_id", None) or bound.arguments.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            raise RuntimeError(
+                f"{endpoint.__name__} must expose a non-empty job_id or req.job_id"
+            )
+        lock = _rerender_locks.setdefault(job_id, asyncio.Lock())
+        async with lock:
+            return await endpoint(*args, **kwargs)
+    return wrapped
+
 # Scene-listing builds write stable preview/thumbnail names per job; serialize
 # them so overlapping editor opens don't tear each other's files.
 _scenes_locks: Dict[str, asyncio.Lock] = {}
@@ -4807,7 +4847,627 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _template_library_for_request(request):
+    """Return the local template library isolated to the authenticated owner."""
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Template library management is disabled in managed mode until "
+                "durable per-user storage and lifecycle guarantees are available."
+            ),
+        )
+    await require_managed_entitlement(request)
+    owner_id = await _owner_id(request)
+    storage_scope = hashlib.sha256(
+        str(owner_id or "local-installation").encode("utf-8")
+    ).hexdigest()[:32]
+    from template_system.storage import LocalTemplateStorage
+    return LocalTemplateStorage(os.path.join(TEMPLATE_LIBRARY_DIR, storage_scope))
+
+
+def _template_document_response(document):
+    return document.to_storage_dict()
+
+
+@app.get("/api/templates")
+async def list_templates(request: Request):
+    """List templates belonging to the current local installation or owner."""
+    storage = await _template_library_for_request(request)
+    documents = await asyncio.to_thread(storage.list)
+    return {"templates": [_template_document_response(item) for item in documents]}
+
+
+@app.post("/api/templates", status_code=201)
+async def create_template(payload: Dict[str, Any], request: Request):
+    """Create a local template manifest. Asset bytes use a separate upload flow."""
+    from template_system.models import TemplateDocument
+    from template_system.storage import TemplateAlreadyExists
+
+    storage = await _template_library_for_request(request)
+    try:
+        document = TemplateDocument.model_validate(payload)
+        if document.assets:
+            raise HTTPException(
+                status_code=422,
+                detail="Template asset upload is not available yet; create asset-free templates only.",
+            )
+        created = await asyncio.to_thread(storage.create, document)
+    except TemplateAlreadyExists:
+        raise HTTPException(status_code=409, detail="Template already exists")
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid template: {exc}")
+    return {"template": _template_document_response(created)}
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: str, request: Request):
+    """Fetch one template from the current owner's isolated library."""
+    from template_system.storage import TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        document = await asyncio.to_thread(storage.get, template_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"template": _template_document_response(document)}
+
+
+@app.put("/api/templates/{template_id}")
+async def update_template(
+    template_id: str,
+    payload: Dict[str, Any],
+    request: Request,
+):
+    """Update a template with optimistic revision checking."""
+    from template_system.models import TemplateDocument
+    from template_system.storage import TemplateNotFound, TemplateRevisionConflict
+
+    storage = await _template_library_for_request(request)
+    expected_revision = payload.get("expected_revision")
+    raw_document = payload.get("template")
+    if type(expected_revision) is not int or expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be a positive integer")
+    if not isinstance(raw_document, dict):
+        raise HTTPException(status_code=422, detail="template must be an object")
+    try:
+        document_data = dict(raw_document)
+        document_data["revision"] = expected_revision + 1
+        document_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        document = TemplateDocument.model_validate(document_data)
+        if document.id != template_id:
+            raise HTTPException(status_code=422, detail="Template id does not match the URL")
+        updated = await asyncio.to_thread(
+            storage.update,
+            document,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid template: {exc}")
+    return {"template": _template_document_response(updated)}
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: str, request: Request):
+    """Delete one template and its owned assets from the current library."""
+    from template_system.storage import TemplateNotFound, TemplateRevisionConflict
+
+    storage = await _template_library_for_request(request)
+    raw_expected_revision = request.query_params.get("expected_revision")
+    if not raw_expected_revision or not raw_expected_revision.isdecimal():
+        raise HTTPException(
+            status_code=422,
+            detail="expected_revision query parameter must be a positive integer",
+        )
+    expected_revision = int(raw_expected_revision)
+    if expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be positive")
+    try:
+        await asyncio.to_thread(
+            storage.delete,
+            template_id,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"success": True, "template_id": template_id}
+
+
+@app.post("/api/templates/{template_id}/assets", status_code=201)
+async def upload_template_asset(template_id: str, request: Request):
+    """Upload one bounded image or OpenType/TrueType font asset."""
+    import io
+    import warnings
+    from PIL import Image, UnidentifiedImageError
+    from template_system.assets import inspect_font_payload
+    from template_system.models import TemplateAsset
+    from template_system.storage import (
+        TemplateIntegrityError,
+        TemplateNotFound,
+        TemplateRevisionConflict,
+    )
+
+    max_image_bytes = 20 * 1024 * 1024
+    max_font_bytes = 25 * 1024 * 1024
+    max_upload_bytes = max_font_bytes
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdecimal():
+        if int(content_length) > max_upload_bytes + 64 * 1024:
+            raise HTTPException(status_code=413, detail="Template asset exceeds the supported size limit")
+
+    try:
+        form = await request.form(max_files=1, max_fields=1)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Expected a multipart upload") from exc
+    upload = form.get("file")
+    raw_expected_revision = form.get("expected_revision")
+    if not hasattr(upload, "read") or not hasattr(upload, "filename"):
+        raise HTTPException(status_code=422, detail="A file field is required")
+    uploaded_size = getattr(upload, "size", None)
+    if isinstance(uploaded_size, int) and uploaded_size > max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Template asset exceeds the supported size limit")
+    if not isinstance(raw_expected_revision, str) or not raw_expected_revision.isdecimal():
+        raise HTTPException(status_code=422, detail="expected_revision must be a positive integer")
+    expected_revision = int(raw_expected_revision)
+    if expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be positive")
+
+    try:
+        payload = await upload.read(max_upload_bytes + 1)
+    finally:
+        close = getattr(upload, "close", None)
+        if close is not None:
+            await close()
+    if not payload:
+        raise HTTPException(status_code=422, detail="Template asset is empty")
+    if len(payload) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Template asset exceeds the supported size limit")
+
+    signatures = (
+        (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
+        (b"\xff\xd8\xff", "image/jpeg", "jpg"),
+    )
+    detected_image = next(
+        ((mime, extension) for signature, mime, extension in signatures
+         if payload.startswith(signature)),
+        None,
+    )
+    if detected_image is None and payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
+        detected_image = ("image/webp", "webp")
+
+    width = height = None
+    supplied_type = getattr(upload, "content_type", None)
+    if detected_image is not None:
+        if len(payload) > max_image_bytes:
+            raise HTTPException(status_code=413, detail="Image assets are limited to 20 MB")
+        media_type, extension = detected_image
+        accepted_types = {media_type, "application/octet-stream"}
+        if supplied_type and supplied_type not in accepted_types:
+            raise HTTPException(status_code=415, detail="Uploaded MIME type does not match the image content")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(payload)) as image:
+                    image_format = image.format
+                    width, height = image.size
+                    if width < 1 or height < 1 or width > 16384 or height > 16384:
+                        raise HTTPException(status_code=413, detail="Image dimensions exceed the supported limit")
+                    if width * height > 50_000_000:
+                        raise HTTPException(status_code=413, detail="Image pixel count exceeds the supported limit")
+                    image.verify()
+        except HTTPException:
+            raise
+        except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning, OSError) as exc:
+            raise HTTPException(status_code=415, detail="Uploaded image is invalid or unsafe") from exc
+        expected_format = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[media_type]
+        if image_format != expected_format:
+            raise HTTPException(status_code=415, detail="Image signature and decoded format do not match")
+    else:
+        try:
+            media_type, extension = inspect_font_payload(payload)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported or invalid template asset: {exc}",
+            ) from exc
+        accepted_types = {
+            "font/ttf": {"font/ttf", "application/x-font-ttf", "application/octet-stream"},
+            "font/otf": {
+                "font/otf",
+                "application/vnd.ms-opentype",
+                "application/x-font-opentype",
+                "application/octet-stream",
+            },
+        }[media_type]
+        if supplied_type and supplied_type not in accepted_types:
+            raise HTTPException(status_code=415, detail="Uploaded MIME type does not match the font content")
+
+    asset_id = f"asset_{uuid.uuid4().hex}"
+    asset = TemplateAsset(
+        id=asset_id,
+        path=f"assets/{asset_id}.{extension}",
+        media_type=media_type,
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        width=width,
+        height=height,
+    )
+    storage = await _template_library_for_request(request)
+    try:
+        updated = await asyncio.to_thread(
+            storage.add_asset,
+            template_id,
+            asset,
+            payload,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (TemplateIntegrityError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "asset": asset.model_dump(mode="json"),
+        "template_revision": updated.revision,
+    }
+
+
+@app.get("/api/templates/{template_id}/assets/{asset_id}")
+async def get_template_asset(template_id: str, asset_id: str, request: Request):
+    """Serve a verified image asset from the current owner's template library."""
+    from template_system.storage import TemplateAssetNotFound, TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        asset, path = await asyncio.to_thread(storage.get_asset, template_id, asset_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateAssetNotFound:
+        raise HTTPException(status_code=404, detail="Template asset not found")
+    return FileResponse(
+        path,
+        media_type=asset.media_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.delete("/api/templates/{template_id}/assets/{asset_id}")
+async def delete_template_asset(template_id: str, asset_id: str, request: Request):
+    """Remove an unreferenced asset with optimistic revision protection."""
+    from template_system.storage import (
+        TemplateAssetInUse,
+        TemplateAssetNotFound,
+        TemplateNotFound,
+        TemplateRevisionConflict,
+    )
+
+    raw_expected_revision = request.query_params.get("expected_revision")
+    if not raw_expected_revision or not raw_expected_revision.isdecimal():
+        raise HTTPException(
+            status_code=422,
+            detail="expected_revision query parameter must be a positive integer",
+        )
+    expected_revision = int(raw_expected_revision)
+    if expected_revision < 1:
+        raise HTTPException(status_code=422, detail="expected_revision must be positive")
+
+    storage = await _template_library_for_request(request)
+    try:
+        updated = await asyncio.to_thread(
+            storage.remove_asset,
+            template_id,
+            asset_id,
+            expected_revision=expected_revision,
+        )
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except TemplateAssetNotFound:
+        raise HTTPException(status_code=404, detail="Template asset not found")
+    except TemplateAssetInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except TemplateRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "success": True,
+        "asset_id": asset_id,
+        "template_revision": updated.revision,
+    }
+
+
+@app.get("/api/templates/{template_id}/export")
+async def export_template(template_id: str, request: Request):
+    """Download one verified template as a versioned .clippy-template ZIP."""
+    from fastapi.responses import Response
+    from template_system.packages import TemplatePackageError, export_template_package
+    from template_system.storage import TemplateNotFound
+
+    storage = await _template_library_for_request(request)
+    try:
+        package = await asyncio.to_thread(export_template_package, storage, template_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found")
+    except (TemplatePackageError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return Response(
+        content=package,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{template_id}.clippy-template.zip"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/templates/import", status_code=201)
+async def import_template(request: Request):
+    """Import a bounded, versioned .clippy-template package into the local library."""
+    from template_system.packages import (
+        MAX_ARCHIVE_BYTES,
+        TemplatePackageError,
+        import_template_package,
+    )
+    from template_system.storage import TemplateIntegrityError
+
+    storage = await _template_library_for_request(request)
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdecimal():
+        if int(content_length) > MAX_ARCHIVE_BYTES + 64 * 1024:
+            raise HTTPException(status_code=413, detail="Template package exceeds the 100 MB limit")
+    try:
+        form = await request.form(max_files=1, max_fields=1)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Expected a multipart template package upload") from exc
+    upload = form.get("file")
+    if not hasattr(upload, "read") or not hasattr(upload, "filename"):
+        raise HTTPException(status_code=422, detail="A package file field is required")
+    supplied_type = getattr(upload, "content_type", None)
+    if supplied_type and supplied_type not in {
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/octet-stream",
+    }:
+        raise HTTPException(status_code=415, detail="Template package must be a ZIP file")
+    uploaded_size = getattr(upload, "size", None)
+    if isinstance(uploaded_size, int) and uploaded_size > MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="Template package exceeds the 100 MB limit")
+    try:
+        payload = await upload.read(MAX_ARCHIVE_BYTES + 1)
+    finally:
+        close = getattr(upload, "close", None)
+        if close is not None:
+            await close()
+    if len(payload) > MAX_ARCHIVE_BYTES:
+        raise HTTPException(status_code=413, detail="Template package exceeds the 100 MB limit")
+    try:
+        imported = await asyncio.to_thread(import_template_package, storage, payload)
+    except (TemplatePackageError, TemplateIntegrityError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Template package rejected: {exc}") from exc
+    return {"template": _template_document_response(imported)}
+
+
+class TemplateApplyRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    template_id: str
+    job_overrides: Optional[Dict[str, Any]] = None
+    clip_overrides: Optional[Dict[str, Any]] = None
+    locks: Optional[Dict[str, Any]] = None
+    allow_approximate: bool = False
+
+
+@app.post("/api/template/apply")
+async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
+    """Apply a stored template to a clean canonical clip and persist provenance.
+
+    This endpoint deliberately starts from <base>_clip_<n>.mp4, never the
+    currently served derivative. Reapplying a template therefore replaces the
+    previous delivery treatment instead of stacking filters and burned pixels.
+    """
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Template application is disabled in managed mode until the template "
+                "library has durable per-user storage. Local/self-hosted mode remains available."
+            ),
+        )
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    metadata_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not metadata_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+
+    # Serialize with rerender/reframe, which also use this per-job lock and
+    # update the same metadata document. Read metadata only after acquiring it.
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        metadata_path = metadata_files[0]
+        with open(metadata_path, "r", encoding="utf-8") as stream:
+            metadata = json.load(stream)
+        clips = metadata.get("shorts", [])
+        if req.clip_index < 0 or req.clip_index >= len(clips):
+            raise HTTPException(status_code=404, detail="Clip not found")
+
+        base_name = os.path.basename(metadata_path).replace("_metadata.json", "")
+        clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+        clean_source = os.path.join(output_dir, clean_name)
+        if not os.path.isfile(clean_source):
+            raise HTTPException(
+                status_code=409,
+                detail="The clean canonical clip is unavailable. Restore or regenerate the job before applying a template.",
+            )
+
+        owner_id = await _owner_id(request)
+        storage_scope = hashlib.sha256(
+            str(owner_id or "local-installation").encode("utf-8")
+        ).hexdigest()[:32]
+        template_root = os.path.join(TEMPLATE_LIBRARY_DIR, storage_scope)
+
+        from template_system.service import TemplateApplicationService
+        from template_system.storage import LocalTemplateStorage, TemplateNotFound
+        from template_system.adapters.python_ffmpeg import (
+            RenderAdapterError,
+            RendererCompatibilityError,
+        )
+
+        output_name = (
+            f"template_{int(time.time())}_{uuid.uuid4().hex[:10]}_{clean_name}"
+        )
+        output_path = os.path.join(output_dir, output_name)
+        rendered = None
+        served_name = None
+        metadata_committed = False
+        try:
+            storage = LocalTemplateStorage(template_root)
+            service = TemplateApplicationService(storage)
+            template_document = await asyncio.to_thread(storage.get, req.template_id)
+            caption_transcript = None
+            caption_split_ranges = None
+            clip_data = clips[req.clip_index]
+            if template_document.recipe.captions.enabled:
+                source_transcript = metadata.get("transcript")
+                edited_caption_words = clip_data.get("caption_words")
+                if edited_caption_words:
+                    caption_transcript = _words_transcript(
+                        edited_caption_words,
+                        (source_transcript or {}).get("language", "en"),
+                    )
+                else:
+                    if not isinstance(source_transcript, dict):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="This template enables captions, but the source job has no saved transcript.",
+                        )
+                    recipe_segments = (clip_data.get("recipe") or {}).get("segments")
+                    if not recipe_segments:
+                        clip_start = float(clip_data.get("start", 0) or 0)
+                        clip_end = float(clip_data.get("end", 0) or 0)
+                        if clip_end <= clip_start:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="This clip has no valid transcript time range for template captions.",
+                            )
+                        recipe_segments = [{"start": clip_start, "end": clip_end}]
+                    caption_transcript = recut.virtual_transcript(
+                        source_transcript,
+                        recipe_segments,
+                    )
+                caption_split_ranges = layout_ranges.split_ranges(
+                    clip_data.get("layout_ranges") or layout_ranges.read(clean_source)
+                )
+
+            rendered = await asyncio.to_thread(
+                service.apply,
+                req.template_id,
+                clean_source,
+                output_path,
+                job_overrides=req.job_overrides,
+                clip_overrides=req.clip_overrides,
+                locks=req.locks,
+                allow_approximate=req.allow_approximate,
+                caption_transcript=caption_transcript,
+                caption_split_ranges=caption_split_ranges,
+            )
+            served_name = await _deliver(request, req.job_id, output_name)
+            new_video_url = f"/videos/{req.job_id}/{served_name}"
+            application_record = rendered.to_dict()
+            application_record["served_filename"] = served_name
+            application_record["source_filename"] = clean_name
+
+            clip = clips[req.clip_index]
+            updates = {
+                "video_url": new_video_url,
+                "template_id": rendered.template_id,
+                "template_recipe": rendered.resolved_recipe.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "template_application": application_record,
+            }
+            clip.update(updates)
+            metadata["shorts"] = clips
+
+            # Write beside the original and replace atomically. A crash cannot
+            # leave a half-written metadata document pointing at a partial edit.
+            temporary_metadata = metadata_path + f".{uuid.uuid4().hex}.tmp"
+            try:
+                with open(temporary_metadata, "x", encoding="utf-8") as stream:
+                    json.dump(metadata, stream, indent=2)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary_metadata, metadata_path)
+                metadata_committed = True
+            finally:
+                if os.path.exists(temporary_metadata):
+                    os.remove(temporary_metadata)
+
+            memory_clips = (job.get("result") or {}).get("clips") or []
+            if req.clip_index < len(memory_clips):
+                memory_clips[req.clip_index].update(updates)
+            _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+
+            return {
+                "success": True,
+                "new_video_url": new_video_url,
+                "template_application": application_record,
+                "compatibility": rendered.render.compatibility.as_dict(),
+            }
+        except HTTPException:
+            if not metadata_committed and rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            if not metadata_committed and served_name and served_name != output_name:
+                try:
+                    os.remove(os.path.join(output_dir, served_name))
+                except FileNotFoundError:
+                    pass
+            raise
+        except TemplateNotFound:
+            if not metadata_committed and rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=404, detail="Template not found")
+        except RendererCompatibilityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except RenderAdapterError as exc:
+            if not metadata_committed and rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            if not metadata_committed and rendered is not None:
+                rendered.render.output_path.unlink(missing_ok=True)
+            if not metadata_committed and served_name and served_name != output_name:
+                try:
+                    os.remove(os.path.join(output_dir, served_name))
+                except FileNotFoundError:
+                    pass
+            print(f"❌ Template application failed for {req.job_id}: {exc}")
+            raise HTTPException(status_code=500, detail="Template application failed")
+
+
 # --- Manual framing -----------------------------------------------------------
+
 #
 # The reframe engine picks the crop automatically, and on a podcast it is right
 # most of the time and grossly wrong occasionally: a wide shot of the whole
@@ -5004,6 +5664,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
 
 
 @app.post("/api/clip/background")
+@_serialize_job_edit
 async def set_clip_background(req: ClipBackgroundRequest, request: Request):
     """Add a selectable background treatment to a generated clip delivery.
 
@@ -5131,6 +5792,7 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
 
 
 @app.post("/api/clip/watermark")
+@_serialize_job_edit
 async def edit_clip_watermark(
     request: Request,
     job_id: str = Form(...),
@@ -5451,6 +6113,7 @@ class EffectsGenerateRequest(BaseModel):
     input_filename: Optional[str] = None
 
 @app.post("/api/effects/generate")
+@_serialize_job_edit
 async def generate_effects_config(
     req: EffectsGenerateRequest,
     request: Request,
@@ -5568,6 +6231,7 @@ async def generate_effects_config(
 
 
 @app.post("/api/subtitle")
+@_serialize_job_edit
 async def add_subtitles(req: SubtitleRequest, request: Request):
     if req.preset:
         preset = CAPTION_PRESETS.get(req.preset.strip().lower())
@@ -5799,6 +6463,7 @@ class RemoveSubtitlesRequest(BaseModel):
 
 
 @app.post("/api/subtitle/remove")
+@_serialize_job_edit
 async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     """Point a clip back at its un-captioned original.
 
@@ -5870,6 +6535,7 @@ class HookRequest(BaseModel):
     remove: Optional[bool] = False  # strip the burned hook instead of adding one
 
 @app.post("/api/hook")
+@_serialize_job_edit
 async def add_hook(req: HookRequest, request: Request):
     await require_managed_entitlement(request)
     await _ensure_job_files(req.job_id, request)
@@ -6021,6 +6687,7 @@ async def get_languages():
     return {"languages": get_supported_languages()}
 
 @app.post("/api/translate")
+@_serialize_job_edit
 async def translate_clip(
     req: TranslateRequest,
     request: Request,
