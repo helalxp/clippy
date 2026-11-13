@@ -38,9 +38,12 @@ A template is a structured editing recipe, not a visual preset or an AI-generate
 - [ ] Shared recipe contract and parity adapters for browser preview and Remotion final render.
 - [x] Local template-library list/create/read/update/delete APIs with owner-scoped storage and optimistic revision checks.
 - [x] Raster image asset upload/read/delete APIs for PNG, JPEG, and WebP, with server-generated IDs/paths, 20 MB cap, MIME/signature/decoder checks, dimension and pixel limits, SHA-256 verification, and revision-safe lifecycle.
-- [~] Template package import/export, font asset upload, durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
+- [x] Local font asset upload supports bounded TrueType/OpenType SFNT validation, server-generated paths, checksum verification, revision-safe storage, and owner-scoped retrieval. Font assets are stored and exportable, but renderer font loading/application is not yet implemented.
+- [x] Versioned .clippy-template package import/export validates archive paths, entry counts, compression methods/ratios, expanded sizes, symlinks, manifest schema/version, asset inventory, media signatures/structure, and SHA-256 checksums. Imports receive a fresh local template ID and revision.
+- [ ] Durable analysis-job lifecycle, library UI, editor UI, and a complete user-facing end-to-end workflow remain outstanding.
 - [ ] Migration of the legacy v1 reference-template manifest.
-- [ ] Versioned import/export package and complete template lifecycle operations.
+- [x] Versioned import/export package with bounded, integrity-checked asset round-trip.
+- [ ] Complete template lifecycle operations, including migration of the legacy v1 reference-template manifest.
 - [ ] Managed/cloud storage. This remains out of scope until tenant isolation and authorization are designed.
 
 ### Explicitly not claimed
@@ -200,3 +203,16 @@ The previous `feature/template-reference-system` branch was 205 commits ahead of
 - CI validation: passed in run `43310755521`, including CRUD, revision-safe update/delete, and image asset upload/read/delete tests.
 
 Next: add font asset support and versioned template package import/export. Then connect existing clip transcript and caption-style data to canonical template caption styling without duplicating the current subtitle engine.
+
+
+## Latest implementation update: font assets and portable packages
+
+- Added bounded TrueType/OpenType font upload to the owner-scoped template asset endpoint. The server derives the asset type and extension from the SFNT signature, validates the table directory and required structural tables, rejects out-of-bounds/overlapping tables, and applies a 25 MB limit.
+- Existing PNG/JPEG/WebP upload behavior remains intact with its 20 MB, decoder, dimension, and pixel-count checks.
+- Font assets use the existing revision-safe storage, checksum, opaque path, retrieval, and reference-safe deletion lifecycle. The canonical model already supports font asset references; this change does not claim that either renderer loads or applies uploaded fonts yet.
+- Added versioned .clippy-template ZIP package import/export. Export verifies stored assets and writes deterministic archive entries. Import rejects traversal, symlinks, duplicate paths, encrypted or unsupported compression entries, excessive entry counts/sizes/ratios, unsupported package versions, unknown files, invalid media, and checksum mismatches. It assigns a new local template ID and revision 1.
+- Added owner-scoped GET /api/templates/{template_id}/export and POST /api/templates/import endpoints.
+- Added focused tests for SFNT validation, font API upload/retrieval, package round-trip, deterministic export, unsafe archive rejection, and package API behavior.
+- GitHub Actions validation is running for the new implementation. Do not mark this update verified until the focused suite, full backend suite, and frontend build complete successfully.
+
+Next: once CI is green, implement template-driven caption styling as the next isolated Python/FFmpeg adapter capability, with real font-file fixtures, deterministic rendered output, explicit compatibility reporting, and tests that prove existing subtitle behavior remains unchanged.
