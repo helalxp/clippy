@@ -658,17 +658,76 @@ def test_adapter_renders_image_overlay_with_opacity_rotation_and_center_anchor(t
     assert not list(tmp_path.glob("clippy_template_render_*"))
 
 
-def test_adapter_rejects_text_overlay_until_its_style_contract_exists():
+def test_adapter_renders_styled_text_overlay_without_expanding_user_text(tmp_path):
+    source = tmp_path / "black-source.mp4"
+    output = tmp_path / "text-overlay.mp4"
+    make_black_source_video(source)
     recipe = TemplateRecipe.model_validate({
+        "canvas": {"width": 360, "height": 640, "fps": 24},
         "overlays": [{
-            "id": "text-label",
+            "id": "brand-copy",
             "kind": "text",
-            "text": "Unstyled text",
+            "text": "CLIPPY\\n%{metadata\\:title}",
+            "font_family": "DejaVu Sans",
+            "font_size_ratio": 0.06,
+            "font_color": "#FFFFFF",
+            "background_color": "#112233",
+            "outline_color": "#000000",
+            "outline_ratio": 0.002,
+            "text_align": "center",
+            "text_box_width_ratio": 0.8,
+            "text_box_height_ratio": 0.24,
+            "text_anchor_x": 0.5,
+            "text_anchor_y": 0.5,
+            "max_lines": 2,
+            "opacity": 0.9,
         }],
     })
 
-    with pytest.raises(RendererCompatibilityError, match="unsupported"):
-        PythonFFmpegAdapter().preflight(recipe)
+    result = PythonFFmpegAdapter(timeout_seconds=120).render(source, output, recipe)
+    frame = extract_output_frame(output)
+    backing_pixels = sum(
+        1 for pixel in frame.getdata()
+        if 8 <= pixel[0] <= 35 and 18 <= pixel[1] <= 55 and 28 <= pixel[2] <= 75
+    )
+    text_pixels = sum(
+        1 for pixel in frame.getdata()
+        if min(pixel) > 180
+    )
+
+    assert result.compatibility.status == "compatible"
+    assert backing_pixels > 500
+    assert text_pixels > 20
+    assert not list(tmp_path.glob("clippy_template_render_*"))
+
+
+def test_text_overlay_file_is_literal_and_uses_configured_style(tmp_path):
+    from template_system.adapters.text_overlays import write_text_overlay
+
+    overlay = TemplateRecipe.model_validate({
+        "overlays": [{
+            "id": "literal-copy",
+            "kind": "text",
+            "text": "Percent %{metadata\\:title}\\nsecond line",
+            "font_family": "DejaVu Sans",
+            "text_align": "right",
+            "background_color": "#123456",
+        }],
+    }).overlays[0]
+    text_path = tmp_path / "overlay.txt"
+    filter_value = write_text_overlay(
+        overlay,
+        TemplateRecipe().canvas,
+        text_path,
+    )
+
+    assert text_path.read_text(encoding="utf-8") == "Percent %{metadata\\:title}\\nsecond line"
+    assert "Percent" not in filter_value
+    assert filter_value.startswith(",drawtext=textfile=")
+    assert "expansion=none" in filter_value
+    assert "font='DejaVu Sans'" in filter_value
+    assert "text_align=right+middle" in filter_value
+    assert "boxcolor=0x123456@1.0000" in filter_value
 
 
 def test_adapter_requires_transcript_when_template_captions_are_enabled(tmp_path):
@@ -818,6 +877,66 @@ def test_template_service_resolves_uploaded_image_overlay_asset(tmp_path):
 
     resolved_path = adapter.kwargs["overlay_asset_paths"][asset.id]
     assert Path(resolved_path).read_bytes() == payload
+
+
+def test_template_service_resolves_uploaded_text_overlay_font(tmp_path):
+    import hashlib
+    from template_system.capabilities import check_compatibility
+    from template_system.models import TemplateAsset
+    from template_system.adapters.python_ffmpeg import RenderResult
+
+    payload = b"stored-text-font-fixture"
+    asset = TemplateAsset(
+        id="asset_textfont01",
+        path="assets/asset_textfont01.ttf",
+        media_type="font/ttf",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    recipe = TemplateRecipe.model_validate({
+        "overlays": [{
+            "id": "title-card",
+            "kind": "text",
+            "text": "Brand message",
+            "font_asset_id": asset.id,
+        }],
+    })
+    template = TemplateDocument(
+        id="tpl_textfontasset1",
+        name="Text font fixture",
+        recipe=recipe,
+        assets=[asset],
+    )
+    storage = LocalTemplateStorage(tmp_path / "template-library")
+    storage.create(template, asset_payloads={asset.id: payload})
+
+    class CapturingAdapter:
+        def __init__(self):
+            self.kwargs = None
+
+        def render(self, source, output, resolved_recipe, **kwargs):
+            self.kwargs = kwargs
+            return RenderResult(
+                output_path=Path(output).resolve(),
+                source_fingerprint="source",
+                output_fingerprint="output",
+                duration_seconds=1.0,
+                width=360,
+                height=640,
+                frame_rate=24.0,
+                has_audio=False,
+                compatibility=check_compatibility(resolved_recipe, "python_ffmpeg"),
+            )
+
+    adapter = CapturingAdapter()
+    TemplateApplicationService(storage, adapter=adapter).apply(
+        template.id,
+        tmp_path / "source.mp4",
+        tmp_path / "rendered.mp4",
+    )
+
+    font_path = adapter.kwargs["overlay_font_paths"][asset.id]
+    assert Path(font_path).read_bytes() == payload
 
 
 def test_adapter_rejects_custom_caption_anchors_instead_of_ignoring_them():
