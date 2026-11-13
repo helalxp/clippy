@@ -5468,7 +5468,9 @@ async def proxy_render(request: Request):
         request, render_minutes, str(uuid.uuid4()), "render")
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{RENDER_SERVICE_URL}/render", json=body)
+            renderer_headers = {"X-Clippy-Token": _DESKTOP_API_TOKEN} if _DESKTOP_API_TOKEN else {}
+            resp = await client.post(f"{RENDER_SERVICE_URL}/render", json=body, headers=renderer_headers)
+            resp.raise_for_status()
         result = resp.json()
         if isinstance(result, dict) and result.get("renderId"):
             _render_owners[str(result["renderId"])] = await _owner_id(request)
@@ -5496,7 +5498,9 @@ async def proxy_render_status(render_id: str, request: Request):
         await _assert_job_owner(request, {"user_id": _render_owners[render_id]})
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{RENDER_SERVICE_URL}/render/{render_id}")
+            renderer_headers = {"X-Clippy-Token": _DESKTOP_API_TOKEN} if _DESKTOP_API_TOKEN else {}
+            resp = await client.get(f"{RENDER_SERVICE_URL}/render/{render_id}", headers=renderer_headers)
+            resp.raise_for_status()
             return resp.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Render service unavailable: {e}")
