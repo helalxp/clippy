@@ -115,4 +115,4 @@ def write_hook_text(
             f"max(0\\,min(1\\,(t-{start})/{fade})),1)'"
         )
 
-    return "," + ":".join(parts)
+    return ",drawtext=" + ":".join(parts[1:])
