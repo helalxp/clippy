@@ -44,7 +44,7 @@ def write_hook_text(
         raise ValueError("template hook paths cannot contain apostrophes")
     text_value = escape_filter_value(str(path.resolve()))
 
-    parts = ["drawtext", f"textfile='{text_value}'"]
+    parts = ["drawtext", f"textfile='{text_value}'", "expansion=none"]
     if font_path is not None:
         font = Path(font_path).expanduser().resolve(strict=True)
         if not font.is_file():
