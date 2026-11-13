@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveRemotionRoot } from "./paths.js";
 import { bundle } from "@remotion/bundler";
 
 let bundleLocation: string | null = null;
@@ -9,9 +10,7 @@ let bundleLocation: string | null = null;
  * (default: "../remotion" relative to this service's root).
  */
 export async function initBundle(): Promise<void> {
-  const remotionRoot = process.env.REMOTION_BUNDLE_PATH
-    ? path.resolve(process.env.REMOTION_BUNDLE_PATH)
-    : path.resolve(import.meta.dirname, "../../remotion");
+  const remotionRoot = resolveRemotionRoot();
 
   const entryPoint = path.join(remotionRoot, "src", "index.ts");
 

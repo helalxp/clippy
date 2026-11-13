@@ -226,6 +226,7 @@ def pick(video_path, video_duration):
             config=genai_types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=gemini_worker.LayoutChoice,
+                temperature=0,
             ))
         gemini_worker.raise_if_blocked(response)
         answer = json.loads(response.text) or {}

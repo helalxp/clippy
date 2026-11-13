@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ensureOutputDirectory, resolveJobOutputDirectory, resolveOutputDirectory } from "./paths.js";
 import { selectComposition, renderMedia } from "@remotion/renderer";
 import { getBundleLocation } from "./bundle.js";
 import { renderJobs } from "./server.js";
@@ -51,11 +52,9 @@ export async function executeRender(params: RenderParams): Promise<void> {
     });
 
     // Determine output directory and file path
-    const outputDir = process.env.OUTPUT_DIR
-      ? path.resolve(process.env.OUTPUT_DIR)
-      : path.resolve(import.meta.dirname, "../../output");
-
-    const jobOutputDir = path.join(outputDir, jobId);
+    const outputDir = resolveOutputDirectory();
+    ensureOutputDirectory(outputDir);
+    const jobOutputDir = resolveJobOutputDirectory(outputDir, jobId);
     fs.mkdirSync(jobOutputDir, { recursive: true });
 
     const timestamp = Date.now();
@@ -84,7 +83,8 @@ export async function executeRender(params: RenderParams): Promise<void> {
     // Success
     job.status = "done";
     job.progress = 100;
-    job.outputUrl = outputLocation;
+    // Return an application URL, never a machine-specific absolute filesystem path.
+    job.outputUrl = `/videos/${encodeURIComponent(jobId)}/${encodeURIComponent(outputFileName)}`;
 
     console.log(`[render-worker] Render ${renderId} completed: ${outputLocation}`);
   } catch (err) {

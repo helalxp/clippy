@@ -1,0 +1,56 @@
+{
+  "analysis": {
+    "pacing": {
+      "analysis_coverage_seconds": 33.267,
+      "average_shot_seconds": 16.633,
+      "classification": "slow",
+      "hard_cut_count": 1,
+      "hard_cut_times_seconds": [
+        14.533
+      ],
+      "source": "detected"
+    },
+    "style": {
+      "background": {
+        "source": "pending",
+        "value": "not_analyzed"
+      },
+      "captions": {
+        "source": "pending",
+        "value": "not_analyzed"
+      },
+      "framing": {
+        "source": "pending",
+        "value": "not_analyzed"
+      },
+      "transitions": {
+        "source": "detected",
+        "value": "hard_cuts_detected"
+      },
+      "watermark": {
+        "source": "pending",
+        "value": "not_analyzed"
+      }
+    },
+    "technical": {
+      "aspect_ratio": "vertical",
+      "duration_seconds": 33.267,
+      "fps": 30.0,
+      "has_audio": true,
+      "height": 1920,
+      "width": 1080
+    }
+  },
+  "category": "Uncategorized",
+  "created_at": "2026-10-31T04:56:09.234204+00:00",
+  "id": "ref_10ed2bb978ca493f8fc2c9df44d65baf",
+  "name": "clip-1",
+  "overrides": {},
+  "reference": {
+    "original_name": "clip-1.mp4",
+    "poster": "poster.jpg",
+    "video": "reference.mp4"
+  },
+  "updated_at": "2026-10-31T04:56:09.234204+00:00",
+  "version": 1
+}

@@ -1,0 +1,21 @@
+[package]
+name = "clippy-desktop"
+version = "0.1.0"
+description = "Clippy native Windows desktop shell"
+authors = ["Clippy"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2.9"
+sha2 = "0.10"
+zip = "0.6"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

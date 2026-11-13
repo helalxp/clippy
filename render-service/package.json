@@ -7,7 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "test": "node --import tsx --test src/composition-metadata.test.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test:unit": "node --import tsx --test src/paths.test.ts"
   },
   "dependencies": {
     "@remotion/bundler": "^4.0.0",

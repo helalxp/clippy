@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-11-06T00:00:00Z",
+  "components": {
+    "python": {
+      "version": "3.11.9",
+      "platform": "windows",
+      "arch": "x86_64",
+      "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip",
+      "sha256": "abc123def456ghi789jkl012mno345pqr678stu901vwx234yz5",
+      "size_bytes": 45678901,
+      "install_dir": "python",
+      "required": true
+    },
+    "node": {
+      "version": "20.11.0",
+      "platform": "windows",
+      "arch": "x86_64",
+      "url": "https://nodejs.org/dist/v20.11.0/node-v20.11.0-win-x64.zip",
+      "sha256": "xyz789abc123def456ghi789jkl012mno345pqr678stu901vwx234",
+      "size_bytes": 56789012,
+      "install_dir": "node",
+      "required": true
+    },
+    "ffmpeg": {
+      "version": "7.0.1",
+      "platform": "windows",
+      "arch": "x86_64",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2024-11-06-21-29-45/ffmpeg-N-123456-gXXXXXXX-win64-gpl.zip",
+      "sha256": "efg012hij345klm678nop901qrs234tuv567wxy890zab123cde456",
+      "size_bytes": 67890123,
+      "install_dir": "ffmpeg/bin",
+      "required": true
+    }
+  },
+  "checksums": {
+    "manifest_sha256": "manifest_hash_placeholder"
+  }
+}

@@ -33,14 +33,72 @@ import recut
 import layout_ranges
 import watermarked
 import media_auth
+import reference_templates
+from platform_compat import job_subprocess_options
 
 load_dotenv()
 
 # Constants
-UPLOAD_DIR = "uploads"
-OUTPUT_DIR = "output"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# First-run wizard state
+_FIRST_RUN = True
+_USER_MODEL_SIZE = None
+_USER_GPU_MODE = None
+
+def is_first_run() -> bool:
+    global _FIRST_RUN
+    return _FIRST_RUN
+
+def mark_first_run_complete(model_size: str, gpu_mode: bool):
+    global _FIRST_RUN, _USER_MODEL_SIZE, _USER_GPU_MODE
+    _FIRST_RUN = False
+    _USER_MODEL_SIZE = model_size
+    _USER_GPU_MODE = gpu_mode
+    # Save settings
+    import json
+    from pathlib import Path
+    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    if not settings_path.parent.exists():
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+    if settings_path.exists():
+        existing = json.loads(settings_path.read_text(encoding="utf-8"))
+    else:
+        existing = {}
+    existing["whisper"] = existing.get("whisper", {})
+    existing["whisper"]["model_size"] = model_size
+    existing["whisper"]["gpu_mode"] = gpu_mode
+    settings_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+def get_user_model_size() -> str:
+    if _USER_MODEL_SIZE:
+        return _USER_MODEL_SIZE
+    # Check saved settings
+    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    if settings_path.exists():
+        try:
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            return saved.get("whisper", {}).get("model_size", "base")
+        except (OSError, ValueError):
+            pass
+    return "base"
+
+def get_user_gpu_mode() -> bool:
+    if _USER_GPU_MODE is not None:
+        return _USER_GPU_MODE
+    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    if settings_path.exists():
+        try:
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            return saved.get("whisper", {}).get("gpu_mode", True)
+        except (OSError, ValueError):
+            pass
+    return True
+
+REFERENCE_TEMPLATES_DIR = str(reference_templates.root())
 
 # Configuration
 # Default to 1 if not set, but user can set higher for powerful servers
@@ -2477,6 +2535,7 @@ app.mount("/videos", RestoringStaticFiles(
 THUMBNAILS_DIR = os.path.join(OUTPUT_DIR, "thumbnails")
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+app.mount("/reference-templates-media", StaticFiles(directory=REFERENCE_TEMPLATES_DIR), name="reference-template-media")
 
 
 def _safe_under(base_dir: str, user_rel_path: str) -> Optional[str]:
@@ -2631,12 +2690,6 @@ def _job_nice():
         return 10
 
 
-def _lower_priority():
-    n = _job_nice()
-    if n:
-        os.nice(n)
-
-
 async def run_job(job_id, job_data):
     """Executes the subprocess for a specific job."""
 
@@ -2655,7 +2708,7 @@ async def run_job(job_id, job_data):
             stderr=subprocess.STDOUT, # Merge stderr to stdout
             env=env,
             cwd=os.getcwd(),
-            preexec_fn=_lower_priority,
+            **job_subprocess_options(_job_nice()),
         )
         
         # We need to capture logs in a thread because Popen isn't async
@@ -2776,6 +2829,79 @@ async def run_job(job_id, job_data):
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
 
+@app.get("/api/local-models/whisper")
+async def get_local_whisper_model():
+    """Return Whisper choices and the user's separately managed model selection."""
+    from clippy_local_models import (
+        WHISPER_MODELS, get_whisper_selection, list_download_tasks,
+        models_root, validate_whisper_model_path,
+    )
+
+    selected = get_whisper_selection()
+    catalog = []
+    for key, details in WHISPER_MODELS.items():
+        folder = models_root() / "whisper" / key
+        try:
+            validate_whisper_model_path(str(folder))
+            downloaded = True
+        except (OSError, ValueError):
+            downloaded = False
+        catalog.append({
+            "id": key,
+            "label": details["label"],
+            "description": details["description"],
+            "downloaded": downloaded,
+        })
+    return {
+        "selection": selected,
+        "models": catalog,
+        "downloads": list_download_tasks(),
+        "model_storage": str(models_root()),
+        "runtime_note": (
+            "Core application dependencies are installed once during first-run "
+            "setup. Whisper model weights are separate and are managed here."
+        ),
+    }
+
+
+@app.post("/api/local-models/whisper/select")
+async def select_local_whisper_model(request: Request):
+    """Select a catalog model size or an existing local faster-whisper model."""
+    from clippy_local_models import save_whisper_selection
+
+    payload = await request.json()
+    try:
+        if payload.get("model_path"):
+            selection = save_whisper_selection(model_path=payload["model_path"])
+        else:
+            selection = save_whisper_selection(model_size=payload.get("model_size"))
+        # Also update first-run state if not complete
+        if is_first_run():
+            mark_first_run_complete(selection.get("model_size", "base"), selection.get("source") == "local" and selection.get("model_path") is None)
+        return {"ok": True, "selection": selection}
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/local-models/whisper/download")
+async def download_local_whisper_model(request: Request, background_tasks: BackgroundTasks):
+    """Download one supported Whisper model without installing app dependencies."""
+    from clippy_local_models import WHISPER_MODELS, queue_whisper_download, start_whisper_download
+
+    payload = await request.json()
+    model_size = payload.get("model_size")
+    if model_size not in WHISPER_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported Whisper model size.")
+    task_id = str(uuid.uuid4())
+    try:
+        queue_whisper_download(task_id, model_size)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    # Run in FastAPI's background task pool so the UI remains responsive.
+    background_tasks.add_task(start_whisper_download, task_id, model_size)
+    return {"ok": True, "task_id": task_id}
+
+
 @app.get("/health")
 async def health():
     """Lightweight liveness probe for uptime monitoring."""
@@ -2805,6 +2931,28 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        "firstRun": not is_first_run(),
+        "userModelSize": get_user_model_size(),
+        "userGpuMode": get_user_gpu_mode(),
+    }
+
+@app.post("/api/first-run/complete")
+async def first_run_complete(request: Request):
+    """Mark first-run as complete with user model preferences."""
+    global _FIRST_RUN, _USER_MODEL_SIZE, _USER_GPU_MODE
+    payload = await request.json()
+    model_size = payload.get("model_size", "base")
+    gpu_mode = payload.get("gpu_mode", True)
+    mark_first_run_complete(model_size, gpu_mode)
+    return {"ok": True}
+
+@app.get("/api/first-run/status")
+async def first_run_status():
+    """Return first-run wizard status for the dashboard."""
+    return {
+        "isFirstRun": is_first_run(),
+        "userModelSize": get_user_model_size(),
+        "userGpuMode": get_user_gpu_mode(),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -3017,6 +3165,119 @@ async def delete_upload(upload_id: str, request: Request):
     except OSError:
         pass
     return {"deleted": upload_id}
+
+
+# --------------------------------------------------------------------------- #
+# Reference-derived templates
+#
+# This is intentionally self-host only for now. Cloud needs an owned storage
+# model before references can be exposed safely across accounts.  The local
+# library is outside uploads/ and output/, so neither job retention sweep can
+# silently delete a style the user has saved for future work.
+# --------------------------------------------------------------------------- #
+class ReferenceTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    overrides: Optional[Dict[str, Any]] = None
+
+
+def _reference_template_response(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Add public local-media paths without persisting environment-specific URLs."""
+    item = json.loads(json.dumps(manifest))
+    ref = item.get("reference") or {}
+    template_id = item["id"]
+    item["media"] = {
+        "reference_url": f"/reference-templates-media/{template_id}/{ref['video']}",
+        "poster_url": (f"/reference-templates-media/{template_id}/{ref['poster']}"
+                       if ref.get("poster") else None),
+    }
+    return item
+
+
+def _reference_templates_local_only():
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=501,
+            detail="Reference template storage needs account-scoped cloud storage before it can be enabled in managed mode.")
+
+
+@app.get("/api/reference-templates")
+async def list_reference_templates():
+    _reference_templates_local_only()
+    return {"templates": [_reference_template_response(item) for item in reference_templates.list_all()]}
+
+
+@app.get("/api/reference-templates/{template_id}")
+async def get_reference_template(template_id: str):
+    _reference_templates_local_only()
+    try:
+        return _reference_template_response(reference_templates.get(template_id))
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Reference template not found")
+
+
+@app.post("/api/reference-templates")
+async def create_reference_template(
+    video: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+):
+    """Store a reference once and extract the deterministic style blueprint."""
+    _reference_templates_local_only()
+    original_name = os.path.basename(video.filename or "reference.mp4")
+    suffix = os.path.splitext(original_name)[1].lower()
+    if suffix not in reference_templates.VIDEO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Upload an MP4, MOV, MKV, WebM, M4V, or AVI reference video")
+
+    staged = reference_templates.root() / f".upload_{uuid.uuid4().hex}{suffix}"
+    limit = MAX_FILE_SIZE_MB * 1024 * 1024
+    size = 0
+    try:
+        with open(staged, "wb") as out:
+            while chunk := await video.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail=f"Reference video is too large. Max size {MAX_FILE_SIZE_MB}MB")
+                out.write(chunk)
+        if not size:
+            raise HTTPException(status_code=400, detail="Reference video is empty")
+        try:
+            manifest = await asyncio.get_event_loop().run_in_executor(
+                None, reference_templates.create, staged, original_name, name, category)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _reference_template_response(manifest)
+    finally:
+        try:
+            if staged.exists():
+                staged.unlink()
+        except OSError:
+            pass
+        await video.close()
+
+
+@app.patch("/api/reference-templates/{template_id}")
+async def update_reference_template(template_id: str, update: ReferenceTemplateUpdate):
+    """Save human-approved corrections without overwriting detected evidence."""
+    _reference_templates_local_only()
+    try:
+        manifest = reference_templates.get(template_id)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Reference template not found")
+    if update.name is not None:
+        manifest["name"] = update.name.strip()[:120] or manifest["name"]
+    if update.category is not None:
+        manifest["category"] = update.category.strip()[:80] or "Uncategorized"
+    if update.overrides is not None:
+        try:
+            json.dumps(update.overrides)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Template overrides must be JSON-compatible")
+        manifest["overrides"] = update.overrides
+    manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
+    manifest["version"] = int(manifest.get("version") or 1) + 1
+    reference_templates.save(manifest)
+    return _reference_template_response(manifest)
 
 
 def _sweep_pending_uploads(now=None):
@@ -4773,18 +5034,27 @@ async def set_clip_background(req: ClipBackgroundRequest, request: Request):
     clip = clips[req.clip_index]
     current_url = clip.get("video_url") or ""
     current_name = os.path.basename((req.input_filename or current_url).split("?", 1)[0])
-    # The first background edit records its source. Reapplying/changing the
-    # background starts from that same source rather than shrinking a previous
-    # background render into another background (the nested-frame regression).
-    source_name = os.path.basename(clip.get("background_source_filename") or current_name)
-    source_path = os.path.join(output_dir, source_name)
-    if not os.path.isfile(source_path):
-        # Some deliveries are archived remotely. Fall back to the canonical
-        # generated clip in the job directory; never fetch a client URL.
-        base = os.path.basename(json_files[0]).replace("_metadata.json", "")
-        canonical_name = f"{base}_clip_{req.clip_index + 1}.mp4"
-        source_path = os.path.join(output_dir, canonical_name)
-        source_name = canonical_name
+    # Remove wm_ prefix if present to find clean twin
+    if current_name.startswith("wm_"):
+        clean_name = current_name[len("wm_"):]
+    else:
+        clean_name = current_name
+
+    # First try the clean twin (same pattern as watermark endpoint)
+    clean_path = os.path.join(output_dir, clean_name)
+    if os.path.isfile(clean_path):
+        source_path = clean_path
+    else:
+        # Fall back to original logic: first try background_source_filename,
+        # then the canonical clip name in the job directory.
+        source_name = os.path.basename(clip.get("background_source_filename") or current_name)
+        source_path = os.path.join(output_dir, source_name)
+        if not os.path.isfile(source_path):
+            # Some deliveries are archived remotely. Fall back to the canonical
+            # generated clip in the job directory; never fetch a client URL.
+            base = os.path.basename(json_files[0]).replace("_metadata.json", "")
+            canonical_name = f"{base}_clip_{req.clip_index + 1}.mp4"
+            source_path = os.path.join(output_dir, canonical_name)
     if not os.path.isfile(source_path):
         raise HTTPException(status_code=409, detail="The current clip file is not available locally; regenerate the clip before changing its background.")
     out_name = f"background_{int(time.time())}_{req.clip_index + 1}.mp4"
@@ -4896,9 +5166,22 @@ async def edit_clip_watermark(
         raise HTTPException(status_code=404, detail="Clip not found")
     clip = clips[clip_index]
     current_name = os.path.basename((clip.get("video_url") or "").split("?", 1)[0])
-    source_path = os.path.join(output_dir, current_name)
-    if not os.path.isfile(source_path):
-        raise HTTPException(status_code=409, detail="Current clip is not available locally")
+    base_name = os.path.basename(current_name)
+    # Remove wm_ prefix if present to find clean twin
+    if base_name.startswith("wm_"):
+        clean_name = base_name[len("wm_"):]
+    else:
+        clean_name = base_name
+
+    # Check for clean twin first (like rerender/subtitle endpoints)
+    clean_path = os.path.join(output_dir, clean_name)
+    if os.path.isfile(clean_path):
+        source_path = clean_path
+    else:
+        # Fall back to original behavior
+        source_path = os.path.join(output_dir, current_name)
+        if not os.path.isfile(source_path):
+            raise HTTPException(status_code=409, detail="Current clip is not available locally")
     logo_path = os.path.join(output_dir, f"watermark_upload_{uuid.uuid4().hex}{suffix}")
     out_name = f"watermarked_{int(time.time())}_{uuid.uuid4().hex[:8]}_{clip_index + 1}.mp4"
     out_path = os.path.join(output_dir, out_name)
@@ -5113,7 +5396,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
 
 
 # --- Remotion Render Proxy ---
-RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://renderer:3100")
+RENDER_SERVICE_URL = os.getenv("RENDER_SERVICE_URL", "http://127.0.0.1:13100")
 # render id -> owner user id (None for self-host / BYOK), for the status poll.
 _render_owners: Dict[str, Optional[str]] = {}
 
