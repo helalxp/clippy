@@ -263,11 +263,14 @@ $ScratchDrive = [System.IO.DriveInfo]::GetDrives() |
     Sort-Object AvailableFreeSpace -Descending |
     Select-Object -First 1
 if (-not $ScratchDrive) { throw "No writable fixed drive is available for setup temporary files." }
-$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ("ClippySetupTemp-" + $env:USERNAME)
-# Remove leftovers from an interrupted previous run before calculating free space.
-if (Test-Path $ScratchRoot) {
-    Remove-Item $ScratchRoot -Recurse -Force -ErrorAction Stop
-}
+$ScratchPrefix = "ClippySetupTemp-" + $env:USERNAME + "-"
+# Each setup process gets an isolated scratch directory. Remove only abandoned
+# directories older than 24 hours so concurrent launches cannot delete each
+# other's extraction or package-install files.
+Get-ChildItem -LiteralPath $ScratchDrive.RootDirectory.FullName -Directory -Filter "$ScratchPrefix*" -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-24) } |
+    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ($ScratchPrefix + $PID)
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
