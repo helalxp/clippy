@@ -192,6 +192,8 @@ class OverlayRecipe(ContractModel):
     text_align: Literal["left", "center", "right"] = "center"
     text_box_width_ratio: float = Field(default=0.8, ge=0.1, le=1)
     text_box_height_ratio: float = Field(default=0.18, ge=0.04, le=0.6)
+    text_anchor_x: float = Field(default=0.5, ge=0, le=1)
+    text_anchor_y: float = Field(default=0.5, ge=0, le=1)
     max_lines: int = Field(default=2, ge=1, le=5)
     line_spacing_ratio: float = Field(default=0.005, ge=0, le=0.05)
     anchor_x: float = Field(default=0.9, ge=0, le=1)
@@ -216,9 +218,9 @@ class OverlayRecipe(ContractModel):
             estimated_height = self.font_size_ratio * self.max_lines * 1.35
             if self.text_box_height_ratio < estimated_height:
                 raise ValueError("text_box_height_ratio is too small for font_size_ratio and max_lines")
-            if self.anchor_x < self.text_box_width_ratio / 2 or self.anchor_x > 1 - self.text_box_width_ratio / 2:
+            if self.text_anchor_x < self.text_box_width_ratio / 2 or self.text_anchor_x > 1 - self.text_box_width_ratio / 2:
                 raise ValueError("text overlay horizontal anchor places its box outside the canvas")
-            if self.anchor_y < self.text_box_height_ratio / 2 or self.anchor_y > 1 - self.text_box_height_ratio / 2:
+            if self.text_anchor_y < self.text_box_height_ratio / 2 or self.text_anchor_y > 1 - self.text_box_height_ratio / 2:
                 raise ValueError("text overlay vertical anchor places its box outside the canvas")
         elif self.font_asset_id is not None:
             raise ValueError("font_asset_id is only valid for text overlays")
