@@ -48,6 +48,26 @@ pub struct Bootstrap {
     config: BootstrapConfig,
 }
 
+/// Parse the PowerShell-generated manifest state without relying on key order.
+/// Unknown keys are tolerated for forward-compatible optional metadata, while
+/// duplicate, empty, or malformed keys are rejected.
+fn parse_manifest_state(state: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut fields = std::collections::HashMap::new();
+    for segment in state.split(';') {
+        let (key, value) = segment.split_once('=')
+            .ok_or_else(|| "Runtime manifest state contains a malformed field".to_string())?;
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() {
+            return Err("Runtime manifest state contains an empty key or value".to_string());
+        }
+        if fields.insert(key.to_string(), value.to_string()).is_some() {
+            return Err(format!("Runtime manifest state contains duplicate field '{key}'"));
+        }
+    }
+    Ok(fields)
+}
+
 impl Bootstrap {
     pub fn new(config: BootstrapConfig) -> Self {
         Self { config }
@@ -145,15 +165,32 @@ impl Bootstrap {
                 if actual != manifest.requirements_sha256.to_ascii_lowercase() {
                     return Err("Runtime manifest requirements hash does not match the installed application payload".to_string());
                 }
-                let expected_state = format!(
-                    "python={};node={};ffmpeg={};requirements={}",
-                    manifest.components["python"].version,
-                    manifest.components["node"].version,
-                    manifest.components["ffmpeg"].version,
-                    actual
-                );
-                if manifest.state != expected_state {
-                    return Err("Runtime manifest state does not match its component versions and requirements hash".to_string());
+                // The setup engine writes a key/value state string. Treat it as
+                // structured metadata rather than comparing a reconstructed string:
+                // PowerShell also records pythonVariant (cpu/cuda), and future
+                // components may add keys without invalidating older validators.
+                let state = parse_manifest_state(&manifest.state)?;
+                let expected = [
+                    ("python", manifest.components["python"].version.as_str()),
+                    ("node", manifest.components["node"].version.as_str()),
+                    ("ffmpeg", manifest.components["ffmpeg"].version.as_str()),
+                    ("requirements", actual.as_str()),
+                ];
+                for (key, value) in expected {
+                    match state.get(key) {
+                        Some(actual_value) if actual_value == value => {}
+                        Some(_) => return Err(format!(
+                            "Runtime manifest state field '{key}' does not match its component or payload"
+                        )),
+                        None => return Err(format!(
+                            "Runtime manifest state is missing required field '{key}'"
+                        )),
+                    }
+                }
+                if let Some(variant) = state.get("pythonVariant") {
+                    if variant != "cpu" && variant != "cuda" {
+                        return Err(format!("Unsupported Python runtime variant '{variant}'"));
+                    }
                 }
                 Ok(())
             });
@@ -263,5 +300,37 @@ impl Bootstrap {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod manifest_state_tests {
+    use super::parse_manifest_state;
+
+    #[test]
+    fn accepts_power_shell_generated_cpu_manifest_state() {
+        let parsed = parse_manifest_state(
+            "python=3.12.10;pythonVariant=cpu;node=22.23.3;ffmpeg=gyan-release-essentials;requirements=0123456789abcdef"
+        ).unwrap();
+        assert_eq!(parsed.get("python").unwrap(), "3.12.10");
+        assert_eq!(parsed.get("pythonVariant").unwrap(), "cpu");
+        assert_eq!(parsed.get("node").unwrap(), "22.23.3");
+        assert_eq!(parsed.get("ffmpeg").unwrap(), "gyan-release-essentials");
+        assert_eq!(parsed.get("requirements").unwrap(), "0123456789abcdef");
+    }
+
+    #[test]
+    fn accepts_power_shell_generated_cuda_manifest_state() {
+        let parsed = parse_manifest_state(
+            "python=3.12.10;pythonVariant=cuda;node=22.23.3;ffmpeg=gyan-release-essentials;requirements=0123456789abcdef"
+        ).unwrap();
+        assert_eq!(parsed.get("pythonVariant").unwrap(), "cuda");
+    }
+
+    #[test]
+    fn rejects_duplicate_or_malformed_fields() {
+        assert!(parse_manifest_state("python=3.12;python=3.13").is_err());
+        assert!(parse_manifest_state("python=3.12;broken").is_err());
+        assert!(parse_manifest_state("python=").is_err());
     }
 }
