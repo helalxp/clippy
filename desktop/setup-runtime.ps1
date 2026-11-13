@@ -492,7 +492,7 @@ if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
     foreach ($Part in @($RuntimeManifest.parts)) {
         $PartName = [string]$Part.name
         $PartUrl = "$PythonRuntimeReleaseBaseUrl/$PartName"
-        $PartPath = Join-Path $Downloads "$AppVersion-$PartName"
+        $PartPath = Join-Path $Downloads $PartName
         $PartHealthy = $false
         if (Test-Path -LiteralPath $PartPath -PathType Leaf) {
             $PartInfo = Get-Item -LiteralPath $PartPath
