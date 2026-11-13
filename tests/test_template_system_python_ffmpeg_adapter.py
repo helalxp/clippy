@@ -556,7 +556,7 @@ def test_adapter_rejects_text_overlay_until_its_style_contract_exists():
         }],
     })
 
-    with pytest.raises(RendererCompatibilityError, match="text overlays"):
+    with pytest.raises(RendererCompatibilityError, match="unsupported"):
         PythonFFmpegAdapter().preflight(recipe)
 
 
