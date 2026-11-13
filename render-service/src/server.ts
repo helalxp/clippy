@@ -116,7 +116,7 @@ app.post("/render", (req, res) => {
     return;
   }
   if (resolvedVideoUrl !== props.videoUrl) {
-    console.log(`[render] Resolved video URL: ${props.videoUrl} -> ${resolvedVideoUrl}`);
+    // Do not log resolved URLs: desktop media URLs carry a short-lived session token.
   }
 
   const renderId = uuidv4();
