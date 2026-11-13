@@ -56,3 +56,14 @@ test("encoded traversal is rejected", () => {
 test("job output directory rejects path traversal", () => {
   assert.throws(() => resolveJobOutputDirectory("C:\\Clippy\\output", "..\\outside"), /Invalid render job ID/);
 });
+
+
+test("desktop renderer media URLs carry the per-launch token", () => {
+  const url = new URL(resolveRendererVideoUrl(
+    "/videos/job_2/clip.mp4",
+    "http://127.0.0.1:3100",
+    "session-secret",
+  ));
+  assert.equal(url.pathname, "/output/job_2/clip.mp4");
+  assert.equal(url.searchParams.get("token"), "session-secret");
+});

@@ -85,28 +85,49 @@ def validate_whisper_model_path(value: str) -> Path:
     return candidate
 
 
-def get_whisper_selection() -> dict[str, Any]:
+def _catalog_model_dir(model_size: str) -> Path:
+    return models_root() / "whisper" / model_size
+
+
+def inspect_whisper_model() -> dict[str, Any]:
+    """Describe the persisted selection and on-disk readiness without loading weights."""
     saved = _read_settings().get("whisper", {})
     if not isinstance(saved, dict):
         saved = {}
-    model_path = saved.get("model_path")
-    if model_path:
-        try:
-            resolved = validate_whisper_model_path(model_path)
-            return {"model_size": saved.get("model_size", "small"),
-                    "model_path": str(resolved), "source": "local",
-                    "available": True}
-        except (OSError, ValueError):
-            # Keep the user's selection visible as unavailable instead of
-            # silently switching models behind their back.
-            return {"model_size": saved.get("model_size", "small"),
-                    "model_path": str(model_path), "source": "local",
-                    "available": False}
+
     size = saved.get("model_size", "small")
     if size not in WHISPER_MODELS:
         size = "small"
-    return {"model_size": size, "model_path": None, "source": "catalog",
-            "available": True}
+    custom_path = saved.get("model_path")
+    source = "local" if custom_path else "catalog"
+    configured = bool(custom_path or saved.get("model_size") in WHISPER_MODELS)
+    candidate = Path(str(custom_path)).expanduser() if custom_path else _catalog_model_dir(size)
+
+    try:
+        resolved = validate_whisper_model_path(str(candidate))
+        installed = True
+        validation_error = None
+        resolved_path = str(resolved)
+    except (OSError, ValueError) as exc:
+        installed = False
+        validation_error = str(exc)
+        resolved_path = str(candidate)
+
+    return {
+        "model_size": size,
+        "model_path": resolved_path if source == "local" or installed else None,
+        "source": source,
+        "selected": configured,
+        "configured": configured,
+        "installed": installed,
+        "available": installed,
+        "status": ("ready" if installed else "selected_not_downloaded") if configured else "not_selected",
+        "validation_error": validation_error,
+    }
+
+
+def get_whisper_selection() -> dict[str, Any]:
+    return inspect_whisper_model()
 
 
 def save_whisper_selection(*, model_size: str | None = None,
@@ -119,23 +140,57 @@ def save_whisper_selection(*, model_size: str | None = None,
     else:
         if model_size not in WHISPER_MODELS:
             raise ValueError("Choose one of the supported Whisper model sizes.")
+        # A catalog choice is a saved preference, not proof that its weights
+        # exist locally. Keep the selection visible while reporting that it
+        # still needs an explicit download or first-use fetch.
         selection = {"model_size": model_size, "model_path": None}
     settings["whisper"] = selection
     _write_settings(settings)
     return get_whisper_selection()
 
 
+def verify_whisper_model_load() -> dict[str, Any]:
+    """Explicitly load the selected local weights on CPU to verify CTranslate2 compatibility."""
+    selection = get_whisper_selection()
+    if not selection.get("installed"):
+        raise FileNotFoundError(
+            f"Whisper {selection.get('model_size', 'small')} is selected but its model files "
+            "are not installed. Download the model first."
+        )
+
+    from faster_whisper import WhisperModel
+
+    model_path = selection.get("model_path") or str(_catalog_model_dir(selection["model_size"]))
+    # CPU int8 is a conservative compatibility probe. It avoids depending on
+    # the user's CUDA driver and does not run inference or alter GPU settings.
+    model = WhisperModel(
+        model_path,
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=2,
+        num_workers=1,
+        local_files_only=True,
+    )
+    del model
+    return {
+        "ok": True,
+        "model_size": selection["model_size"],
+        "model_path": model_path,
+        "message": "The selected Whisper model loaded successfully with faster-whisper (CPU int8).",
+    }
+
+
 def whisper_model_argument() -> str:
     selection = get_whisper_selection()
     if selection.get("source") == "local":
-        if not selection.get("available", False):
+        if not selection.get("installed", False):
             raise FileNotFoundError(
                 "The selected local Whisper model is unavailable. Open Settings "
                 "and choose another model or update its folder path."
             )
         return selection["model_path"]
+    # Keep faster-whisper's normal cache/download behavior for catalog models.
     return selection.get("model_size") or "small"
-
 
 def list_download_tasks() -> dict[str, dict[str, Any]]:
     with _download_lock:

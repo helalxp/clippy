@@ -1,12 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Clippy",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "identifier": "com.helal.clippy",
   "build": {
     "beforeDevCommand": "npm --prefix ../../dashboard run dev -- --host 127.0.0.1",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeBuildCommand": "cd ../../dashboard && npm run build",
     "frontendDist": "../../dashboard/dist"
   },
   "app": {
@@ -22,8 +21,9 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:8000 http://127.0.0.1:13100 ws://127.0.0.1:8000 ws://127.0.0.1:13100; img-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:8000; media-src 'self' asset: http://asset.localhost blob: http://127.0.0.1:8000"
-    }
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost blob: http://127.0.0.1:*"
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
@@ -32,6 +32,10 @@
     ],
     "category": "Video",
     "shortDescription": "Local AI video clipping and editing",
-    "longDescription": "Clippy is a local-first AI video clipping and editing application."
+    "longDescription": "Clippy is a local-first AI video clipping and editing application.",
+    "resources": {
+      "resources/app-payload.zip": "app-payload.zip",
+      "resources/app-payload.sha256": "app-payload.sha256"
+    }
   }
 }

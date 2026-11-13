@@ -43,12 +43,16 @@ export async function executeRender(params: RenderParams): Promise<void> {
     );
 
     const bundleLocation = getBundleLocation();
+    const browserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE;
+    const browserOptions = browserExecutable ? { browserExecutable } : {};
 
-    // Select the composition with the provided input props
+    // Select the composition with the persistent, verified browser installed
+    // under %LOCALAPPDATA%\\Clippy\\browser, outside replaceable app payloads.
     const composition = await selectComposition({
       serveUrl: bundleLocation,
       id: "ShortVideo",
       inputProps: props,
+      ...browserOptions,
     });
 
     // Determine output directory and file path
@@ -70,6 +74,7 @@ export async function executeRender(params: RenderParams): Promise<void> {
       codec: "h264",
       crf: 22,
       outputLocation,
+      ...browserOptions,
       onProgress: ({ progress }) => {
         const percent = Math.round(progress * 100);
         job.progress = percent;

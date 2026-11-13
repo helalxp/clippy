@@ -10,6 +10,7 @@ import LoginModal from './components/LoginModal'
 import { readPendingPlan } from './lib/pendingPlan'
 import { applyConsent } from './lib/consent'
 import CookieBanner from './components/CookieBanner'
+import DesktopRuntimeGate from './components/DesktopRuntimeGate'
 
 const App = lazy(() => import('./App.jsx'))
 const Legal = lazy(() => import('./Legal.jsx'))
@@ -98,6 +99,36 @@ function Root() {
   const [view, setView] = useState(resolveView);
 
   useEffect(() => {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (typeof invoke !== 'function') return undefined;
+
+    // Tauri's webview does not automatically hand target=_blank links to the
+    // user's browser. Route all external anchors through the native shell.
+    const handleExternalLink = (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!anchor) return;
+
+      let target;
+      try {
+        target = new URL(anchor.href, window.location.href);
+      } catch {
+        return;
+      }
+      if (!['http:', 'https:', 'mailto:'].includes(target.protocol)) return;
+      if (target.protocol !== 'mailto:' && target.origin === window.location.origin) return;
+
+      event.preventDefault();
+      invoke('open_external_url', { url: target.href }).catch((error) => {
+        console.error('Could not open external link:', error);
+      });
+    };
+
+    document.addEventListener('click', handleExternalLink, true);
+    return () => document.removeEventListener('click', handleExternalLink, true);
+  }, []);
+
+  useEffect(() => {
     const handleHashChange = () => setView(resolveView());
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -117,7 +148,7 @@ function Root() {
   if (view === 'auth') {
     return <div className="min-h-screen flex items-center justify-center bg-background text-zinc-400">Signing you in…</div>;
   }
-  if (view === 'app') return <App />;
+  if (view === 'app') return <DesktopRuntimeGate><App /></DesktopRuntimeGate>;
   return <Landing onLaunchApp={handleLaunchApp} />;
 }
 

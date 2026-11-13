@@ -12,9 +12,21 @@ pub struct BootstrapConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeComponent {
+    pub version: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeManifest {
     pub version: String,
-    pub components: std::collections::HashMap<String, serde_json::Value>,
+    pub schema: u32,
+    pub state: String,
+    pub requirements_sha256: String,
+    #[serde(default)]
+    pub browser_sha256: Option<String>,
+    pub components: std::collections::HashMap<String, RuntimeComponent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +48,26 @@ pub struct BootstrapStatus {
 
 pub struct Bootstrap {
     config: BootstrapConfig,
+}
+
+/// Parse the PowerShell-generated manifest state without relying on key order.
+/// Unknown keys are tolerated for forward-compatible optional metadata, while
+/// duplicate, empty, or malformed keys are rejected.
+fn parse_manifest_state(state: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut fields = std::collections::HashMap::new();
+    for segment in state.split(';') {
+        let (key, value) = segment.split_once('=')
+            .ok_or_else(|| "Runtime manifest state contains a malformed field".to_string())?;
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() {
+            return Err("Runtime manifest state contains an empty key or value".to_string());
+        }
+        if fields.insert(key.to_string(), value.to_string()).is_some() {
+            return Err(format!("Runtime manifest state contains duplicate field '{key}'"));
+        }
+    }
+    Ok(fields)
 }
 
 impl Bootstrap {
@@ -104,26 +136,118 @@ impl Bootstrap {
         }
     }
 
+    fn executable_version(exe: &Path, args: &[&str]) -> Result<String, String> {
+        let output = Command::new(exe)
+            .args(args)
+            .output()
+            .map_err(|e| format!("Cannot inspect {}: {e}", exe.display()))?;
+        if !output.status.success() {
+            return Err(format!("Version check failed for {}: {}", exe.display(), String::from_utf8_lossy(&output.stderr)));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let value = if stdout.trim().is_empty() { stderr } else { stdout };
+        Ok(value.lines().next().unwrap_or_default().trim().to_string())
+    }
+
     pub fn get_status(&self) -> Result<BootstrapStatus, String> {
-        let missing = self.validate_components()?;
-        let progress = if missing.is_empty() { 100.0 } else { 0.0 };
+        let mut issues = self.validate_components()?;
+        let manifest_path = &self.config.manifest_path;
+        let app_root = manifest_path.parent().unwrap_or_else(|| Path::new(".")).join("app").join("current");
+        let requirements_path = app_root.join("requirements.txt");
 
-        // Detect GPU status
+        let manifest_result = fs::read_to_string(manifest_path)
+            .map_err(|e| format!("Cannot read runtime manifest at {}: {e}", manifest_path.display()))
+            .and_then(|content| {
+                let json = content.trim_start_matches('\u{feff}');
+                serde_json::from_str::<RuntimeManifest>(json)
+                    .map_err(|e| format!("Runtime manifest JSON is malformed: {e}"))
+            })
+            .and_then(|manifest| {
+                if manifest.version != "1.0.0" || manifest.schema != 1 {
+                    return Err(format!("Unsupported runtime manifest version/schema: {}/{}", manifest.version, manifest.schema));
+                }
+                for name in ["python", "node", "ffmpeg", "browser"] {
+                    let component = manifest.components.get(name)
+                        .ok_or_else(|| format!("Runtime manifest is missing component '{name}'"))?;
+                    if !component.installed || component.version.trim().is_empty() {
+                        return Err(format!("Runtime manifest component '{name}' is not marked installed"));
+                    }
+                }
+                let python_exe = self.config.runtime_root.join("python").join("python.exe");
+                let node_exe = self.config.runtime_root.join("node").join("node.exe");
+                let python_version = Self::executable_version(&python_exe, &["--version"])?;
+                if python_version != format!("Python {}", manifest.components["python"].version) {
+                    return Err(format!("Managed Python version mismatch: expected {}, found {python_version}", manifest.components["python"].version));
+                }
+                let node_version = Self::executable_version(&node_exe, &["--version"])?;
+                if node_version.trim_start_matches('v') != manifest.components["node"].version {
+                    return Err(format!("Managed Node.js version mismatch: expected {}, found {node_version}", manifest.components["node"].version));
+                }
+                let requirements = fs::read(&requirements_path)
+                    .map_err(|e| format!("Cannot read bundled requirements at {}: {e}", requirements_path.display()))?;
+                use sha2::{Digest, Sha256};
+                let actual = format!("{:x}", Sha256::digest(&requirements));
+                if actual != manifest.requirements_sha256.to_ascii_lowercase() {
+                    return Err("Runtime manifest requirements hash does not match the installed application payload".to_string());
+                }
+                let browser_executable = manifest_path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join("browser").join("headless-shell").join("chrome-headless-shell.exe");
+                let browser_bytes = fs::read(&browser_executable)
+                    .map_err(|e| format!("Cannot read persistent Remotion browser {}: {e}", browser_executable.display()))?;
+                let browser_actual = format!("{:x}", Sha256::digest(&browser_bytes));
+                let browser_expected = manifest.browser_sha256.as_deref()
+                    .ok_or_else(|| "Runtime manifest is missing the Remotion browser SHA-256".to_string())?;
+                if browser_actual != browser_expected.to_ascii_lowercase() {
+                    return Err("Persistent Remotion browser hash does not match the runtime manifest".to_string());
+                }
+                // The setup engine writes a key/value state string. Treat it as
+                // structured metadata rather than comparing a reconstructed string:
+                // PowerShell also records pythonVariant (cpu/cuda), and future
+                // components may add keys without invalidating older validators.
+                let state = parse_manifest_state(&manifest.state)?;
+                let expected = [
+                    ("python", manifest.components["python"].version.as_str()),
+                    ("node", manifest.components["node"].version.as_str()),
+                    ("ffmpeg", manifest.components["ffmpeg"].version.as_str()),
+                    ("browser", manifest.components["browser"].version.as_str()),
+                    ("requirements", actual.as_str()),
+                ];
+                for (key, value) in expected {
+                    match state.get(key) {
+                        Some(actual_value) if actual_value == value => {}
+                        Some(_) => return Err(format!(
+                            "Runtime manifest state field '{key}' does not match its component or payload"
+                        )),
+                        None => return Err(format!(
+                            "Runtime manifest state is missing required field '{key}'"
+                        )),
+                    }
+                }
+                let variant = state.get("pythonVariant")
+                    .ok_or_else(|| "Runtime manifest state is missing required field 'pythonVariant'".to_string())?;
+                if variant != "cpu" && variant != "cuda" {
+                    return Err(format!("Unsupported Python runtime variant '{variant}'"));
+                }
+                Ok(())
+            });
+
+        if let Err(error) = manifest_result {
+            issues.push(error);
+        }
+
         let gpu_info = self.detect_gpu_status();
-
+        let progress = if issues.is_empty() { 100.0 } else { 0.0 };
         Ok(BootstrapStatus {
             stage: "validation".to_string(),
             progress,
-            message: if missing.is_empty() {
-                "All runtime components are installed and functional.".to_string()
+            message: if issues.is_empty() {
+                "All runtime components and the runtime manifest are valid.".to_string()
             } else {
-                format!("Missing components: {}", missing.join(", "))
+                format!("Runtime validation needs attention: {}", issues.join("; "))
             },
-            error: if missing.is_empty() {
-                None
-            } else {
-                Some(missing.join("; "))
-            },
+            error: if issues.is_empty() { None } else { Some(issues.join("; ")) },
             gpu: gpu_info,
         })
     }
@@ -214,5 +338,33 @@ impl Bootstrap {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod manifest_state_tests {
+    use super::parse_manifest_state;
+
+    #[test]
+    fn accepts_power_shell_generated_cpu_manifest_state() {
+        let parsed = parse_manifest_state(include_str!("../../tests/fixtures/runtime-manifest-state.txt").trim()).unwrap();
+        assert_eq!(parsed.get("python").unwrap(), "3.12.10");
+        assert_eq!(parsed.get("pythonVariant").unwrap(), "cpu");
+        assert_eq!(parsed.get("node").unwrap(), "22.23.3");
+        assert_eq!(parsed.get("ffmpeg").unwrap(), "gyan-release-essentials");
+        assert_eq!(parsed.get("requirements").unwrap(), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    }
+
+    #[test]
+    fn accepts_power_shell_generated_cuda_manifest_state() {
+        let parsed = parse_manifest_state(include_str!("../../tests/fixtures/runtime-manifest-state-cuda.txt").trim()).unwrap();
+        assert_eq!(parsed.get("pythonVariant").unwrap(), "cuda");
+    }
+
+    #[test]
+    fn rejects_duplicate_or_malformed_fields() {
+        assert!(parse_manifest_state("python=3.12;python=3.13").is_err());
+        assert!(parse_manifest_state("python=3.12;broken").is_err());
+        assert!(parse_manifest_state("python=").is_err());
     }
 }

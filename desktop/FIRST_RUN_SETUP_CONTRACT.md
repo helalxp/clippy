@@ -31,9 +31,21 @@ after interruption and must not delete user data or model files.
 Expected managed components include the embedded Python runtime and required
 Python packages, Node runtime and renderer packages, FFmpeg/FFprobe, the
 Remotion browser runtime, and compatible GPU runtime libraries when needed.
-The exact manifest is to be finalized after clean-machine compatibility tests.
-GPU acceleration components should be optional when the machine does not have
-a supported GPU; CPU mode remains available where the feature supports it.
+The Windows implementation stages the application payload, persistent Remotion browser version/hash metadata, and pinned bgutil YouTube PO-token provider into the managed install layout. It extracts the app payload to `%LOCALAPPDATA%\\Clippy\\app\\current` on first launch.
+Python 3.12.10 and the complete pinned Python dependency set are built on
+Windows CI into separate CPU and NVIDIA/CUDA 12.8 runtime archives. The release
+publishes each archive with a SHA-256 sidecar. First-run setup selects the
+variant from the detected NVIDIA driver, downloads and verifies the archive,
+extracts it into a staging directory, checks the interpreter and critical
+imports, and only then activates it. Customer machines do not run pip or
+bootstrap Python packages. Node.js 22.23.3 and FFmpeg essentials are provisioned as private runtimes and verified against publisher SHA-256 sidecars;
+Remotion still performs its browser setup during first run. The runtime state
+manifest is written only after all required components pass verification.
+
+A Microsoft Visual C++ x64 redistributable may require a one-time UAC approval
+on machines where that runtime is missing. Clean-machine testing is still
+required to validate all package wheels, driver combinations, browser startup,
+and repair behavior before calling this production-ready.
 
 ### AI model weights
 

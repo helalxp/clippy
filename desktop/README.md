@@ -1,66 +1,60 @@
-# Clippy native desktop (Stage 3A)
+# Clippy native desktop (Windows installer work)
 
-This is the first native desktop shell and local-process supervisor. It is a
-separate production target; Docker Compose remains a developer-only workflow
-and is not invoked by this application.
+The native desktop target is separate from the Docker developer workflow.
+Docker Compose is not used by the installed application.
 
-## Current scope
+## Build the Windows installer
 
-- Tauri 2 Windows desktop shell using the existing dashboard build.
-- Desktop dashboard build sets `VITE_API_URL` to the loopback FastAPI service.
-- Rust commands expose start, stop, and status for the backend and renderer.
-- Services bind to `127.0.0.1`; logs are written under `%LOCALAPPDATA%\Clippy\logs`.
-- Runtime files, application payload, and user output are separated under
-  `%LOCALAPPDATA%\Clippy`.
-- Startup refuses to launch when the managed runtime or application payload is
-  incomplete. It does not silently use a system Python or Node installation.
+On a Windows build machine, install the Rust stable toolchain, Node.js LTS,
+Tauri 2 Windows prerequisites (including WebView2), and NSIS prerequisites.
+Then run this from the repository root:
 
-## Deliberate limitation in Stage 3A
+    git fetch origin
+    git switch windows-installer-release
+    git pull --ff-only origin windows-installer-release
+    powershell -ExecutionPolicy Bypass -File .\desktop\build.ps1
 
-The downloader, signed/checksummed runtime manifest, resumable installer UI,
-application payload updater, and production NSIS packaging pipeline are not
-implemented yet. `start_services` is therefore an integration scaffold and
-will report that setup is required until Stage 3B installs the expected files.
-No claim is made that this stage is already a usable end-user installer.
+The script resolves paths relative to itself, builds the dashboard, compiles
+the renderer, stages the backend and Remotion source with their production
+Node dependencies, and asks Tauri to create an NSIS installer. On first launch,
+the app extracts that payload to the per-user Clippy directory. Output is
+expected under desktop\src-tauri\target\release\bundle\nsis.
+
+IMPORTANT: this is still an engineering preview, not yet a production release.
+The first-run script now provisions private Python, Node.js, FFmpeg, Python
+packages, PyTorch CUDA 12.8 on supported NVIDIA systems (driver and compute-capability checked), CPU otherwise, and
+Remotion's browser runtime. It verifies upstream signatures/checksums and
+records the installed runtime state. The complete flow still needs clean-
+machine testing, including clean-machine install/repair, UAC behavior, interrupted downloads, YouTube URL ingest, GPU variants, process-tree cleanup, and signed release validation before distribution.
+
+## Expected managed service layout
+
+    %LOCALAPPDATA%\Clippy\
+      app\current\
+        app.py
+        render-service\dist\server.js
+        remotion\src\index.ts
+      runtime\
+        python\python.exe
+        node\node.exe
+      settings.json
+      data\output\
+      data\uploads\
+      data\models\whisper\
+      data\models\huggingface\
+      logs\
+
+User output, uploads, settings, caches, and downloaded model weights remain
+outside the application install directory. Whisper models are downloaded only
+when selected in the app and stored under data\models\whisper; Hugging Face
+cache files use data\models\huggingface. Model weights are not core runtime
+dependencies and must not be bundled into the installer.
 
 ## Developer prerequisites
 
-For desktop development only, install the Rust stable toolchain, the Tauri 2
-Windows prerequisites (including WebView2), and the Node.js toolchain. These
-are build-machine requirements, not end-user requirements.
+For desktop development, install Rust stable, Tauri 2 Windows prerequisites,
+WebView2, Node.js LTS, and npm. From desktop/src-tauri:
 
-From `desktop/src-tauri`:
+    cargo tauri dev
 
-```powershell
-cargo install tauri-cli --version "^2"
-cargo tauri dev
-```
-
-Build the Windows installer with:
-
-```powershell
-cargo tauri build
-```
-
-The Tauri build invokes `dashboard`'s `build:desktop` script. The dashboard
-uses `http://127.0.0.1:8000` for API requests in the desktop build; the normal
-Vite development build retains its proxy-based relative API behavior.
-
-## Managed directory layout (target)
-
-```text
-%LOCALAPPDATA%\Clippy\
-  app\current\                 # versioned Clippy application payload
-    app.py
-    render-service\dist\server.js
-    remotion\src\index.ts
-  runtime\
-    python\python.exe
-    node\node.exe
-  data\output\                 # projects and generated media
-  models\                      # independently managed AI model weights
-  logs\
-```
-
-The Whisper model manager remains separate from core runtime setup. Model
-weights are not part of the core dependency manifest.
+The packaged dashboard build leaves VITE_API_URL empty. The desktop supervisor allocates dynamic loopback ports and provides a per-launch API token; the dashboard receives the resolved backend URL at startup. The normal web development build retains its Vite proxy-based relative API behavior.

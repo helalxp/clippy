@@ -1,0 +1,4 @@
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `cd ../../dashboard && npm run build`
+The system cannot find the path specified.
+       Error beforeBuildCommand `cd ../../dashboard && npm run build` failed with exit code 1
