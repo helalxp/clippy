@@ -51,6 +51,9 @@ if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import valid
 if ($Variant -eq "cuda") {
     & $StagedPython -c "import torch; assert torch.version.cuda is not None, 'CUDA wheel was not selected'"
     if ($LASTEXITCODE -ne 0) { throw "CUDA package does not contain CUDA-enabled PyTorch." }
+} else {
+    & $StagedPython -c "import torch; assert torch.version.cuda is None, 'CPU package unexpectedly contains a CUDA build'"
+    if ($LASTEXITCODE -ne 0) { throw "CPU package unexpectedly resolved a CUDA-enabled PyTorch wheel." }
 }
 
 # Confirm the package remains functional after relocation.
@@ -71,6 +74,14 @@ $ArchiveBytes = (Get-Item -LiteralPath $ArchivePath).Length
 if ($ArchiveBytes -ge 2GB) { throw "Runtime archive exceeds the 2 GiB per-asset release limit: $ArchiveBytes bytes." }
 $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$ArchivePath.sha256" -Value "$Hash  $ArchiveName" -Encoding ascii
+
+# Validate the exact compressed artifact that will be attached to the release.
+$ArchiveTestRoot = Join-Path $WorkRoot "archive-test"
+Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ArchiveTestRoot -Force
+$ArchiveTestPython = Join-Path $ArchiveTestRoot "python.exe"
+& $ArchiveTestPython -c "import torch, torchvision, fastapi, faster_whisper; print(torch.__version__)"
+if ($LASTEXITCODE -ne 0) { throw "Compressed runtime archive failed its extraction/import test." }
+
 Write-Host "Runtime archive: $ArchivePath"
 Write-Host "SHA-256: $Hash"
 Write-Host "Size: $([math]::Round((Get-Item $ArchivePath).Length / 1GB, 2)) GiB"
