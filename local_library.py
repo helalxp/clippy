@@ -537,6 +537,11 @@ class LocalLibrary:
             _atomic_json(staging / "project.json", project)
 
             with _LOCK:
+                # Deletion may race with a long archive copy. Re-check the
+                # tombstone while holding the same lock used by delete_project
+                # so an in-flight archive cannot publish a deleted project.
+                if self.is_deleted(project_id):
+                    raise FileNotFoundError("This project was deleted from the Library.")
                 if project_dir.exists():
                     os.replace(project_dir, backup)
                 try:
@@ -652,9 +657,12 @@ class LocalLibrary:
 
     def delete_project(self, project_id: str) -> None:
         folder = self._project_dir(project_id)
-        self._mark_project_deleted(project_id)
-        if folder.exists():
-            shutil.rmtree(folder)
+        # Serialize tombstone creation and physical removal with archive publish.
+        # The tombstone is written first so a crash cannot make the project reappear.
+        with _LOCK:
+            self._mark_project_deleted(project_id)
+            if folder.exists():
+                shutil.rmtree(folder)
 
     def delete_clip(self, project_id: str, clip_id: str) -> dict[str, Any]:
         folder = self._project_dir(project_id)
