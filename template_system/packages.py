@@ -56,7 +56,7 @@ def _safe_archive_path(name: str) -> str:
             for part in path.parts
         )
     ):
-        raise TemplatePackageError("package asset paths must be safe portable relative paths")
+        raise TemplatePackageError("package asset paths must be safe relative paths and Windows-portable")
     return name
 
 
@@ -126,6 +126,10 @@ def export_template_package(
         "template": document.to_storage_dict(),
     }
 
+    asset_paths = [asset.path.casefold() for asset in document.assets]
+    if len(asset_paths) != len(set(asset_paths)):
+        raise TemplatePackageError("template contains duplicate portable asset paths")
+
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         manifest_info = zipfile.ZipInfo(PACKAGE_MANIFEST, date_time=(1980, 1, 1, 0, 0, 0))
         manifest_info.compress_type = zipfile.ZIP_DEFLATED
@@ -137,7 +141,7 @@ def export_template_package(
         total_size = 0
         for asset in sorted(document.assets, key=lambda item: item.id):
             _safe_archive_path(asset.path)
-            if asset.path == PACKAGE_MANIFEST:
+            if asset.path.casefold() == PACKAGE_MANIFEST.casefold():
                 raise TemplatePackageError("template asset path collides with the package manifest")
             verified_asset, path = storage.get_asset(template_id, asset.id)
             if verified_asset != asset:
