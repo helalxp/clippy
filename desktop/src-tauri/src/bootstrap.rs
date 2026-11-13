@@ -24,6 +24,8 @@ pub struct RuntimeManifest {
     pub schema: u32,
     pub state: String,
     pub requirements_sha256: String,
+    #[serde(default)]
+    pub browser_sha256: Option<String>,
     pub components: std::collections::HashMap<String, RuntimeComponent>,
 }
 
@@ -151,7 +153,7 @@ impl Bootstrap {
                 if manifest.version != "1.0.0" || manifest.schema != 1 {
                     return Err(format!("Unsupported runtime manifest version/schema: {}/{}", manifest.version, manifest.schema));
                 }
-                for name in ["python", "node", "ffmpeg"] {
+                for name in ["python", "node", "ffmpeg", "browser"] {
                     let component = manifest.components.get(name)
                         .ok_or_else(|| format!("Runtime manifest is missing component '{name}'"))?;
                     if !component.installed || component.version.trim().is_empty() {
@@ -165,6 +167,17 @@ impl Bootstrap {
                 if actual != manifest.requirements_sha256.to_ascii_lowercase() {
                     return Err("Runtime manifest requirements hash does not match the installed application payload".to_string());
                 }
+                let browser_executable = manifest_path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join("browser").join("headless-shell").join("chrome-headless-shell.exe");
+                let browser_bytes = fs::read(&browser_executable)
+                    .map_err(|e| format!("Cannot read persistent Remotion browser {}: {e}", browser_executable.display()))?;
+                let browser_actual = format!("{:x}", Sha256::digest(&browser_bytes));
+                let browser_expected = manifest.browser_sha256.as_deref()
+                    .ok_or_else(|| "Runtime manifest is missing the Remotion browser SHA-256".to_string())?;
+                if browser_actual != browser_expected.to_ascii_lowercase() {
+                    return Err("Persistent Remotion browser hash does not match the runtime manifest".to_string());
+                }
                 // The setup engine writes a key/value state string. Treat it as
                 // structured metadata rather than comparing a reconstructed string:
                 // PowerShell also records pythonVariant (cpu/cuda), and future
@@ -174,6 +187,7 @@ impl Bootstrap {
                     ("python", manifest.components["python"].version.as_str()),
                     ("node", manifest.components["node"].version.as_str()),
                     ("ffmpeg", manifest.components["ffmpeg"].version.as_str()),
+                    ("browser", manifest.components["browser"].version.as_str()),
                     ("requirements", actual.as_str()),
                 ];
                 for (key, value) in expected {
@@ -310,7 +324,7 @@ mod manifest_state_tests {
     #[test]
     fn accepts_power_shell_generated_cpu_manifest_state() {
         let parsed = parse_manifest_state(
-            "python=3.12.10;pythonVariant=cpu;node=22.23.3;ffmpeg=gyan-release-essentials;requirements=0123456789abcdef"
+            "python=3.12.10;pythonVariant=cpu;node=22.23.3;ffmpeg=gyan-release-essentials;browser=4.0.0;requirements=0123456789abcdef"
         ).unwrap();
         assert_eq!(parsed.get("python").unwrap(), "3.12.10");
         assert_eq!(parsed.get("pythonVariant").unwrap(), "cpu");
@@ -322,7 +336,7 @@ mod manifest_state_tests {
     #[test]
     fn accepts_power_shell_generated_cuda_manifest_state() {
         let parsed = parse_manifest_state(
-            "python=3.12.10;pythonVariant=cuda;node=22.23.3;ffmpeg=gyan-release-essentials;requirements=0123456789abcdef"
+            "python=3.12.10;pythonVariant=cuda;node=22.23.3;ffmpeg=gyan-release-essentials;browser=4.0.0;requirements=0123456789abcdef"
         ).unwrap();
         assert_eq!(parsed.get("pythonVariant").unwrap(), "cuda");
     }
