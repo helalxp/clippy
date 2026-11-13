@@ -42,8 +42,16 @@ $NvidiaDriverVersion = $null
 $NvidiaGpuName = $null
 $NvidiaComputeCapability = $null
 $Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-if ($Nvidia) {
-    $NvidiaInfo = & $Nvidia.Source --query-gpu=name,driver_version,compute_cap --format=csv,noheader 2>$null
+$NvidiaSmiPath = if ($Nvidia) { $Nvidia.Source } else { $null }
+if (-not $NvidiaSmiPath) {
+    $NvidiaCandidates = @(
+        (Join-Path $env:ProgramFiles "NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+        (Join-Path $env:SystemRoot "System32\nvidia-smi.exe")
+    )
+    $NvidiaSmiPath = $NvidiaCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+}
+if ($NvidiaSmiPath) {
+    $NvidiaInfo = & $NvidiaSmiPath --query-gpu=name,driver_version,compute_cap --format=csv,noheader 2>$null
     if ($LASTEXITCODE -eq 0 -and $NvidiaInfo) {
         $NvidiaLine = @($NvidiaInfo) | Select-Object -First 1
         $NvidiaFields = ([string]$NvidiaLine).Split(',')
@@ -51,7 +59,10 @@ if ($Nvidia) {
             $NvidiaGpuName = $NvidiaFields[0].Trim()
             $DriverText = $NvidiaFields[1].Trim()
             try { $NvidiaDriverVersion = [Version]$DriverText } catch { $NvidiaDriverVersion = $null }
-            try { $NvidiaComputeCapability = [double]$NvidiaFields[2].Trim() } catch { $NvidiaComputeCapability = $null }
+            $ParsedComputeCapability = 0.0
+            if ([double]::TryParse($NvidiaFields[2].Trim(), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ParsedComputeCapability)) {
+                $NvidiaComputeCapability = $ParsedComputeCapability
+            }
             # CUDA 12.8 GA requires Windows driver 570.65. The packaged
             # PyTorch CUDA runtime targets Volta/Turing-era and newer devices;
             # Blackwell is supported by cu128. Unsupported/unknown devices use
