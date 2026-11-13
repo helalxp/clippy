@@ -57,7 +57,7 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
         "captions": FeatureCapability("captions", "exact", "The FFmpeg adapter maps canonical caption typography, colors, word highlighting, reveal, and top/middle/bottom placement into the existing ASS subtitle generator."),
         "hook": FeatureCapability("hook", "exact", "The FFmpeg adapter renders canonical hook text, uploaded fonts, optional solid text backing, normalized placement, timed visibility, and all declared entrance animations."),
         "background": FeatureCapability("background", "exact", "The FFmpeg adapter implements black/original matte, blurred duplicate, and solid-color contain backgrounds; background fill is incompatible with cover crop."),
-        "overlays": FeatureCapability("overlays", "unsupported", "The first FFmpeg adapter does not implement the generic overlay collection."),
+        "overlays": FeatureCapability("overlays", "exact", "The FFmpeg adapter applies ordered image/watermark assets with preserved aspect ratio, normalized center anchors, opacity, and rotation; text overlays remain unsupported."),
         "effects": FeatureCapability("effects", "unsupported", "The first FFmpeg adapter does not implement canonical effect segments."),
         "motion": FeatureCapability("motion", "unsupported", "The first FFmpeg adapter does not implement canonical motion recipes."),
         "transitions": FeatureCapability("transitions", "unsupported", "No canonical transition adapter is present in the audited pipeline."),
@@ -160,6 +160,13 @@ def _capability_for_recipe(
             return FeatureCapability(
                 "framing", "unsupported",
                 "Contain framing is centered; custom anchors are supported only for cover/manual crop.",
+            )
+        return registered
+    if feature == "overlays":
+        if any(item.kind == "text" for item in recipe.overlays):
+            return FeatureCapability(
+                "overlays", "unsupported",
+                "Image and watermark overlays are supported; text overlays need explicit typography and color fields before they can be rendered faithfully.",
             )
         return registered
     if feature == "background":
