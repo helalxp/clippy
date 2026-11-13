@@ -165,11 +165,12 @@ def _capability_for_recipe(
     if feature == "effects":
         if any(
             item.zoom != 1.0 or item.center_x != 0.5 or item.center_y != 0.5
+            or item.brightness > 2.0 or item.contrast > 2.0
             for item in recipe.effects
         ):
             return FeatureCapability(
                 "effects", "unsupported",
-                "EffectSegment zoom and crop-center fields are not yet applied; use MotionRecipe for supported zoom and pan behavior.",
+                "EffectSegment zoom/crop-center fields are not yet applied, and FFmpeg EQ cannot exactly represent brightness above 2 or contrast above 2; use MotionRecipe for supported zoom and pan behavior.",
             )
         return registered
     if feature == "overlays":
