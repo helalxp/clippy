@@ -11,5 +11,16 @@ export const getApiUrl = (path) => {
     const runtimeBase = typeof window !== 'undefined' && window.__CLIPPY_API_BASE_URL__
         ? window.__CLIPPY_API_BASE_URL__
         : API_BASE_URL;
-    return `${runtimeBase}${normalizedPath}`;
+    const url = `${runtimeBase}${normalizedPath}`;
+    // Browser media elements cannot attach X-Clippy-Token headers. Scope only
+    // local static-media URLs with the current desktop session token instead.
+    const mediaPath = normalizedPath.split('?')[0];
+    const isMedia = /^\/(videos|thumbnails|reference-templates-media)(\/|$)/.test(mediaPath);
+    const sessionToken = typeof window !== 'undefined' ? window.__CLIPPY_API_TOKEN__ : '';
+    if (isMedia && sessionToken) {
+        const mediaUrl = new URL(url, window.location.href);
+        mediaUrl.searchParams.set('token', sessionToken);
+        return mediaUrl.toString();
+    }
+    return url;
 };
