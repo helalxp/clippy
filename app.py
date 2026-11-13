@@ -4728,10 +4728,11 @@ async def delete_template(template_id: str, request: Request):
 
 @app.post("/api/templates/{template_id}/assets", status_code=201)
 async def upload_template_asset(template_id: str, request: Request):
-    """Upload one bounded raster image using a server-generated opaque asset ID."""
+    """Upload one bounded image or OpenType/TrueType font asset."""
     import io
     import warnings
     from PIL import Image, UnidentifiedImageError
+    from template_system.assets import inspect_font_payload
     from template_system.models import TemplateAsset
     from template_system.storage import (
         TemplateIntegrityError,
@@ -4739,11 +4740,13 @@ async def upload_template_asset(template_id: str, request: Request):
         TemplateRevisionConflict,
     )
 
-    max_asset_bytes = 20 * 1024 * 1024
+    max_image_bytes = 20 * 1024 * 1024
+    max_font_bytes = 25 * 1024 * 1024
+    max_upload_bytes = max_font_bytes
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdecimal():
-        if int(content_length) > max_asset_bytes + 64 * 1024:
-            raise HTTPException(status_code=413, detail="Template asset exceeds the 20 MB limit")
+        if int(content_length) > max_upload_bytes + 64 * 1024:
+            raise HTTPException(status_code=413, detail="Template asset exceeds the supported size limit")
 
     try:
         form = await request.form(max_files=1, max_fields=1)
@@ -4754,8 +4757,8 @@ async def upload_template_asset(template_id: str, request: Request):
     if not hasattr(upload, "read") or not hasattr(upload, "filename"):
         raise HTTPException(status_code=422, detail="A file field is required")
     uploaded_size = getattr(upload, "size", None)
-    if isinstance(uploaded_size, int) and uploaded_size > max_asset_bytes:
-        raise HTTPException(status_code=413, detail="Template asset exceeds the 20 MB limit")
+    if isinstance(uploaded_size, int) and uploaded_size > max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Template asset exceeds the supported size limit")
     if not isinstance(raw_expected_revision, str) or not raw_expected_revision.isdecimal():
         raise HTTPException(status_code=422, detail="expected_revision must be a positive integer")
     expected_revision = int(raw_expected_revision)
@@ -4763,54 +4766,74 @@ async def upload_template_asset(template_id: str, request: Request):
         raise HTTPException(status_code=422, detail="expected_revision must be positive")
 
     try:
-        payload = await upload.read(max_asset_bytes + 1)
+        payload = await upload.read(max_upload_bytes + 1)
     finally:
         close = getattr(upload, "close", None)
         if close is not None:
             await close()
     if not payload:
         raise HTTPException(status_code=422, detail="Template asset is empty")
-    if len(payload) > max_asset_bytes:
-        raise HTTPException(status_code=413, detail="Template asset exceeds the 20 MB limit")
+    if len(payload) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Template asset exceeds the supported size limit")
 
     signatures = (
         (b"\x89PNG\r\n\x1a\n", "image/png", "png"),
         (b"\xff\xd8\xff", "image/jpeg", "jpg"),
     )
-    detected = next(
-        (item for signature, mime, extension in signatures
-         if payload.startswith(signature) for item in [(mime, extension)]),
+    detected_image = next(
+        ((mime, extension) for signature, mime, extension in signatures
+         if payload.startswith(signature)),
         None,
     )
-    if detected is None and payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
-        detected = ("image/webp", "webp")
-    if detected is None:
-        raise HTTPException(status_code=415, detail="Only PNG, JPEG, and WebP images are supported")
+    if detected_image is None and payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
+        detected_image = ("image/webp", "webp")
 
-    media_type, extension = detected
+    width = height = None
     supplied_type = getattr(upload, "content_type", None)
-    if supplied_type and supplied_type not in {media_type, "application/octet-stream"}:
-        raise HTTPException(status_code=415, detail="Uploaded MIME type does not match the file content")
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(payload)) as image:
-                image_format = image.format
-                width, height = image.size
-                if width < 1 or height < 1 or width > 16384 or height > 16384:
-                    raise HTTPException(status_code=413, detail="Image dimensions exceed the supported limit")
-                if width * height > 50_000_000:
-                    raise HTTPException(status_code=413, detail="Image pixel count exceeds the supported limit")
-                image.verify()
-    except HTTPException:
-        raise
-    except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning, OSError) as exc:
-        raise HTTPException(status_code=415, detail="Uploaded image is invalid or unsafe") from exc
-
-    expected_format = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[media_type]
-    if image_format != expected_format:
-        raise HTTPException(status_code=415, detail="Image signature and decoded format do not match")
+    if detected_image is not None:
+        if len(payload) > max_image_bytes:
+            raise HTTPException(status_code=413, detail="Image assets are limited to 20 MB")
+        media_type, extension = detected_image
+        accepted_types = {media_type, "application/octet-stream"}
+        if supplied_type and supplied_type not in accepted_types:
+            raise HTTPException(status_code=415, detail="Uploaded MIME type does not match the image content")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", Image.DecompressionBombWarning)
+                with Image.open(io.BytesIO(payload)) as image:
+                    image_format = image.format
+                    width, height = image.size
+                    if width < 1 or height < 1 or width > 16384 or height > 16384:
+                        raise HTTPException(status_code=413, detail="Image dimensions exceed the supported limit")
+                    if width * height > 50_000_000:
+                        raise HTTPException(status_code=413, detail="Image pixel count exceeds the supported limit")
+                    image.verify()
+        except HTTPException:
+            raise
+        except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning, OSError) as exc:
+            raise HTTPException(status_code=415, detail="Uploaded image is invalid or unsafe") from exc
+        expected_format = {"image/png": "PNG", "image/jpeg": "JPEG", "image/webp": "WEBP"}[media_type]
+        if image_format != expected_format:
+            raise HTTPException(status_code=415, detail="Image signature and decoded format do not match")
+    else:
+        try:
+            media_type, extension = inspect_font_payload(payload)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported or invalid template asset: {exc}",
+            ) from exc
+        accepted_types = {
+            "font/ttf": {"font/ttf", "application/x-font-ttf", "application/octet-stream"},
+            "font/otf": {
+                "font/otf",
+                "application/vnd.ms-opentype",
+                "application/x-font-opentype",
+                "application/octet-stream",
+            },
+        }[media_type]
+        if supplied_type and supplied_type not in accepted_types:
+            raise HTTPException(status_code=415, detail="Uploaded MIME type does not match the font content")
 
     asset_id = f"asset_{uuid.uuid4().hex}"
     asset = TemplateAsset(
