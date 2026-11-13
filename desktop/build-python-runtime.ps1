@@ -2,82 +2,70 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("cpu", "cuda")]
     [string]$Variant,
-
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "runtime-dist")
 )
-
 $ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $PythonVersion = "3.12.10"
-$TorchVersion = "2.11.0"
-$TorchVisionVersion = "0.26.0"
-$TorchIndex = if ($Variant -eq "cuda") {
-    "https://download.pytorch.org/whl/cu126"
-} else {
-    "https://download.pytorch.org/whl/cpu"
-}
-
-$PythonVersionOutput = (& python --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $PythonVersionOutput -ne "Python $PythonVersion") {
-    throw "Runtime packaging requires CI Python $PythonVersion. Found: $PythonVersionOutput"
-}
-
+$PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
+$PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/$PythonArchiveName"
+$PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
+$TorchIndex = if ($Variant -eq "cuda") { "https://download.pytorch.org/whl/cu126" } else { "https://download.pytorch.org/whl/cpu" }
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $WorkRoot = Join-Path $env:RUNNER_TEMP "clippy-python-runtime-$Variant"
 $RuntimeRoot = Join-Path $WorkRoot "python"
 $SitePackages = Join-Path $RuntimeRoot "Lib\site-packages"
-$Requirements = Join-Path $WorkRoot "requirements-runtime.txt"
 $ArchiveName = "clippy-python-$Variant.zip"
 $ArchivePath = Join-Path $OutputDirectory $ArchiveName
 
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) { throw "A CI Python 3.12 interpreter is required." }
+$BuildPython = (& python --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $BuildPython -notmatch "^Python 3\.12\.") { throw "Runtime packaging requires Python 3.12. Found: $BuildPython" }
+
 if (Test-Path $WorkRoot) { Remove-Item $WorkRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $WorkRoot, $OutputDirectory -Force | Out-Null
+$PythonArchive = Join-Path $WorkRoot $PythonArchiveName
+Write-Host "Downloading official CPython $PythonVersion embeddable distribution..."
+Invoke-WebRequest -Uri $PythonArchiveUrl -OutFile $PythonArchive -UseBasicParsing
+$ActualPythonHash = (Get-FileHash -LiteralPath $PythonArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ActualPythonHash -ne $PythonArchiveSha256) { throw "Official CPython archive SHA-256 mismatch." }
 
-$PythonPrefix = (& python -c "import sys; print(sys.prefix)" | Out-String).Trim()
-if (-not (Test-Path (Join-Path $PythonPrefix "python.exe"))) {
-    throw "Could not locate the CI Python installation at $PythonPrefix"
-}
+Expand-Archive -LiteralPath $PythonArchive -DestinationPath $RuntimeRoot
+$PythonPth = Join-Path $RuntimeRoot "python312._pth"
+if (-not (Test-Path $PythonPth)) { throw "Official CPython archive is missing python312._pth." }
+[System.IO.File]::WriteAllLines($PythonPth, @("python312.zip", ".", "Lib", "Lib\site-packages", "import site"), [System.Text.Encoding]::ASCII)
+New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
-Write-Host "Installing $Variant PyTorch runtime into the isolated CI Python environment..."
-& python -m pip install --disable-pip-version-check --no-warn-script-location "torch==$TorchVersion" "torchvision==$TorchVisionVersion" --index-url $TorchIndex
-if ($LASTEXITCODE -ne 0) { throw "Could not install $Variant PyTorch wheels." }
-
-Get-Content (Join-Path $RepoRoot "requirements.txt") |
-    Where-Object { $_ -notmatch "^\s*(torch|torchvision)\s*==" } |
-    Set-Content -LiteralPath $Requirements -Encoding utf8
-
-& python -m pip install --disable-pip-version-check --no-warn-script-location -r $Requirements
-if ($LASTEXITCODE -ne 0) { throw "Could not install Clippy's pinned Python requirements." }
-
-# Copy the complete CPython installation, including its standard library and
-# native extension dependencies. No pip operation is required on customer PCs.
-Write-Host "Staging the complete Python $PythonVersion runtime..."
-New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
-& robocopy $PythonPrefix $RuntimeRoot /E /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
-if ($LASTEXITCODE -ge 8) { throw "Could not stage the Python runtime (robocopy exit $LASTEXITCODE)." }
+# CI's Python/pip installs wheels directly into the final runtime. The shipped
+# runtime contains no package-manager bootstrap and never runs pip for users.
+Write-Host "Installing pinned $Variant Python dependencies..."
+& python -m pip install --disable-pip-version-check --no-warn-script-location --only-binary=:all: --target $SitePackages --index-url "https://pypi.org/simple" --extra-index-url $TorchIndex -r (Join-Path $RepoRoot "requirements.txt")
+if ($LASTEXITCODE -ne 0) { throw "Could not install pinned $Variant Python dependencies." }
 
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
 $VersionCheck = (& $StagedPython --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") {
-    throw "Staged Python failed its version check: $VersionCheck"
-}
-
+if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") { throw "Packaged Python failed version check: $VersionCheck" }
 $ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe; print('torch=' + torch.__version__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
 & $StagedPython -c $ImportCheck
-if ($LASTEXITCODE -ne 0) { throw "Staged Python runtime failed dependency import validation." }
+if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import validation." }
+if ($Variant -eq "cuda") {
+    & $StagedPython -c "import torch; assert torch.version.cuda is not None, 'CUDA wheel was not selected'"
+    if ($LASTEXITCODE -ne 0) { throw "CUDA package does not contain CUDA-enabled PyTorch." }
+}
 
-# Test relocation before packaging. This catches hard-coded CI installation paths.
+# Confirm the package remains functional after relocation.
 $RelocatedRoot = Join-Path $WorkRoot "relocated"
 Move-Item -LiteralPath $RuntimeRoot -Destination $RelocatedRoot
 $RelocatedPython = Join-Path $RelocatedRoot "python.exe"
 & $RelocatedPython -c "import sys, torch, fastapi; print(sys.executable); print(torch.__version__)"
-if ($LASTEXITCODE -ne 0) { throw "Python runtime failed after relocation; package is not portable." }
+if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed its relocation test." }
 
 if (Test-Path $ArchivePath) { Remove-Item $ArchivePath -Force }
-Write-Host "Compressing the verified $Variant runtime..."
-Compress-Archive -Path (Join-Path $RelocatedRoot "*") -DestinationPath $ArchivePath -CompressionLevel Optimal
-if (-not (Test-Path $ArchivePath) -or (Get-Item $ArchivePath).Length -lt 1) {
-    throw "Python runtime archive was not created."
-}
+$Tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+if (-not $Tar) { throw "Windows tar.exe is required to archive the Python runtime." }
+$Items = @(Get-ChildItem -LiteralPath $RelocatedRoot -Force | ForEach-Object { $_.Name })
+& $Tar.Path -a -c -f $ArchivePath -C $RelocatedRoot @Items
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ArchivePath)) { throw "Could not create $ArchiveName (tar exit $LASTEXITCODE)." }
 
 $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$ArchivePath.sha256" -Value "$Hash  $ArchiveName" -Encoding ascii
