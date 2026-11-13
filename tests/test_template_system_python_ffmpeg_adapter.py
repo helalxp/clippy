@@ -109,7 +109,7 @@ def test_adapter_refuses_unimplemented_recipe_features(tmp_path):
     make_source_video(source)
     recipe = TemplateRecipe.model_validate({
         "canvas": {"width": 360, "height": 640, "fps": 24},
-        "captions": {"enabled": True},
+        "hook": {"enabled": True, "text": "Unsupported hook"},
     })
 
     with pytest.raises(RendererCompatibilityError, match="unsupported"):
@@ -353,7 +353,7 @@ def test_application_service_refuses_template_with_unsupported_features(tmp_path
     template = TemplateDocument(
         id="tpl_unsupported01",
         name="Unsupported template",
-        recipe=TemplateRecipe.model_validate({"captions": {"enabled": True}}),
+        recipe=TemplateRecipe.model_validate({"hook": {"enabled": True, "text": "Unsupported hook"}}),
     )
     storage.create(template)
 
