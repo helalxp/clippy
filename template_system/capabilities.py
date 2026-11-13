@@ -57,7 +57,7 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
         "captions": FeatureCapability("captions", "exact", "The FFmpeg adapter maps canonical caption typography, colors, word highlighting, reveal, and top/middle/bottom placement into the existing ASS subtitle generator."),
         "hook": FeatureCapability("hook", "exact", "The FFmpeg adapter renders canonical hook text, uploaded fonts, optional solid text backing, normalized placement, timed visibility, and all declared entrance animations."),
         "background": FeatureCapability("background", "exact", "The FFmpeg adapter implements black/original matte, blurred duplicate, and solid-color contain backgrounds; background fill is incompatible with cover crop."),
-        "overlays": FeatureCapability("overlays", "exact", "The FFmpeg adapter applies ordered image/watermark assets with preserved aspect ratio, normalized center anchors, opacity, and rotation; text overlays remain unsupported."),
+        "overlays": FeatureCapability("overlays", "exact", "The FFmpeg adapter applies ordered image/watermark assets and styled text layers with normalized anchors, opacity, and explicit line breaks."),
         "effects": FeatureCapability("effects", "exact", "The FFmpeg adapter applies time-bounded brightness, contrast, and saturation adjustments; zoom/crop values in EffectSegment are not supported."),
         "motion": FeatureCapability("motion", "exact", "The FFmpeg adapter applies deterministic punch-in, slow-zoom, and pan motion with frame-based timing and normalized crop centers."),
         "transitions": FeatureCapability("transitions", "unsupported", "No canonical transition adapter is present in the audited pipeline."),
@@ -174,11 +174,20 @@ def _capability_for_recipe(
             )
         return registered
     if feature == "overlays":
-        if any(item.kind == "text" for item in recipe.overlays):
-            return FeatureCapability(
-                "overlays", "unsupported",
-                "Image and watermark overlays are supported; text overlays need explicit typography and color fields before they can be rendered faithfully.",
+        text_overlays = [item for item in recipe.overlays if item.kind == "text"]
+        for overlay in text_overlays:
+            max_estimated_chars = max(
+                1,
+                int(
+                    overlay.text_box_width_ratio * recipe.canvas.width
+                    / (overlay.font_size_ratio * recipe.canvas.height * 0.62)
+                ),
             )
+            if any(len(line) > max_estimated_chars for line in (overlay.text or "").splitlines()):
+                return FeatureCapability(
+                    "overlays", "approximate",
+                    f"Text overlay {overlay.id!r} contains a line longer than the conservative font-width estimate; inspect the preview before rendering.",
+                )
         return registered
     if feature == "background":
         if recipe.framing.mode in {"cover", "manual"}:
