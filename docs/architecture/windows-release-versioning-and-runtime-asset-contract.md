@@ -81,21 +81,24 @@ At the time of this audit, the GitHub Releases API for `helalxp/clippy` returned
 
 Therefore, the current setup engine has no published release asset to download. An HTTP 404 is the expected result until a matching release is created and populated.
 
-### 5.2 Confirmed: the installed 0.2.1 setup engine differs from the audited 0.2.2 source
+### 5.2 Confirmed: the installed application version differs from the audited source version
 
-The user's installed setup log requested:
+The user's installed setup log reports a local download/cache filename:
 
 ```text
 clippy-python-cuda-0.2.1.zip
 ```
 
-The audited `windows-installer-hardening` source has `VERSION = 0.2.2` and constructs the release asset URL using the unversioned asset name:
+The current setup implementation uses the application version in the local cache filename, but constructs the remote release URL with an unversioned asset name. Therefore, the log's filename alone does **not** prove that GitHub was asked for an asset with the `.0.2.1` suffix.
+
+The installed payload is using application version `0.2.1`; the audited branch has `VERSION = 0.2.2`. Under the current contract, the expected remote URLs are:
 
 ```text
-/releases/download/v0.2.2/clippy-python-cuda.zip
+Installed 0.2.1: /releases/download/v0.2.1/clippy-python-cuda.zip
+Audited 0.2.2:   /releases/download/v0.2.2/clippy-python-cuda.zip
 ```
 
-This indicates that the tested installer contains an older setup-runtime implementation/payload than the source currently being audited. It is not evidence that the current branch's version-validation script failed. It is evidence that the installed artifact and current source are from different application versions.
+This is an installer/source version difference, not proof that the source-level version validator failed. Since the repository currently has no published releases, neither version has a runtime asset available through the expected release path.
 
 The next installer must be built from the intended release commit, and its embedded payload version must be checked before distribution.
 
