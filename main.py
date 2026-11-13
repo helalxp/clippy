@@ -930,7 +930,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
                 'best[height<=1080][ext=mp4]/best[ext=mp4]/best')
 
     def _base_opts(extractor_args, proxy, cookies=True):
-        return {
+        opts = {
             'quiet': False, 'verbose': True, 'no_warnings': False,
             'cookiefile': cookies_path if (cookies and cookies_path) else None,
             'proxy': proxy, 'socket_timeout': 30, 'retries': 10, 'fragment_retries': 10,
@@ -940,9 +940,6 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
             # entry of the list into the SAME outtmpl (the title is the
             # playlist's), paying for all of them and keeping the last.
             'noplaylist': True,
-            # Windows ships managed Node, not Deno. yt-dlp enables Deno by default,
-            # so explicitly enable the bundled Node runtime for EJS challenge solving.
-            'js_runtimes': {'node': {'path': os.environ.get('CLIPPY_NODE_EXE') or 'node'}},
             'extractor_args': extractor_args,
             'http_headers': {
                 'User-Agent': (
@@ -996,7 +993,6 @@ def download_youtube_video(url, output_dir=".", on_audio=None):
                 'format': 'bestaudio[ext=m4a]/bestaudio',
                 'outtmpl': os.path.join(output_dir, '.early_audio.%(ext)s'),
                 'overwrites': True,
-                'js_runtimes': {'node': {'path': os.environ.get('CLIPPY_NODE_EXE') or 'node'}},
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
                 res = ydl.process_ie_result(copy.deepcopy(info), download=True)
