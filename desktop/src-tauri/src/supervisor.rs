@@ -402,6 +402,7 @@ impl Supervisor {
             .env("NODE_ENV", "production")
             .env("PORT", renderer_port_arg.clone())
             .env("OUTPUT_DIR", &paths.output)
+            .env("CLIPPY_API_TOKEN", &api_token)
             .env_remove("NODE_PATH")
             .env_remove("NODE_OPTIONS")
             .env_remove("NPM_CONFIG_PREFIX")
