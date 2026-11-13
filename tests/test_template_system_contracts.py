@@ -187,6 +187,40 @@ def test_renderer_capability_report_never_hides_unsupported_transition():
     assert [item.feature for item in report.unsupported] == ["transitions"]
 
 
+def test_styled_text_overlay_is_reported_as_exact_within_width_estimate():
+    recipe = TemplateRecipe.model_validate({
+        "overlays": [{
+            "id": "brand-copy",
+            "kind": "text",
+            "text": "Clippy template",
+            "font_size_ratio": 0.04,
+            "text_box_width_ratio": 0.8,
+        }],
+    })
+
+    report = check_compatibility(recipe, "python_ffmpeg")
+
+    assert report.status == "compatible"
+    assert [item.feature for item in report.exact] == ["canvas", "overlays"]
+
+
+def test_long_text_overlay_is_reported_as_approximate():
+    recipe = TemplateRecipe.model_validate({
+        "overlays": [{
+            "id": "long-copy",
+            "kind": "text",
+            "text": "This line is deliberately much too long for the configured box",
+            "font_size_ratio": 0.06,
+            "text_box_width_ratio": 0.3,
+        }],
+    })
+
+    report = check_compatibility(recipe, "python_ffmpeg")
+
+    assert report.status == "partial"
+    assert [item.feature for item in report.approximate] == ["overlays"]
+
+
 def test_default_recipe_does_not_claim_unrequested_features():
     report = check_compatibility(TemplateRecipe(), "remotion_render")
 
