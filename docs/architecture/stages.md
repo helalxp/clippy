@@ -290,7 +290,7 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** implement generic image/text overlays with validated asset sizing, alpha, and normalized-position semantics. Canonical captions and hook/title rendering are now implemented in the Python/FFmpeg adapter with real-render tests and explicit compatibility reporting. Keep live Gemini validation opt-in. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: overlays, tracking, motion/effects, and Remotion parity remain unfinished.
+**Immediate next action:** finish CI validation of the Python/FFmpeg motion and color-effect slice, then move to the missing text-overlay contract. Image/watermark overlays, canonical captions, hook/title rendering, frame-timed punch-in/slow-zoom/pan, and time-bounded brightness/contrast/saturation are implemented in the Python adapter. Keep live Gemini validation opt-in. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: text overlays, tracking, transitions, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -312,12 +312,12 @@ The background, watermark, effects-generation, subtitle-add, subtitle-remove, ho
 
 1. Run focused locking and template tests in CI, then run the full backend suite and record any baseline or newly introduced failures accurately.
 2. Audit remaining lifecycle interactions, especially project restore versus active edit operations, and add a shared lock only if the ownership and concurrency model supports it.
-3. Implement generic overlays and then measurable motion/effect capabilities with real FFmpeg fixtures, preflight reporting, and deterministic output tests.
+3. Implement image/watermark overlays and measurable motion/effect capabilities with real FFmpeg fixtures, preflight reporting, and deterministic output tests.
 4. Reconcile the existing asset lifecycle with overlay rendering, including alpha, sizing, and safe placement.
 5. Reconcile browser-preview and final-render Remotion contracts before claiming preview/render parity.
 6. Continue with editor UI, migration/import/export, lifecycle/security review, and release gates.
 
-The branch is not release-ready. Managed/cloud template application remains blocked, the library/editor UI and full preview/final parity are not implemented, and overlays, tracking, motion/effects, and release lifecycle checks remain outstanding.
+The branch is not release-ready. Managed/cloud template application remains blocked, the library/editor UI and full preview/final parity are not implemented, and text overlays, tracking, transitions, and release lifecycle checks remain outstanding.
 
 
 ## CI reliability review — 2026-11-12
@@ -363,7 +363,7 @@ Implemented on feature/template-reference-system-clean:
 - Added owner-scoped export and import API endpoints.
 - GitHub Actions run 43420728540 passed: 149 focused template tests, 1,371 backend tests passed with 50 skipped, and frontend production build passed.
 
-Next vertical slice: implement measurable motion/effect recipe support and subject tracking only after their contracts and quality metrics are specified. Text overlays need an expanded style schema. Keep preview/Remotion parity as a later explicit gate.
+Next vertical slice: validate deterministic motion/effect rendering, then define text-overlay typography and backing semantics. Subject tracking needs a separate measurable contract. Keep preview/Remotion parity as a later explicit gate.
 
 
 ## Latest update — template-driven captions (2026-11-13)
@@ -392,4 +392,11 @@ Implemented in this update:
 - The application service resolves image assets from the template's own asset store. Missing, symbolic-link, non-image, or unsupported-extension assets fail safely.
 - Text overlays remain explicitly unsupported because the current recipe has no font, size, color, backing, or line-layout fields.
 
-Remaining in Stage 5: text-overlay schema/rendering, motion/effect recipe support, subject tracking, render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
+Motion/effect implementation added after the image-overlay milestone; CI validation is pending:
+- Added frame-timed `punch_in`, `slow_zoom`, and `pan` recipes. Punch-in ramps over the first 20% of its interval and holds; slow zoom ramps linearly; pan moves from center to a normalized target while zoomed.
+- Added time-bounded brightness, contrast, and saturation effects using FFmpeg EQ.
+- Motion and effects are applied before image overlays, captions, and hook/title layers. Recipe timeline values are translated to output-frame indices using the configured FPS.
+- Capability checks reject unsupported effect zoom/crop-center values and EQ values outside the exact FFmpeg range. Motion/effect intervals starting after the clip ends fail clearly.
+- Added preflight and real-render regression tests for timed motion, timed brightness, and unsupported effect values.
+
+Remaining in Stage 5: text-overlay schema/rendering, subject tracking, transitions, render-provenance hardening, deterministic repeated-application checks, and CI verification of this motion/effect slice. Stage 6 Remotion preview/final parity remains a separate release gate.
