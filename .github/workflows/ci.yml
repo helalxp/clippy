@@ -22,7 +22,7 @@ jobs:
       - name: Install focused test dependencies
         run: python -m pip install pytest "pydantic>=2.7,<3" Pillow "google-genai==1.75.0" fastapi boto3 PyJWT email-validator python-multipart python-dotenv sqlalchemy greenlet numpy opencv-python-headless
       - name: Test template contracts and local storage
-        run: python -m pytest tests/test_template_system_contracts.py tests/test_template_system_storage.py tests/test_template_system_analysis.py tests/test_template_system_ingest.py tests/test_template_system_visuals.py tests/test_template_system_interpretation.py tests/test_template_system_gemini_provider.py tests/test_template_system_python_ffmpeg_adapter.py tests/test_template_system_api.py tests/test_template_system_edit_locking.py -v
+        run: python -m pytest tests/test_template_system_contracts.py tests/test_template_system_storage.py tests/test_template_system_analysis.py tests/test_template_system_ingest.py tests/test_template_system_visuals.py tests/test_template_system_interpretation.py tests/test_template_system_gemini_provider.py tests/test_template_system_python_ffmpeg_adapter.py tests/test_template_system_api.py tests/test_template_system_edit_locking.py tests/test_template_system_font_assets.py tests/test_template_system_packages.py -v
 
   backend-tests:
     runs-on: ubuntu-latest
