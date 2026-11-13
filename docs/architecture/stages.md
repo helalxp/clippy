@@ -318,7 +318,7 @@ The background, watermark, effects-generation, subtitle-add, subtitle-remove, ho
 5. Reconcile browser-preview and final-render Remotion contracts before claiming preview/render parity.
 6. Continue with editor UI, migration/import/export, lifecycle/security review, and release gates.
 
-The branch is not release-ready. Managed/cloud template application remains blocked, the library/editor UI and full preview/final parity are not implemented, and text overlays, tracking, transitions, and release lifecycle checks remain outstanding.
+The branch is not release-ready. Managed/cloud template application remains blocked, the library/editor UI and full preview/final parity are not implemented, and subject tracking, transitions, and release lifecycle checks remain outstanding.
 
 
 ## CI reliability review — 2026-11-12
