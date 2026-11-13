@@ -39,7 +39,7 @@ New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 # CI's Python/pip installs wheels directly into the final runtime. The shipped
 # runtime contains no package-manager bootstrap and never runs pip for users.
 Write-Host "Installing pinned $Variant Python dependencies..."
-& python -m pip install --disable-pip-version-check --no-warn-script-location --only-binary=:all: --target $SitePackages --index-url "https://pypi.org/simple" --extra-index-url $TorchIndex -r (Join-Path $RepoRoot "requirements.txt")
+& python -m pip install --disable-pip-version-check --no-warn-script-location --prefer-binary --target $SitePackages --index-url "https://pypi.org/simple" --extra-index-url $TorchIndex -r (Join-Path $RepoRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Could not install pinned $Variant Python dependencies." }
 
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
@@ -67,6 +67,8 @@ $Items = @(Get-ChildItem -LiteralPath $RelocatedRoot -Force | ForEach-Object { $
 & $Tar.Path -a -c -f $ArchivePath -C $RelocatedRoot @Items
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ArchivePath)) { throw "Could not create $ArchiveName (tar exit $LASTEXITCODE)." }
 
+$ArchiveBytes = (Get-Item -LiteralPath $ArchivePath).Length
+if ($ArchiveBytes -ge 2GB) { throw "Runtime archive exceeds the 2 GiB per-asset release limit: $ArchiveBytes bytes." }
 $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$ArchivePath.sha256" -Value "$Hash  $ArchiveName" -Encoding ascii
 Write-Host "Runtime archive: $ArchivePath"
