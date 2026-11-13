@@ -122,6 +122,39 @@ jobs:
         shell: pwsh
         run: ./desktop/build.ps1
 
+      - name: Sign Windows installer
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 }}
+          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          $files = @(Get-ChildItem "./desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe")
+          if ($files.Count -ne 1) { throw "Expected exactly one NSIS installer, found $($files.Count)." }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)) {
+            Write-Host "::warning::Installer is unsigned. Configure WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 and WINDOWS_CODESIGN_CERTIFICATE_PASSWORD repository secrets before publishing a public release."
+            return
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
+            throw "The code-signing certificate is configured but its password secret is missing."
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "clippy-code-signing.pfx"
+          $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)
+          [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
+          $signtool = Get-ChildItem "$env:ProgramFiles(x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw "Windows SDK signtool.exe was not found on the release runner." }
+          try {
+            & $signtool.FullName sign /fd SHA256 /f $certificatePath /p $env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD /tr "http://timestamp.digicert.com" /td SHA256 $files[0].FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed to sign the installer (exit $LASTEXITCODE)." }
+            & $signtool.FullName verify /pa /v $files[0].FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signed installer verification failed (exit $LASTEXITCODE)." }
+            Write-Host "Installer Authenticode signature verified."
+          } finally {
+            Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Generate SHA256 checksum
         id: installer
         shell: pwsh
