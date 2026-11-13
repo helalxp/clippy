@@ -151,3 +151,32 @@ A project is now reserved after source validation/upload staging succeeds and be
 - Project and clip deletion tombstones prevent deleted content from being re-imported.
 - Clip metadata deletion is committed before media cleanup; startup removes orphan clip folders.
 - Startup restores interrupted project directory swaps and removes abandoned ZIP exports.
+
+## 8. Validation results (2026-11-13)
+
+The first GitHub Actions run for the Library branch completed with the following results:
+
+| Check | Result | Notes |
+|---|---|---|
+| Frontend build | PASS | Dashboard dependencies installed and production build completed. |
+| Backend tests | PASS | The repository backend test job completed successfully, including the Library unit-test suite. |
+| Windows desktop validation: dashboard build | PASS | Packaged desktop dashboard build completed. |
+| Windows desktop validation: PowerShell scripts | PASS | Installer script validation completed. |
+| Windows desktop validation: Python syntax | PASS | Backend syntax check completed. |
+| Windows desktop validation: Rust/Tauri | PASS | Tauri application check completed. |
+| Windows desktop validation: NSIS installer | PASS | Complete installer build completed and artifact-size measurement ran. |
+| CPU relocatable Python runtime | PASS | Runtime build and relocation validation completed. |
+| CUDA relocatable Python runtime | BLOCKED | Runtime archive was 3,194,596,811 bytes, above the workflow's 2 GiB per-asset release limit. CUDA availability was false on the hosted runner, as expected without a GPU. This is a packaging-size issue, not a Library test failure. |
+| Packaged Windows smoke test | NOT RUN | A successful CI installer build is not proof of interactive behavior on the user's Windows machine. |
+
+### Next acceptance pass
+
+1. Install the generated NSIS artifact on a clean Windows profile and launch Clippy twice to verify Library persistence across restart.
+2. Generate at least two projects with multiple clips and confirm each clip preview, caption edit, individual download, ZIP export, and Explorer reveal.
+3. Confirm the Explorer actions open the project folder and select the requested archived MP4, respectively.
+4. Test project and clip deletion, restart Clippy, and verify deleted entries do not return.
+5. Test source retention OFF and ON using both a downloaded source and a user-uploaded source; verify the original upload is never moved or deleted.
+6. Interrupt a generation, restart the app, and verify the Library status and any completed clips are preserved accurately.
+7. Repeat Download All with a large project and verify the saved ZIP opens and contains every expected clip and caption file.
+
+Do not treat the CUDA runtime packaging failure as a Library blocker. Track it separately against the Windows runtime packaging/release-size workstream. Do not merge this PR until the packaged Windows smoke test is completed and any Library-specific failures are fixed.
