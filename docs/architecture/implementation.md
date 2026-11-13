@@ -216,3 +216,15 @@ Next: add font asset support and versioned template package import/export. Then 
 - GitHub Actions run 43420728540 passed on the current implementation: 149 focused template tests passed, 1,371 backend tests passed, 50 skipped, and the frontend production build passed.
 
 Next: implement template-driven caption styling as the next isolated Python/FFmpeg adapter capability, with real font-file fixtures, deterministic rendered output, explicit compatibility reporting, and tests that prove existing subtitle behavior remains unchanged.
+
+
+## Latest implementation update: template-driven captions
+
+- The Python/FFmpeg adapter now consumes the canonical CaptionRecipe and writes ASS through the existing subtitle generator. It does not introduce a second caption-rendering engine.
+- Caption rendering supports font family, normalized font size, text/highlight/outline colors, outline and shadow ratios, word highlighting, word reveal, uppercase, and top/middle/bottom placement. Canonical top/bottom safe-area margins are translated to ASS margins.
+- When a template references a font asset, the application service resolves the owner-scoped asset and the adapter stages it in a temporary FFmpeg fonts directory. Temporary ASS/font files are cleaned after render.
+- Template application receives the saved job transcript, remaps recut EDL segments onto the clip timeline, and prefers saved user-edited caption words when present. A template that enables captions without available words fails clearly instead of silently rendering without captions.
+- Custom x/y caption anchors are explicitly unsupported. Non-default max_lines values are approximate because glyph wrapping varies by font and language. Hook/title rendering, generic overlays, and Remotion preview parity remain outstanding.
+- GitHub Actions run 43421566510 passed: 152 focused template tests, 1,357 backend tests passed with 53 skipped, and frontend production build passed.
+
+Next: implement hook/title rendering as a separate adapter capability with deterministic timing/position tests, then move to overlays. Do not claim full template fidelity until preview and final-render parity is separately proven.
