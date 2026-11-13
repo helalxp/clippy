@@ -166,6 +166,13 @@ Provide a visual preview beside structured controls. Organize settings into mean
 - Brand assets and watermark.
 - Output and compatibility.
 
+**Initial image/watermark overlay semantics (Python/FFmpeg v1):**
+- `anchor_x` and `anchor_y` identify the overlay's normalized center point on the output canvas.
+- `width_ratio` is the overlay width divided by canvas width. Height is derived from the source asset aspect ratio; the asset is never stretched.
+- `opacity` multiplies the source image alpha. `rotation_degrees` rotates clockwise around the overlay center.
+- Overlays are applied for the full clip duration. The recipe array is ordered back-to-front: later entries render above earlier entries.
+- `image` and `watermark` use the same image-layer renderer. Text overlays remain unsupported until the canonical contract has explicit font, size, color, background, and line-layout properties.
+
 Provide simple controls by default and advanced controls for users who want precise values. Every control must map to a documented schema property and a renderer capability.
 
 ### 4.5 Apply and preview workflow
