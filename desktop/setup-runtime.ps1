@@ -233,7 +233,6 @@ if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python
 $PythonStage = Join-Path $Runtime "python.installing"
 $PythonBackup = Join-Path $Runtime "python.previous"
 if (Test-Path $PythonStage) { Remove-Item $PythonStage -Recurse -Force }
-if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
 Write-Stage "Extracting the verified $TorchVariant Python runtime..."
 Expand-Archive -LiteralPath $PythonRuntimeArchive -DestinationPath $PythonStage -Force
 $StagedPython = Join-Path $PythonStage "python.exe"
@@ -253,7 +252,10 @@ if ($TorchVariant -eq "cuda") {
 }
 
 # Activate only after archive hash, Python version, and critical imports pass.
-if (Test-Path $PythonDir) { Move-Item -LiteralPath $PythonDir -Destination $PythonBackup }
+if (Test-Path $PythonDir) {
+    if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
+    Move-Item -LiteralPath $PythonDir -Destination $PythonBackup
+}
 try {
     Move-Item -LiteralPath $PythonStage -Destination $PythonDir
     $PythonExe = Join-Path $PythonDir "python.exe"
