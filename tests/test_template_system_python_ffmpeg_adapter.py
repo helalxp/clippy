@@ -669,7 +669,7 @@ def test_adapter_renders_styled_text_overlay_without_expanding_user_text(tmp_pat
             "kind": "text",
             "text": "CLIPPY\n%{metadata\\:title}",
             "font_family": "DejaVu Sans",
-            "font_size_ratio": 0.06,
+            "font_size_ratio": 0.035,
             "font_color": "#FFFFFF",
             "background_color": "#112233",
             "outline_color": "#000000",
