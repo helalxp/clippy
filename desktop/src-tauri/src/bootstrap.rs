@@ -136,6 +136,20 @@ impl Bootstrap {
         }
     }
 
+    fn executable_version(exe: &Path, args: &[&str]) -> Result<String, String> {
+        let output = Command::new(exe)
+            .args(args)
+            .output()
+            .map_err(|e| format!("Cannot inspect {}: {e}", exe.display()))?;
+        if !output.status.success() {
+            return Err(format!("Version check failed for {}: {}", exe.display(), String::from_utf8_lossy(&output.stderr)));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let value = if stdout.trim().is_empty() { stderr } else { stdout };
+        Ok(value.lines().next().unwrap_or_default().trim().to_string())
+    }
+
     pub fn get_status(&self) -> Result<BootstrapStatus, String> {
         let mut issues = self.validate_components()?;
         let manifest_path = &self.config.manifest_path;
@@ -159,6 +173,16 @@ impl Bootstrap {
                     if !component.installed || component.version.trim().is_empty() {
                         return Err(format!("Runtime manifest component '{name}' is not marked installed"));
                     }
+                }
+                let python_exe = self.config.runtime_root.join("python").join("python.exe");
+                let node_exe = self.config.runtime_root.join("node").join("node.exe");
+                let python_version = Self::executable_version(&python_exe, &["--version"])?;
+                if python_version != format!("Python {}", manifest.components["python"].version) {
+                    return Err(format!("Managed Python version mismatch: expected {}, found {python_version}", manifest.components["python"].version));
+                }
+                let node_version = Self::executable_version(&node_exe, &["--version"])?;
+                if node_version.trim_start_matches('v') != manifest.components["node"].version {
+                    return Err(format!("Managed Node.js version mismatch: expected {}, found {node_version}", manifest.components["node"].version));
                 }
                 let requirements = fs::read(&requirements_path)
                     .map_err(|e| format!("Cannot read bundled requirements at {}: {e}", requirements_path.display()))?;
@@ -201,10 +225,10 @@ impl Bootstrap {
                         )),
                     }
                 }
-                if let Some(variant) = state.get("pythonVariant") {
-                    if variant != "cpu" && variant != "cuda" {
-                        return Err(format!("Unsupported Python runtime variant '{variant}'"));
-                    }
+                let variant = state.get("pythonVariant")
+                    .ok_or_else(|| "Runtime manifest state is missing required field 'pythonVariant'".to_string())?;
+                if variant != "cpu" && variant != "cuda" {
+                    return Err(format!("Unsupported Python runtime variant '{variant}'"));
                 }
                 Ok(())
             });
