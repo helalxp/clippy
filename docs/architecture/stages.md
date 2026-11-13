@@ -378,7 +378,7 @@ Implemented on feature/template-reference-system-clean:
 
 Implemented in this update:
 - Canonical hook/title rendering is supported by the Python/FFmpeg adapter through a dedicated drawtext translator.
-- Hook text is written to a temporary UTF-8 text file rather than interpolated into the FFmpeg filter graph. The adapter supports uploaded font assets, optional solid background backing, normalized top/center/bottom/custom placement, canonical top/bottom safe margins, timed visibility, and none/fade/slide_up/spring/pop entrance behavior.
+- Hook text is written to a temporary UTF-8 text file rather than interpolated into the FFmpeg filter graph, and drawtext expansion is disabled so percent-based filter expressions remain literal user copy. The adapter supports uploaded font assets, optional solid background backing, normalized top/center/bottom/custom placement, canonical top/bottom safe margins, timed visibility, and none/fade/slide_up/spring/pop entrance behavior.
 - Hook font assets are resolved independently from caption font assets and staged only for the render. Temporary text/font files are cleaned on success and failure.
 - Hook rendering is applied after captions so it remains a distinct top layer.
 - Real FFmpeg fixtures verify visible and expired hook frames across original, blur, and solid background paths. Unit coverage verifies text-file isolation and uploaded-font pass-through.
