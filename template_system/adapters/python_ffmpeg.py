@@ -124,7 +124,7 @@ class PythonFFmpegAdapter:
         return (
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={pad_color},"
-            f"fps={fps},setsar=1,format=yuv420p{caption_filter}[v]"
+            f"fps={fps},setsar=1,format=yuv420p{caption_filter}{hook_filter or ''}[v]"
         )
 
     @staticmethod
