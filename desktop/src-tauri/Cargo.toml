@@ -1,6 +1,6 @@
 [package]
 name = "clippy-desktop"
-version = "0.2.1"
+version = "0.2.2"
 description = "Clippy native Windows desktop shell"
 authors = ["Clippy"]
 edition = "2021"
