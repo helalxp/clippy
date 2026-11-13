@@ -155,3 +155,93 @@ def test_import_assigns_new_local_identity_and_keeps_source_identity(tmp_path):
 
     assert imported.id != original.id
     assert imported.origin.kind == "imported"
+
+
+class _PackageUpload:
+    def __init__(self, payload, content_type="application/zip"):
+        self.payload = payload
+        self.content_type = content_type
+        self.filename = "untrusted-name.zip"
+        self.closed = False
+
+    async def read(self, size=-1):
+        return self.payload if size < 0 else self.payload[:size]
+
+    async def close(self):
+        self.closed = True
+
+
+class _PackageRequest:
+    def __init__(self, owner_id, form_data=None):
+        self.owner_id = owner_id
+        self.headers = {}
+        self.query_params = {}
+        self.form_data = form_data or {}
+
+    async def form(self, **kwargs):
+        assert kwargs == {"max_files": 1, "max_fields": 1}
+        return self.form_data
+
+
+async def _package_async_noop(*args, **kwargs):
+    return None
+
+
+async def _package_owner_id(request):
+    return request.owner_id
+
+
+def test_template_package_api_exports_and_imports_owner_scoped_template(tmp_path, monkeypatch):
+    import asyncio
+
+    import app as app_module
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _package_async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _package_owner_id)
+
+    owner = _PackageRequest("package-owner")
+    original = TemplateDocument(id="tpl_packageapi01", name="API package fixture")
+    asyncio.run(app_module.create_template(original.to_storage_dict(), owner))
+
+    exported = asyncio.run(app_module.export_template(original.id, owner))
+    assert exported.media_type == "application/zip"
+    assert exported.headers["content-disposition"].endswith(
+        f'{original.id}.clippy-template.zip"'
+    )
+
+    upload = _PackageUpload(exported.body)
+    import_request = _PackageRequest(
+        "package-owner",
+        {"file": upload},
+    )
+    response = asyncio.run(app_module.import_template(import_request))
+    imported = response["template"]
+    assert imported["id"] != original.id
+    assert imported["name"] == original.name
+    assert imported["origin"]["kind"] == "imported"
+    assert upload.closed is True
+
+
+def test_template_package_api_rejects_invalid_archive_without_creating_template(tmp_path, monkeypatch):
+    import asyncio
+
+    import app as app_module
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", _package_async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", _package_owner_id)
+
+    request = _PackageRequest(
+        "package-owner",
+        {"file": _PackageUpload(b"not a zip")},
+    )
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(app_module.import_template(request))
+    assert rejected.value.status_code == 422
+
+    owner = _PackageRequest("package-owner")
+    assert asyncio.run(app_module.list_templates(owner))["templates"] == []
