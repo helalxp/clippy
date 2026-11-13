@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
 $ProgressPreference = "SilentlyContinue" # Avoid the extremely slow per-byte progress UI in Windows PowerShell 5.1.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -281,7 +282,7 @@ if (-not (Test-Path -LiteralPath $RemotionPackagePath -PathType Leaf)) {
 }
 $RemotionVersion = (Get-Content -LiteralPath $RemotionPackagePath -Raw | ConvertFrom-Json).version
 if ([string]::IsNullOrWhiteSpace($RemotionVersion)) { throw "Could not determine the bundled Remotion renderer version." }
-$ExpectedState = "python=$PythonVersion;pythonVariant=$TorchVariant;node=$NodeVersion;ffmpeg=gyan-release-essentials;browser=$RemotionVersion;requirements=$RequirementsHash"
+$ExpectedState = New-ClippyRuntimeState -PythonVersion $PythonVersion -PythonVariant $TorchVariant -NodeVersion $NodeVersion -FfmpegVersion "gyan-release-essentials" -BrowserVersion $RemotionVersion -RequirementsSha256 $RequirementsHash
 if (Test-Path $ManifestPath) {
     try {
         $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
@@ -440,9 +441,10 @@ if (-not (Test-Path -LiteralPath $StagedPython -PathType Leaf)) {
     throw "Verified Python runtime archive does not contain python.exe at its root."
 }
 $StagedVersion = (& $StagedPython --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $StagedVersion -ne "Python $PythonVersion") {
-    throw "Packaged Python version check failed: $StagedVersion"
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged Python executable failed its version check: $StagedVersion"
 }
+Assert-ClippyPythonRuntimeVersion -Actual $StagedVersion -Expected $PythonVersion
 $StagedImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper; print('torch=' + torch.__version__); print('cuda_build=' + str(torch.version.cuda))"
 & $StagedPython -c $StagedImportCheck
 if ($LASTEXITCODE -ne 0) { throw "Packaged Python dependency verification failed." }
