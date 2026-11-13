@@ -418,7 +418,7 @@ impl Supervisor {
             return Err(error);
         }
 
-        if let Err(error) = wait_for_health(&mut backend, backend_port, "/health/ready", Duration::from_secs(180)) {
+        if let Err(error) = wait_for_health(&mut backend, backend_port, "/health/ready", Duration::from_secs(300)) {
             let _ = renderer.kill(); let _ = renderer.wait();
             let _ = backend.kill(); let _ = backend.wait();
             return Err(format!("Backend startup failed: {error}. See {}", paths.logs.join("backend.log").display()));
