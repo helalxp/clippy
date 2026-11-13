@@ -53,8 +53,8 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
     "python_ffmpeg": {
         "canvas": FeatureCapability("canvas", "exact", "Output dimensions and frame rate are explicit pipeline inputs."),
         "framing": FeatureCapability("framing", "exact", "The canonical FFmpeg adapter implements deterministic cover, contain, and anchored crop modes; subject tracking is explicitly unsupported."),
-        "safe_area": FeatureCapability("safe_area", "unsupported", "The first FFmpeg adapter does not place captions or overlays against canonical safe-area margins."),
-        "captions": FeatureCapability("captions", "unsupported", "The first FFmpeg adapter does not yet translate canonical caption recipes into ASS subtitle styling."),
+        "safe_area": FeatureCapability("safe_area", "unsupported", "The first FFmpeg adapter does not place generic overlays against canonical safe-area margins."),
+        "captions": FeatureCapability("captions", "exact", "The FFmpeg adapter maps canonical caption typography, colors, word highlighting, reveal, and top/middle/bottom placement into the existing ASS subtitle generator."),
         "hook": FeatureCapability("hook", "unsupported", "The first FFmpeg adapter does not yet translate canonical hook typography and animation."),
         "background": FeatureCapability("background", "exact", "The FFmpeg adapter implements black/original matte, blurred duplicate, and solid-color contain backgrounds; background fill is incompatible with cover crop."),
         "overlays": FeatureCapability("overlays", "unsupported", "The first FFmpeg adapter does not implement the generic overlay collection."),
@@ -169,6 +169,32 @@ def _capability_for_recipe(
                 "Cover/manual crop fills the canvas, so a separate background treatment would be invisible.",
             )
         return registered
+    if feature == "captions":
+        if recipe.captions.position == "custom":
+            return FeatureCapability(
+                "captions", "unsupported",
+                "The first ASS adapter supports top, middle, and bottom caption anchors, not arbitrary x/y placement.",
+            )
+        if recipe.captions.max_lines != 2:
+            return FeatureCapability(
+                "captions", "approximate",
+                "The existing ASS word grouper derives a character budget from max_lines; exact glyph wrapping varies by font and language.",
+            )
+        return registered
+    if feature == "safe_area":
+        if (
+            recipe.captions.enabled
+            and recipe.canvas.safe_left == 0.05
+            and recipe.canvas.safe_right == 0.05
+        ):
+            return FeatureCapability(
+                "safe_area", "exact",
+                "Top and bottom caption margins are translated from the canonical canvas safe-area ratios.",
+            )
+        return FeatureCapability(
+            "safe_area", "unsupported",
+            "The first FFmpeg adapter only applies top/bottom safe margins to captions; generic horizontal safe-area placement is not implemented.",
+        )
     return registered
 
 
