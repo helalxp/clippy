@@ -504,14 +504,20 @@ def test_adapter_renders_canonical_caption_recipe_with_word_highlight(tmp_path):
     assert not list(tmp_path.glob("clippy_template_caption_*"))
 
 
-def test_adapter_renders_image_overlay_with_opacity_rotation_and_center_anchor(tmp_path):
+@pytest.mark.parametrize("background", ["original", "blur", "solid"])
+def test_adapter_renders_image_overlay_with_opacity_rotation_and_center_anchor(tmp_path, background):
     source = tmp_path / "black-source.mp4"
-    output = tmp_path / "image-overlay.mp4"
+    output = tmp_path / f"image-overlay-{background}.mp4"
     image_path = tmp_path / "logo.png"
     make_black_source_video(source)
     Image.new("RGBA", (80, 40), (255, 0, 0, 255)).save(image_path)
     recipe = TemplateRecipe.model_validate({
         "canvas": {"width": 360, "height": 640, "fps": 24},
+        "framing": {"mode": "auto"},
+        "background": {
+            "mode": background,
+            "color": "#000000" if background == "solid" else None,
+        },
         "overlays": [{
             "id": "brand-mark",
             "kind": "watermark",
