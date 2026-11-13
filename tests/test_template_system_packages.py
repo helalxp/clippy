@@ -247,3 +247,13 @@ def test_template_package_api_rejects_invalid_archive_without_creating_template(
 
     owner = _PackageRequest("package-owner")
     assert asyncio.run(app_module.list_templates(owner))["templates"] == []
+
+
+def test_import_rejects_windows_reserved_asset_paths(tmp_path):
+    document = TemplateDocument(id="tpl_packagewinpath1", name="Windows path fixture")
+    payload = _package_bytes(
+        document.to_storage_dict(),
+        files={"assets/CON.txt": b"not a valid portable asset"},
+    )
+    with pytest.raises(TemplatePackageError, match="Windows-portable"):
+        import_template_package(LocalTemplateStorage(tmp_path), payload)
