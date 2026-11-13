@@ -19,11 +19,12 @@ Out of scope for this migration: accounts, billing, cloud authorization, and bra
 - Tauri 2 builds an NSIS installer.
 - `prepare-payload.ps1` stages Python source, requirements, assets, renderer output, Remotion source, and production Node dependencies into `app-payload.zip`.
 - The Tauri installer embeds that application payload and its SHA-256 file.
-- On first launch, `setup-runtime.ps1` downloads and installs Python 3.12.10, Node 22.23.3, FFmpeg essentials, PyTorch, the remaining Python requirements, and the Remotion browser.
+- On first launch, `setup-runtime.ps1` downloads a release-published CPU or NVIDIA/CUDA 12.6 Python runtime archive. Windows CI assembles the archive from official CPython 3.12.10 and the pinned application requirements, then verifies imports and relocation before publishing it with a SHA-256 sidecar. Customer machines do not run pip or install Python packages individually.
+- Node 22.23.3 and FFmpeg essentials are still provisioned by first-run setup; Remotion still ensures its browser runtime during setup.
 - The runtime is installed under `%LOCALAPPDATA%\Clippy\runtime`; application payload is extracted under `%LOCALAPPDATA%\Clippy\app\current`.
 - The current release notes describe a manual installer update. There is no configured Tauri updater in the inspected Tauri configuration.
 - The current installer payload hash detects accidental corruption, but it is not a publisher signature or a complete software-update trust chain.
-- The setup script chooses CUDA 12.6 PyTorch if `nvidia-smi` succeeds and otherwise chooses CPU PyTorch. Thus the installed runtime is not currently a fully prebuilt, hardware-independent package.
+- The setup script selects the prebuilt CUDA 12.6 archive when `nvidia-smi` succeeds, otherwise the CPU archive. The two variants are built and validated independently.
 
 ## Target installation layout
 
