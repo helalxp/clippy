@@ -58,8 +58,8 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
         "hook": FeatureCapability("hook", "exact", "The FFmpeg adapter renders canonical hook text, uploaded fonts, optional solid text backing, normalized placement, timed visibility, and all declared entrance animations."),
         "background": FeatureCapability("background", "exact", "The FFmpeg adapter implements black/original matte, blurred duplicate, and solid-color contain backgrounds; background fill is incompatible with cover crop."),
         "overlays": FeatureCapability("overlays", "exact", "The FFmpeg adapter applies ordered image/watermark assets with preserved aspect ratio, normalized center anchors, opacity, and rotation; text overlays remain unsupported."),
-        "effects": FeatureCapability("effects", "unsupported", "The first FFmpeg adapter does not implement canonical effect segments."),
-        "motion": FeatureCapability("motion", "unsupported", "The first FFmpeg adapter does not implement canonical motion recipes."),
+        "effects": FeatureCapability("effects", "exact", "The FFmpeg adapter applies time-bounded brightness, contrast, and saturation adjustments; zoom/crop values in EffectSegment are not supported."),
+        "motion": FeatureCapability("motion", "exact", "The FFmpeg adapter applies deterministic punch-in, slow-zoom, and pan motion with frame-based timing and normalized crop centers."),
         "transitions": FeatureCapability("transitions", "unsupported", "No canonical transition adapter is present in the audited pipeline."),
         "rhythm": FeatureCapability("rhythm", "unsupported", "Rhythm is analysis metadata only; it is not applied as an edit recipe."),
     },
@@ -160,6 +160,16 @@ def _capability_for_recipe(
             return FeatureCapability(
                 "framing", "unsupported",
                 "Contain framing is centered; custom anchors are supported only for cover/manual crop.",
+            )
+        return registered
+    if feature == "effects":
+        if any(
+            item.zoom != 1.0 or item.center_x != 0.5 or item.center_y != 0.5
+            for item in recipe.effects
+        ):
+            return FeatureCapability(
+                "effects", "unsupported",
+                "EffectSegment zoom and crop-center fields are not yet applied; use MotionRecipe for supported zoom and pan behavior.",
             )
         return registered
     if feature == "overlays":
