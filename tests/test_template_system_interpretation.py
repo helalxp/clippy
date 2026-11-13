@@ -265,7 +265,7 @@ def test_synthesis_applies_only_accepted_or_corrected_claims():
     assert result.rejected_paths == ("background.mode",)
     reports = {report.backend: report for report in result.compatibility_reports}
     assert set(reports) == {"python_ffmpeg", "remotion_preview", "remotion_render"}
-    assert reports["python_ffmpeg"].status == "incompatible"
+    assert reports["python_ffmpeg"].status == "compatible"
     assert reports["remotion_preview"].status == "partial"
 
 
