@@ -397,6 +397,7 @@ class LocalTemplateStorage:
                 item for item in (
                     current.recipe.captions.font_asset_id,
                     current.recipe.hook.font_asset_id,
+                    *(overlay.font_asset_id for overlay in current.recipe.overlays),
                 ) if item
             )
             referenced_ids.update(
