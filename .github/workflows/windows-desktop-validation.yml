@@ -56,8 +56,10 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
           Import-Module Pester -MinimumVersion 5.0 -Force
-          Invoke-Pester -Path ./desktop/tests/RuntimeManifestState.Tests.ps1 -CI
+          Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
@@ -152,9 +154,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clippy-python-runtime-${{ matrix.variant }}
-          path: |
-            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip
-            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip.sha256
+          path: desktop/runtime-dist/clippy-python-${{ matrix.variant }}*
           if-no-files-found: error
           retention-days: 7
 
