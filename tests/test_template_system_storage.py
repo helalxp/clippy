@@ -363,6 +363,43 @@ def test_add_and_remove_asset_uses_revision_checks_and_preserves_manifest(
     assert storage.get(document.id).assets == []
 
 
+def test_remove_asset_refuses_to_delete_a_text_overlay_font(tmp_path):
+    from datetime import datetime, timezone
+
+    storage = LocalTemplateStorage(tmp_path / "library")
+    document = make_document()
+    storage.create(document)
+    payload = b"referenced-text-font"
+    asset = TemplateAsset(
+        id="asset_textfont",
+        path="assets/textfont.ttf",
+        media_type="font/ttf",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+    added = storage.add_asset(document.id, asset, payload, expected_revision=1)
+
+    data = added.model_dump(mode="python", by_alias=True)
+    data["revision"] = 3
+    data["updated_at"] = datetime.now(timezone.utc)
+    data["recipe"] = {
+        "overlays": [{
+            "id": "brand-copy",
+            "kind": "text",
+            "text": "Brand",
+            "font_asset_id": asset.id,
+        }],
+    }
+    referenced = TemplateDocument.model_validate(data)
+    storage.update(referenced, expected_revision=2)
+
+    with pytest.raises(TemplateAssetInUse):
+        storage.remove_asset(document.id, asset.id, expected_revision=3)
+
+    assert storage.get(document.id).assets == [asset]
+    assert (tmp_path / "library" / document.id / asset.path).read_bytes() == payload
+
+
 def test_remove_asset_refuses_to_delete_an_asset_still_referenced_by_recipe(
     tmp_path,
 ):
