@@ -5,6 +5,7 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "runtime-dist")
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "runtime-archive.ps1")
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $PythonVersion = "3.12.10"
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
@@ -12,6 +13,8 @@ $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/$PythonArc
 $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
 $TorchIndex = if ($Variant -eq "cuda") { "https://download.pytorch.org/whl/cu128" } else { "https://download.pytorch.org/whl/cpu" }
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$ApplicationVersion = (Get-Content -LiteralPath (Join-Path $RepoRoot "VERSION") -Raw).Trim()
+if ($ApplicationVersion -notmatch "^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$") { throw "Root VERSION is missing or invalid." }
 $WorkRoot = Join-Path $env:RUNNER_TEMP "clippy-python-runtime-$Variant"
 $RuntimeRoot = Join-Path $WorkRoot "python"
 $SitePackages = Join-Path $RuntimeRoot "Lib\site-packages"
@@ -84,17 +87,27 @@ $Items = @(Get-ChildItem -LiteralPath $RelocatedRoot -Force | ForEach-Object { $
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ArchivePath)) { throw "Could not create $ArchiveName (tar exit $LASTEXITCODE)." }
 
 $ArchiveBytes = (Get-Item -LiteralPath $ArchivePath).Length
-if ($ArchiveBytes -ge 2GB) { throw "Runtime archive exceeds the 2 GiB per-asset release limit: $ArchiveBytes bytes." }
 $Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath "$ArchivePath.sha256" -Value "$Hash  $ArchiveName" -Encoding ascii
+if ($ArchiveBytes -lt 2GB) {
+    Set-Content -LiteralPath "$ArchivePath.sha256" -Value "$Hash  $ArchiveName" -Encoding ascii
+}
 
-# Validate the exact compressed artifact that will be attached to the release.
+# Produce the versioned manifest and release-safe assets. CUDA is split as
+# raw byte ranges; CI reconstructs and verifies the original archive exactly.
+$RuntimeManifest = New-ClippyRuntimeArchiveManifest -ArchivePath $ArchivePath -OutputDirectory $OutputDirectory -Variant $Variant -ApplicationVersion $ApplicationVersion
+$ValidationArchive = Join-Path $OutputDirectory "clippy-python-$Variant.validation.zip"
+Join-ClippyRuntimeArchiveParts -Manifest $RuntimeManifest -PartsDirectory $OutputDirectory -Destination $ValidationArchive | Out-Null
+
+# Validate the exact reconstructed compressed artifact that users will receive.
 $ArchiveTestRoot = Join-Path $WorkRoot "archive-test"
-Expand-Archive -LiteralPath $ArchivePath -DestinationPath $ArchiveTestRoot -Force
+Expand-Archive -LiteralPath $ValidationArchive -DestinationPath $ArchiveTestRoot -Force
 $ArchiveTestPython = Join-Path $ArchiveTestRoot "python.exe"
 & $ArchiveTestPython -c "import torch, torchvision, fastapi, faster_whisper; print(torch.__version__)"
-if ($LASTEXITCODE -ne 0) { throw "Compressed runtime archive failed its extraction/import test." }
+if ($LASTEXITCODE -ne 0) { throw "Reconstructed runtime archive failed its extraction/import test." }
+Remove-Item -LiteralPath $ValidationArchive -Force
 
-Write-Host "Runtime archive: $ArchivePath"
+Write-Host "Runtime archive: $ArchiveName"
 Write-Host "SHA-256: $Hash"
-Write-Host "Size: $([math]::Round((Get-Item $ArchivePath).Length / 1GB, 2)) GiB"
+Write-Host "Size: $([math]::Round($ArchiveBytes / 1GB, 2)) GiB"
+Write-Host "Manifest: $(Join-Path $OutputDirectory "clippy-python-$Variant.manifest.json")"
+Write-Host "Release parts: $($RuntimeManifest.partCount)"
