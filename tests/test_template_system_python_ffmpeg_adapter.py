@@ -104,19 +104,65 @@ def test_adapter_renders_anchored_cover_crop(tmp_path):
     assert (result.width, result.height) == (360, 640)
 
 
-def test_adapter_refuses_unimplemented_recipe_features(tmp_path):
-    source = tmp_path / "source.mp4"
-    output = tmp_path / "should-not-exist.mp4"
-    make_source_video(source)
+@pytest.mark.parametrize("background", ["original", "blur", "solid"])
+def test_adapter_renders_timed_template_hook_on_every_background_path(tmp_path, background):
+    source = tmp_path / "black-source.mp4"
+    output = tmp_path / f"hook-{background}.mp4"
+    make_black_source_video(source)
     recipe = TemplateRecipe.model_validate({
         "canvas": {"width": 360, "height": 640, "fps": 24},
-        "hook": {"enabled": True, "text": "Unsupported hook"},
+        "framing": {"mode": "auto"},
+        "background": {
+            "mode": background,
+            "color": "#000000" if background == "solid" else None,
+        },
+        "hook": {
+            "enabled": True,
+            "text": "CLIPPY TEMPLATE",
+            "font_family": "DejaVu Sans",
+            "font_size_ratio": 0.09,
+            "color": "#FFFFFF",
+            "background_color": "#112233",
+            "position": "custom",
+            "anchor_x": 0.5,
+            "anchor_y": 0.25,
+            "entrance": "fade",
+            "start_seconds": 0.2,
+            "duration_seconds": 0.7,
+        },
     })
 
-    with pytest.raises(RendererCompatibilityError, match="unsupported"):
-        PythonFFmpegAdapter().render(source, output, recipe)
+    result = PythonFFmpegAdapter(timeout_seconds=120).render(source, output, recipe)
+    visible = extract_output_frame(output, seconds=0.5)
+    expired = extract_output_frame(output, seconds=1.5)
+    visible_pixels = sum(1 for pixel in visible.getdata() if sum(pixel) > 300)
+    expired_pixels = sum(1 for pixel in expired.getdata() if sum(pixel) > 100)
 
-    assert not output.exists()
+    assert result.compatibility.status == "compatible"
+    assert visible_pixels > 40
+    assert expired_pixels < 10
+    assert not list(tmp_path.glob("clippy_template_render_*"))
+
+
+def test_hook_text_is_written_to_a_file_not_interpolated_into_filter_syntax(tmp_path):
+    from template_system.adapters.hooks import write_hook_text
+
+    recipe = TemplateRecipe.model_validate({
+        "hook": {
+            "enabled": True,
+            "text": "Quoted: 'hello', [world]\\nsecond line",
+            "entrance": "slide_up",
+        },
+    })
+    text_path = tmp_path / "hook.txt"
+    filter_value = write_hook_text(
+        recipe.hook, recipe.canvas, text_path
+    )
+
+    assert text_path.read_text(encoding="utf-8") == "Quoted: 'hello', [world]\\nsecond line"
+    assert "Quoted" not in filter_value
+    assert "textfile=" in filter_value
+    assert "enable='between(t,0,3)'" in filter_value
 
 
 def test_adapter_refuses_subject_tracking_and_conflicting_background():
@@ -204,9 +250,9 @@ def test_adapter_refuses_to_silently_drop_subtitle_streams(tmp_path):
 
 
 
-def extract_output_frame(path: Path):
+def extract_output_frame(path: Path, seconds: float = 0.5):
     command = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", "0.5",
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", str(seconds),
         "-i", str(path), "-frames:v", "1", "-f", "image2pipe",
         "-vcodec", "png", "pipe:1",
     ]
@@ -490,6 +536,11 @@ def test_template_service_resolves_uploaded_font_and_passes_caption_context(tmp_
             "enabled": True,
             "font_asset_id": asset.id,
         },
+        "hook": {
+            "enabled": True,
+            "text": "Template hook font",
+            "font_asset_id": asset.id,
+        },
     })
     template = TemplateDocument(
         id="tpl_caption_font01",
@@ -529,6 +580,7 @@ def test_template_service_resolves_uploaded_font_and_passes_caption_context(tmp_
 
     assert adapter.kwargs["caption_transcript"] == transcript
     assert Path(adapter.kwargs["font_path"]).read_bytes() == payload
+    assert Path(adapter.kwargs["hook_font_path"]).read_bytes() == payload
 
 
 def test_adapter_rejects_custom_caption_anchors_instead_of_ignoring_them():
