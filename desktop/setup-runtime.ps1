@@ -69,18 +69,101 @@ Write-Stage "Runtime setup engine started."
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 
 function Download-File([string]$Url, [string]$Destination) {
-    if (Test-Path $Destination) {
-        if ((Get-Item $Destination).Length -gt 0) {
-            Write-Stage "Reusing cached $([IO.Path]::GetFileName($Destination))."
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        if ((Get-Item -LiteralPath $Destination).Length -gt 0) {
+            Write-Stage "Reusing cached $([IO.Path]::GetFileName($Destination)); caller will verify it."
             return
         }
-        Remove-Item $Destination -Force
+        Remove-Item -LiteralPath $Destination -Force
     }
-    Write-Stage "Downloading $([IO.Path]::GetFileName($Destination))..."
-    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
-    if (-not (Test-Path $Destination) -or (Get-Item $Destination).Length -lt 1) {
-        throw "Download did not produce a valid file: $Destination"
+
+    $Partial = "$Destination.partial"
+    $Parent = Split-Path -Parent $Destination
+    if ($Parent) { New-Item -ItemType Directory -Path $Parent -Force | Out-Null }
+    for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+        $Offset = if (Test-Path -LiteralPath $Partial) { (Get-Item -LiteralPath $Partial).Length } else { 0L }
+        $Response = $null
+        $InputStream = $null
+        $OutputStream = $null
+        try {
+            $Request = [System.Net.HttpWebRequest]::Create($Url)
+            $Request.Method = "GET"
+            $Request.AllowAutoRedirect = $true
+            $Request.Timeout = 60000
+            $Request.ReadWriteTimeout = 60000
+            $Request.UserAgent = "ClippyRuntimeSetup/1.0"
+            if ($Offset -gt 0) { $Request.AddRange([long]$Offset) }
+            Write-Stage ("Downloading {0}; resuming at {1:N0} bytes (attempt {2}/3)." -f [IO.Path]::GetFileName($Destination), $Offset, $Attempt)
+            $Response = [System.Net.HttpWebResponse]$Request.GetResponse()
+            $Status = [int]$Response.StatusCode
+            if ($Offset -gt 0 -and $Status -eq 200) {
+                # Server ignored Range. Restart cleanly rather than append a full
+                # response to a partial file and silently corrupt the archive.
+                $Offset = 0
+            } elseif ($Status -ne 200 -and $Status -ne 206) {
+                throw "Unexpected HTTP status $Status while downloading $Url"
+            }
+            if ($Status -eq 206) {
+                $ContentRange = $Response.Headers["Content-Range"]
+                if ($Offset -gt 0 -and $ContentRange -notmatch "^bytes\s+$Offset-") {
+                    throw "Server returned an invalid Content-Range while resuming $Url"
+                }
+            }
+            $TotalBytes = if ($Response.ContentLength -ge 0) { $Offset + $Response.ContentLength } else { 0L }
+            $InputStream = $Response.GetResponseStream()
+            $Mode = if ($Offset -gt 0 -and $Status -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+            $OutputStream = [IO.File]::Open($Partial, $Mode, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            $Buffer = New-Object byte[] (1024 * 1024)
+            $Downloaded = $Offset
+            $LastReportedPercent = -1
+            while (($Read = $InputStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+                $OutputStream.Write($Buffer, 0, $Read)
+                $Downloaded += $Read
+                if ($TotalBytes -gt 0) {
+                    $Percent = [int][math]::Floor(($Downloaded * 100.0) / $TotalBytes)
+                    if ($Percent -ge $LastReportedPercent + 10) {
+                        $LastReportedPercent = $Percent
+                        Write-Stage ("{0}: {1}% ({2:N0}/{3:N0} bytes)." -f [IO.Path]::GetFileName($Destination), $Percent, $Downloaded, $TotalBytes)
+                    }
+                }
+            }
+            $OutputStream.Flush()
+            $OutputStream.Dispose(); $OutputStream = $null
+            $InputStream.Dispose(); $InputStream = $null
+            $Response.Close(); $Response = $null
+            if ((Get-Item -LiteralPath $Partial).Length -lt 1) {
+                throw "Download returned an empty file: $Url"
+            }
+            Move-Item -LiteralPath $Partial -Destination $Destination -Force
+            Write-Stage "Download complete: $([IO.Path]::GetFileName($Destination))."
+            return
+        } catch {
+            $Message = $_.Exception.Message
+            if ($OutputStream) { $OutputStream.Dispose(); $OutputStream = $null }
+            if ($InputStream) { $InputStream.Dispose(); $InputStream = $null }
+            if ($Response) { $Response.Close(); $Response = $null }
+            if ($Attempt -eq 3) { throw "Download failed after 3 attempts: $Url. $Message" }
+            Write-Stage "Download interrupted; preserving partial data for resume. $Message"
+            Start-Sleep -Seconds ([math]::Min(2 * $Attempt, 6))
+        }
     }
+    throw "Download failed: $Url"
+}
+
+function Expand-ArchiveFast([string]$Archive, [string]$Destination) {
+    if (Test-Path -LiteralPath $Destination) {
+        Remove-Item -LiteralPath $Destination -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    $Tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+    if ($Tar) {
+        & $Tar.Path -xf $Archive -C $Destination
+        if ($LASTEXITCODE -eq 0) { return }
+        Write-Stage "Windows tar could not extract $([IO.Path]::GetFileName($Archive)); using the PowerShell ZIP fallback."
+        Remove-Item -LiteralPath $Destination -Recurse -Force
+        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    }
+    Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force
 }
 
 function Assert-Sha256([string]$Path, [string]$Expected) {
@@ -263,7 +346,7 @@ $PythonStage = Join-Path $Runtime "python.installing"
 $PythonBackup = Join-Path $Runtime "python.previous"
 if (Test-Path $PythonStage) { Remove-Item $PythonStage -Recurse -Force }
 Write-Stage "Extracting the verified $TorchVariant Python runtime..."
-Expand-Archive -LiteralPath $PythonRuntimeArchive -DestinationPath $PythonStage -Force
+Expand-ArchiveFast $PythonRuntimeArchive $PythonStage
 $StagedPython = Join-Path $PythonStage "python.exe"
 if (-not (Test-Path -LiteralPath $StagedPython -PathType Leaf)) {
     throw "Verified Python runtime archive does not contain python.exe at its root."
@@ -324,7 +407,7 @@ if (-not (Test-Path $NodeExe)) {
     }
     $Extract = Join-Path $ScratchRoot "node-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
-    Expand-Archive -Path $NodeZip -DestinationPath $Extract -Force
+    Expand-ArchiveFast $NodeZip $Extract
     $ExtractedRoot = Join-Path $Extract "node-v$NodeVersion-win-x64"
     if (-not (Test-Path (Join-Path $ExtractedRoot "node.exe"))) { throw "Node.js archive layout was unexpected." }
     New-Item -ItemType Directory -Path $NodeDir -Force | Out-Null
@@ -361,7 +444,7 @@ if (-not (Test-Path $FfmpegExe)) {
     }
     $Extract = Join-Path $ScratchRoot "ffmpeg-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
-    Expand-Archive -Path $FfmpegZip -DestinationPath $Extract -Force
+    Expand-ArchiveFast $FfmpegZip $Extract
     $FfmpegBinary = Get-ChildItem $Extract -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
     if (-not $FfmpegBinary) { throw "FFmpeg archive did not contain ffmpeg.exe." }
     $SourceBin = $FfmpegBinary.Directory.FullName
