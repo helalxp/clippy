@@ -155,9 +155,11 @@ class PythonFFmpegAdapter:
             )
             current_label = next_label
 
-        final_filters = caption_filter + (hook_filter or "")
-        if not final_filters:
-            final_filters = ",null"
+        final_filters = ",".join(
+            value.lstrip(",")
+            for value in (caption_filter, hook_filter or "")
+            if value
+        ) or "null"
         filters.append(f"[{current_label}]{final_filters}[v]")
         return ";".join(filters)
 
