@@ -101,14 +101,14 @@ def test_import_rejects_unsupported_package_version(tmp_path):
 
 def test_import_rejects_path_traversal_entries(tmp_path):
     document = TemplateDocument(id="tpl_packagetrv1", name="Traversal fixture")
-    payload = _package_bytes(document.to_storage_dict(), {"../escape.txt": b"bad"})
+    payload = _package_bytes(document.to_storage_dict(), files={"../escape.txt": b"bad"})
     with pytest.raises(TemplatePackageError, match="safe relative"):
         import_template_package(LocalTemplateStorage(tmp_path), payload)
 
 
 def test_import_rejects_unlisted_files(tmp_path):
     document = TemplateDocument(id="tpl_packageextra1", name="Extra fixture")
-    payload = _package_bytes(document.to_storage_dict(), {"extra.txt": b"not in manifest"})
+    payload = _package_bytes(document.to_storage_dict(), files={"extra.txt": b"not in manifest"})
     with pytest.raises(TemplatePackageError, match="do not match"):
         import_template_package(LocalTemplateStorage(tmp_path), payload)
 
