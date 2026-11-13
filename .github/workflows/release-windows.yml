@@ -48,6 +48,10 @@ jobs:
       - name: Check out tagged source
         uses: actions/checkout@v4
 
+      - name: Validate runtime build version against release tag
+        shell: pwsh
+        run: ./desktop/validate-version.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
+
       - name: Set up Python 3.12 build tooling
         uses: actions/setup-python@v5
         with:
