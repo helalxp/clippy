@@ -86,6 +86,13 @@ class TemplateApplicationService:
             if not font_asset.media_type.startswith("font/"):
                 raise ValueError("caption font_asset_id must reference a stored font asset")
 
+        hook_font_path = None
+        hook_font_asset_id = resolved.recipe.hook.font_asset_id if resolved.recipe.hook.enabled else None
+        if hook_font_asset_id:
+            hook_font_asset, hook_font_path = self.storage.get_asset(template_id, hook_font_asset_id)
+            if not hook_font_asset.media_type.startswith("font/"):
+                raise ValueError("hook font_asset_id must reference a stored font asset")
+
         rendered = self.adapter.render(
             source_path,
             output_path,
@@ -96,6 +103,7 @@ class TemplateApplicationService:
             caption_transcript=caption_transcript,
             caption_split_ranges=caption_split_ranges,
             font_path=font_path,
+            hook_font_path=hook_font_path,
         )
         return TemplateApplicationResult(
             template_id=template.id,
