@@ -1,5 +1,4 @@
 mod supervisor;
-mod downloader;
 mod bootstrap;
 
 use std::sync::Mutex;
