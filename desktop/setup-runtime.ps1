@@ -40,20 +40,24 @@ $PythonVersion = "3.12.10"
 $TorchVariant = "cpu"
 $NvidiaDriverVersion = $null
 $NvidiaGpuName = $null
+$NvidiaComputeCapability = $null
 $Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($Nvidia) {
-    $NvidiaInfo = & $Nvidia.Source --query-gpu=name,driver_version --format=csv,noheader 2>$null
+    $NvidiaInfo = & $Nvidia.Source --query-gpu=name,driver_version,compute_cap --format=csv,noheader 2>$null
     if ($LASTEXITCODE -eq 0 -and $NvidiaInfo) {
         $NvidiaLine = @($NvidiaInfo) | Select-Object -First 1
         $NvidiaFields = ([string]$NvidiaLine).Split(',')
-        if ($NvidiaFields.Count -ge 2) {
+        if ($NvidiaFields.Count -ge 3) {
             $NvidiaGpuName = $NvidiaFields[0].Trim()
             $DriverText = $NvidiaFields[1].Trim()
             try { $NvidiaDriverVersion = [Version]$DriverText } catch { $NvidiaDriverVersion = $null }
-            # PyTorch 2.11's cu128 runtime supports modern NVIDIA architectures,
-            # including Blackwell. CUDA 12.8 GA requires Windows driver 570.65.
-            # Do not select CUDA solely because nvidia-smi happens to launch.
-            if ($NvidiaDriverVersion -and $NvidiaDriverVersion -ge [Version]"570.65") {
+            try { $NvidiaComputeCapability = [double]$NvidiaFields[2].Trim() } catch { $NvidiaComputeCapability = $null }
+            # CUDA 12.8 GA requires Windows driver 570.65. The packaged
+            # PyTorch CUDA runtime targets Volta/Turing-era and newer devices;
+            # Blackwell is supported by cu128. Unsupported/unknown devices use
+            # the CPU runtime instead of failing during the first CUDA kernel.
+            if ($NvidiaDriverVersion -and $NvidiaDriverVersion -ge [Version]"570.65" -and
+                $null -ne $NvidiaComputeCapability -and $NvidiaComputeCapability -ge 7.0) {
                 $TorchVariant = "cuda"
             }
         }
@@ -91,9 +95,9 @@ trap {
 Write-Stage "Runtime setup engine started."
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 if ($NvidiaGpuName) {
-    Write-Stage ("Detected NVIDIA GPU: " + $NvidiaGpuName + "; driver " + $NvidiaDriverVersion)
+    Write-Stage ("Detected NVIDIA GPU: " + $NvidiaGpuName + "; driver " + $NvidiaDriverVersion + "; compute capability " + $NvidiaComputeCapability)
     if ($TorchVariant -eq "cpu") {
-        Write-Stage "NVIDIA driver is older than 570.65 or could not be parsed; using the CPU runtime instead of installing an incompatible CUDA build."
+        Write-Stage "NVIDIA driver or compute capability is not supported by the packaged CUDA 12.8 runtime; using the CPU runtime."
     }
 }
 
