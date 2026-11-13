@@ -6,12 +6,16 @@ import io
 import json
 import stat
 import uuid
+import warnings
 import zipfile
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Final
 
-from .models import TemplateDocument
+from PIL import Image, UnidentifiedImageError
+
+from .assets import inspect_font_payload
+from .models import TemplateAsset, TemplateDocument
 from .storage import LocalTemplateStorage, TemplateAlreadyExists, TemplateIntegrityError
 
 PACKAGE_FORMAT: Final = "clippy.template.package"
@@ -43,6 +47,59 @@ def _safe_archive_path(name: str) -> str:
     return name
 
 
+def _validate_asset_bytes(asset: TemplateAsset, payload: bytes) -> None:
+    if len(payload) != asset.size_bytes:
+        raise TemplatePackageError(f"package asset size mismatch: {asset.path}")
+    if hashlib.sha256(payload).hexdigest().lower() != asset.sha256.lower():
+        raise TemplatePackageError(f"package asset checksum mismatch: {asset.path}")
+
+    if asset.media_type.startswith("font/"):
+        try:
+            media_type, _extension = inspect_font_payload(payload)
+        except (TypeError, ValueError) as exc:
+            raise TemplatePackageError(f"package font is invalid: {asset.path}: {exc}") from exc
+        if media_type != asset.media_type:
+            raise TemplatePackageError(f"package font type does not match its manifest: {asset.path}")
+        return
+
+    expected_formats = {
+        "image/png": "PNG",
+        "image/jpeg": "JPEG",
+        "image/webp": "WEBP",
+    }
+    expected_format = expected_formats.get(asset.media_type)
+    if expected_format is None:
+        raise TemplatePackageError(f"unsupported package asset media type: {asset.media_type}")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as image:
+                actual_format = image.format
+                width, height = image.size
+                if width < 1 or height < 1 or width > 16384 or height > 16384:
+                    raise TemplatePackageError(f"package image dimensions are invalid: {asset.path}")
+                if width * height > 50_000_000:
+                    raise TemplatePackageError(f"package image pixel count is too large: {asset.path}")
+                image.verify()
+    except TemplatePackageError:
+        raise
+    except (UnidentifiedImageError, Image.DecompressionBombError, Image.DecompressionBombWarning, OSError) as exc:
+        raise TemplatePackageError(f"package image is invalid: {asset.path}") from exc
+    if actual_format != expected_format:
+        raise TemplatePackageError(f"package image type does not match its manifest: {asset.path}")
+    if asset.width is not None and (asset.width, asset.height) != (width, height):
+        raise TemplatePackageError(f"package image dimensions do not match its manifest: {asset.path}")
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise TemplatePackageError(f"package JSON contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
 def export_template_package(
     storage: LocalTemplateStorage,
     template_id: str,
@@ -64,15 +121,24 @@ def export_template_package(
             manifest_info,
             json.dumps(package_manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
         )
+        total_size = 0
         for asset in sorted(document.assets, key=lambda item: item.id):
             _safe_archive_path(asset.path)
+            if asset.path == PACKAGE_MANIFEST:
+                raise TemplatePackageError("template asset path collides with the package manifest")
             verified_asset, path = storage.get_asset(template_id, asset.id)
             if verified_asset != asset:
                 raise TemplateIntegrityError("template asset inventory changed during export")
+            payload = path.read_bytes()
+            if len(payload) > MAX_ENTRY_BYTES:
+                raise TemplatePackageError(f"template asset exceeds the 50 MB package limit: {asset.path}")
+            total_size += len(payload)
+            if total_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                raise TemplatePackageError("template assets exceed the 250 MB package limit")
             asset_info = zipfile.ZipInfo(asset.path, date_time=(1980, 1, 1, 0, 0, 0))
             asset_info.compress_type = zipfile.ZIP_DEFLATED
             asset_info.external_attr = (stat.S_IFREG | 0o600) << 16
-            archive.writestr(asset_info, path.read_bytes())
+            archive.writestr(asset_info, payload)
 
     result = output.getvalue()
     if len(result) > MAX_ARCHIVE_BYTES:
@@ -115,7 +181,7 @@ def import_template_package(
             if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
                 raise TemplatePackageError("package uses an unsupported ZIP compression method")
             mode = info.external_attr >> 16
-            if stat.S_ISLNK(mode) or (stat.S_IFMT(mode) not in (0, stat.S_IFREG)):
+            if stat.S_ISLNK(mode) or stat.S_IFMT(mode) not in (0, stat.S_IFREG):
                 raise TemplatePackageError("package contains a non-regular file entry")
             if info.file_size < 0 or info.compress_size < 0:
                 raise TemplatePackageError("package contains invalid entry sizes")
@@ -139,14 +205,21 @@ def import_template_package(
             raise TemplatePackageError("package manifest is missing")
 
         try:
-            package_data = json.loads(archive.read(manifest_info).decode("utf-8"))
+            package_data = json.loads(
+                archive.read(manifest_info).decode("utf-8"),
+                object_pairs_hook=_unique_json_object,
+            )
+        except TemplatePackageError:
+            raise
         except (UnicodeDecodeError, json.JSONDecodeError, RuntimeError, zipfile.BadZipFile) as exc:
             raise TemplatePackageError("package manifest is not valid UTF-8 JSON") from exc
         if not isinstance(package_data, dict):
             raise TemplatePackageError("package manifest must be a JSON object")
+        if set(package_data) != {"format", "package_version", "template"}:
+            raise TemplatePackageError("package manifest contains missing or unknown fields")
         if package_data.get("format") != PACKAGE_FORMAT:
             raise TemplatePackageError("file is not a Clippy template package")
-        if package_data.get("package_version") != PACKAGE_VERSION:
+        if type(package_data.get("package_version")) is not int or package_data["package_version"] != PACKAGE_VERSION:
             raise TemplatePackageError("template package version is not supported")
         raw_document = package_data.get("template")
         if not isinstance(raw_document, dict):
@@ -158,8 +231,14 @@ def import_template_package(
             raise TemplatePackageError(f"package template document is invalid: {exc}") from exc
 
         expected_paths = {PACKAGE_MANIFEST}
-        for asset in original.assets:
-            expected_paths.add(_safe_archive_path(asset.path))
+        asset_paths = [asset.path for asset in original.assets]
+        if len(asset_paths) != len(set(asset_paths)):
+            raise TemplatePackageError("template contains duplicate asset paths")
+        for asset_path in asset_paths:
+            safe_path = _safe_archive_path(asset_path)
+            if safe_path == PACKAGE_MANIFEST:
+                raise TemplatePackageError("template asset path collides with the package manifest")
+            expected_paths.add(safe_path)
         if set(by_name) != expected_paths:
             missing = sorted(expected_paths - set(by_name))
             extra = sorted(set(by_name) - expected_paths)
@@ -173,10 +252,7 @@ def import_template_package(
                 asset_bytes = archive.read(by_name[asset.path])
             except (RuntimeError, zipfile.BadZipFile, OSError) as exc:
                 raise TemplatePackageError(f"could not read package asset {asset.path!r}") from exc
-            if len(asset_bytes) != asset.size_bytes:
-                raise TemplatePackageError(f"package asset size mismatch: {asset.path}")
-            if hashlib.sha256(asset_bytes).hexdigest().lower() != asset.sha256.lower():
-                raise TemplatePackageError(f"package asset checksum mismatch: {asset.path}")
+            _validate_asset_bytes(asset, asset_bytes)
             asset_payloads[asset.id] = asset_bytes
 
     now = datetime.now(timezone.utc).isoformat()
