@@ -1,4 +1,5 @@
 import express from "express";
+import { isAuthorizedToken } from "./auth.js";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 import { initBundle } from "./bundle.js";
@@ -42,6 +43,19 @@ const renderRequestSchema = z.object({
 // --- Express app ---
 
 const app = express();
+const DESKTOP_API_TOKEN = process.env.CLIPPY_API_TOKEN?.trim() || "";
+// Desktop mode requires a per-launch secret for renderer APIs and media.
+// Self-host deployments without a token retain their existing network boundary.
+app.use((req, res, next) => {
+  if (!DESKTOP_API_TOKEN || req.path === "/health") return next();
+  const supplied = req.path.startsWith("/output/")
+    ? String(req.query.token || "")
+    : req.header("X-Clippy-Token") || "";
+  if (!isAuthorizedToken(supplied, DESKTOP_API_TOKEN)) {
+    return res.status(401).json({ error: "This local renderer requires its active desktop session token." });
+  }
+  next();
+});
 app.use(express.json({ limit: "10mb" }));
 
 const PORT = Number.parseInt(process.env.PORT || "13100", 10);
@@ -94,7 +108,7 @@ app.post("/render", (req, res) => {
   // Validate before creating a job so a bad path cannot leave an orphan queued job.
   let resolvedVideoUrl: string;
   try {
-    resolvedVideoUrl = resolveRendererVideoUrl(props.videoUrl, RENDERER_PUBLIC_URL);
+    resolvedVideoUrl = resolveRendererVideoUrl(props.videoUrl, RENDERER_PUBLIC_URL, DESKTOP_API_TOKEN);
   } catch (error) {
     res.status(400).json({
       error: error instanceof Error ? error.message : "Invalid video URL",
