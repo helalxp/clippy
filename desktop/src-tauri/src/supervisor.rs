@@ -131,6 +131,40 @@ impl ProcessJob {
     fn assign(&self, _child: &Child) -> Result<(), String> { Ok(()) }
 }
 
+#[cfg(windows)]
+fn generate_api_token() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
+    #[link(name = "bcrypt")]
+    extern "system" {
+        fn BCryptGenRandom(algorithm: *mut std::ffi::c_void, buffer: *mut u8, length: u32, flags: u32) -> i32;
+    }
+    let status = unsafe {
+        BCryptGenRandom(std::ptr::null_mut(), bytes.as_mut_ptr(), bytes.len() as u32, BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+    };
+    if status < 0 {
+        return Err(format!("Windows could not generate a private local API token (NTSTATUS 0x{:08X}).", status as u32));
+    }
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(not(windows))]
+fn generate_api_token() -> Result<String, String> {
+    use std::hash::{BuildHasher, Hasher};
+    let mut output = String::new();
+    for _ in 0..4 {
+        let state = std::collections::hash_map::RandomState::new();
+        let mut hasher = state.build_hasher();
+        hasher.write_u128(
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_nanos()
+        );
+        hasher.write_u32(std::process::id());
+        output.push_str(&format!("{:016x}", hasher.finish()));
+    }
+    Ok(output)
+}
+
 const BACKEND_HOST: &str = "127.0.0.1";
 const RENDERER_HOST: &str = "127.0.0.1";
 
@@ -152,6 +186,7 @@ pub struct Supervisor {
     job: Option<ProcessJob>,
     backend_port: u16,
     renderer_port: u16,
+    api_token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -304,6 +339,7 @@ impl Supervisor {
         }
         let backend_port_arg = backend_port.to_string();
         let renderer_port_arg = renderer_port.to_string();
+        let api_token = generate_api_token()?;
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
@@ -344,6 +380,7 @@ impl Supervisor {
             .env("BGUTIL_SCRIPT_PATH", &paths.bgutil_script)
             .env("HOST", BACKEND_HOST)
             .env("PORT", backend_port_arg.clone())
+            .env("CLIPPY_API_TOKEN", &api_token)
             .stdout(Stdio::from(backend_log.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::from(backend_log))
             .spawn()
@@ -398,7 +435,12 @@ impl Supervisor {
         self.job = Some(job);
         self.backend_port = backend_port;
         self.renderer_port = renderer_port;
+        self.api_token = Some(api_token);
         self.status()
+    }
+
+    pub fn api_token(&self) -> Result<String, String> {
+        self.api_token.clone().ok_or_else(|| "Clippy's local API token is not available because services are not running.".to_string())
     }
 
     pub fn stop(&mut self) -> Result<ServiceStatus, String> {
@@ -407,6 +449,7 @@ impl Supervisor {
         self.job.take(); // Closing the job also terminates any surviving descendants.
         self.backend_port = 0;
         self.renderer_port = 0;
+        self.api_token = None;
         self.status()
     }
 
