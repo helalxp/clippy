@@ -173,6 +173,14 @@ Provide a visual preview beside structured controls. Organize settings into mean
 - Overlays are applied for the full clip duration. The recipe array is ordered back-to-front: later entries render above earlier entries.
 - `image` and `watermark` use the same image-layer renderer. Text overlays remain unsupported until the canonical contract has explicit font, size, color, background, and line-layout properties.
 
+**Initial motion and color-effect semantics (Python/FFmpeg v1):**
+- Motion intervals are measured from the clip start and converted to output-frame indices using the recipe frame rate.
+- `punch_in` ramps to its requested zoom over the first 20% of the interval, then holds until the interval ends. `slow_zoom` ramps linearly from 1x to 1x plus `intensity`. `pan` uses a constant 1x plus `intensity` zoom and moves the crop center from canvas center to the configured normalized target.
+- Motion returns to the unmodified frame outside its interval. If intervals overlap, the earliest item in the recipe list has priority. Motion is deterministic and does not imply subject detection or tracking.
+- Color effects apply brightness, contrast, and saturation only during their interval. Canonical brightness is an offset multiplier around 1.0 and maps to FFmpeg EQ brightness as `brightness - 1`; contrast and saturation map directly.
+- `EffectSegment.zoom` and non-centered effect crop coordinates are not supported by this first adapter. Values outside the FFmpeg EQ exact range are rejected by capability preflight rather than silently clamped.
+- Motion and color effects are applied before image overlays, captions, and hook/title layers. This keeps brand assets and text color stable while footage effects change.
+
 Provide simple controls by default and advanced controls for users who want precise values. Every control must map to a documented schema property and a renderer capability.
 
 ### 4.5 Apply and preview workflow
