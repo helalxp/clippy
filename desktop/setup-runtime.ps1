@@ -342,16 +342,13 @@ if (Test-Path $ManifestPath) {
             $CudaDllDirectories = @()
             $CudaDllsHealthy = $true
             if ($TorchVariant -eq "cuda") {
-                $CudaDllRoot = Join-Path $PythonDir "Lib\site-packages\nvidia"
-                $CudaDllDirectories = @(
-                    (Join-Path $CudaDllRoot "cublas\bin"),
-                    (Join-Path $CudaDllRoot "cudnn\bin"),
-                    (Join-Path $CudaDllRoot "cuda_runtime\bin")
-                )
+                # Windows PyTorch CUDA wheels place their CUDA DLLs in torch\lib.
+                $CudaDllDirectory = Join-Path $PythonDir "Lib\site-packages\torch\lib"
+                $CudaDllDirectories = @($CudaDllDirectory)
                 $RequiredCudaDlls = @(
-                    (Join-Path $CudaDllDirectories[0] "cublas64_12.dll"),
-                    (Join-Path $CudaDllDirectories[1] "cudnn64_9.dll"),
-                    (Join-Path $CudaDllDirectories[2] "cudart64_12.dll")
+                    (Join-Path $CudaDllDirectory "cublas64_12.dll"),
+                    (Join-Path $CudaDllDirectory "cudnn64_9.dll"),
+                    (Join-Path $CudaDllDirectory "cudart64_12.dll")
                 )
                 foreach ($dll in $RequiredCudaDlls) {
                     if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) { $CudaDllsHealthy = $false }
@@ -629,16 +626,13 @@ if (-not $ExistingFfmpegHealthy) {
 if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg runtime failed its version check." }
 
 if ($TorchVariant -eq "cuda") {
-    $CudaDllRoot = Join-Path $PythonDir "Lib\site-packages\nvidia"
-    $CudaDllDirectories = @(
-        (Join-Path $CudaDllRoot "cublas\bin"),
-        (Join-Path $CudaDllRoot "cudnn\bin"),
-        (Join-Path $CudaDllRoot "cuda_runtime\bin")
-    )
+    # Windows PyTorch CUDA wheels place their CUDA DLLs in torch\lib.
+    $CudaDllDirectory = Join-Path $PythonDir "Lib\site-packages\torch\lib"
+    $CudaDllDirectories = @($CudaDllDirectory)
     $RequiredCudaDlls = @(
-        (Join-Path $CudaDllDirectories[0] "cublas64_12.dll"),
-        (Join-Path $CudaDllDirectories[1] "cudnn64_9.dll"),
-        (Join-Path $CudaDllDirectories[2] "cudart64_12.dll")
+        (Join-Path $CudaDllDirectory "cublas64_12.dll"),
+        (Join-Path $CudaDllDirectory "cudnn64_9.dll"),
+        (Join-Path $CudaDllDirectory "cudart64_12.dll")
     )
     foreach ($dll in $RequiredCudaDlls) {
         if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
