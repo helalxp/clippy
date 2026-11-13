@@ -116,7 +116,7 @@ class PythonFFmpegAdapter:
                 f"crop={width}:{height},boxblur=luma_radius={radius}:luma_power=2[bg];"
                 f"[fgsrc]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
                 f"[bg][fg]overlay=(W-w)/2:(H-h)/2,"
-                f"fps={fps},setsar=1,format=yuv420p[v]"
+                f"fps={fps},setsar=1,format=yuv420p{caption_filter}[v]"
             )
 
         pad_color = recipe.background.color if background == "solid" else "#000000"
@@ -124,7 +124,7 @@ class PythonFFmpegAdapter:
         return (
             f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color={pad_color},"
-            f"fps={fps},setsar=1,format=yuv420p[v]"
+            f"fps={fps},setsar=1,format=yuv420p{caption_filter}[v]"
         )
 
     @staticmethod
