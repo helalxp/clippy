@@ -382,5 +382,6 @@ Implemented in this update:
 - Hook font assets are resolved independently from caption font assets and staged only for the render. Temporary text/font files are cleaned on success and failure.
 - Hook rendering is applied after captions so it remains a distinct top layer.
 - Real FFmpeg fixtures verify visible and expired hook frames across original, blur, and solid background paths. Unit coverage verifies text-file isolation and uploaded-font pass-through.
+- GitHub Actions run `43424728800` passed on commit `2e4d438348ae5813372bcf9fc0275c7f7a8659f7`: **157 focused template tests passed**, **1,371 backend tests passed with 58 skipped**, and the frontend production build passed.
 
 Remaining in Stage 5: generic overlays, motion/effect recipe support, further render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
