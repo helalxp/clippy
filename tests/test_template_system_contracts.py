@@ -58,7 +58,7 @@ def test_text_overlay_contract_requires_explicit_line_break_budget():
             "overlays": [{
                 "id": "two-lines",
                 "kind": "text",
-                "text": "first\\nsecond",
+                "text": "first\nsecond",
                 "max_lines": 1,
             }],
         })
