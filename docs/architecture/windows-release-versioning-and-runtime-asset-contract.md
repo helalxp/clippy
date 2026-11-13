@@ -1,0 +1,250 @@
+# Windows Release Versioning and Runtime Asset Delivery Contract
+
+**Status:** Audit baseline and proposed release contract  
+**Audited branch:** `windows-installer-hardening`  
+**Audited commit:** `43a9f3e5413eb48901c439525abaa8d887905437`  
+**Application version in source:** `0.2.2`  
+**Last reviewed:** 2026-11-13
+
+## 1. Purpose
+
+This document defines how Clippy's Windows installer version, application payload, Python runtime packages, GitHub Release tag, runtime download URLs, and checksums must stay aligned.
+
+The production requirement is simple:
+
+> A user downloads one Clippy installer, installs it, opens it, and Clippy automatically downloads and installs the exact runtime package required by that installer. The user must not need PowerShell commands, manually supplied archives, Python, or environment-variable overrides.
+
+This document records the current audit findings and the proposed delivery contract. It does not itself change the runtime implementation.
+
+## 2. Canonical application version
+
+The repository-root `VERSION` file is the single source of truth for the Clippy application version.
+
+The following files must contain the same application version:
+
+- `VERSION`
+- `desktop/src-tauri/tauri.conf.json`
+- `desktop/src-tauri/Cargo.toml`
+- `desktop/src-tauri/Cargo.lock` entry for `clippy-desktop`
+- `dashboard/package.json`
+- `dashboard/package-lock.json` root package entry
+
+The existing `desktop/validate-version.ps1` checks these values and, when supplied, checks the expected release tag. It is already called by `desktop/build.ps1` and by `.github/workflows/release-windows.yml`.
+
+Required release-tag format:
+
+```text
+VERSION = 0.2.2
+Git tag  = v0.2.2
+Release  = v0.2.2
+```
+
+A release must not be published if the tag does not match the canonical `VERSION`.
+
+## 3. Application payload version
+
+`desktop/prepare-payload.ps1` copies the root `VERSION` file into the staged application payload. The runtime setup engine reads:
+
+```text
+%LOCALAPPDATA%\\Clippy\\app\\current\\VERSION
+```
+
+That value determines which GitHub Release the installed app will use for its runtime download.
+
+The build must validate the canonical version before creating the payload. The payload version must be treated as immutable after packaging. A setup script must never infer its release version from the latest GitHub release, a branch name, or a hard-coded fallback.
+
+## 4. Runtime asset naming and release contract
+
+The audited source currently uses this convention:
+
+| Item | Expected value for version 0.2.2 |
+|---|---|
+| Release tag | `v0.2.2` |
+| CPU runtime archive asset | `clippy-python-cpu.zip` |
+| CUDA runtime archive asset | `clippy-python-cuda.zip` |
+| CPU checksum asset | `clippy-python-cpu.zip.sha256` |
+| CUDA checksum asset | `clippy-python-cuda.zip.sha256` |
+| CPU download URL | `https://github.com/helalxp/clippy/releases/download/v0.2.2/clippy-python-cpu.zip` |
+| CUDA download URL | `https://github.com/helalxp/clippy/releases/download/v0.2.2/clippy-python-cuda.zip` |
+
+The archive asset names are intentionally stable within each versioned release. The release tag supplies the application-version boundary. The local cache filename may include the application version to avoid collisions between cached packages.
+
+The release workflow must publish the installer, installer checksum, CPU runtime archive and checksum, and CUDA runtime archive or its multipart representation and manifest/checksums to the same matching release.
+
+A successful installer build is not proof that the runtime download is available. The matching release and all required runtime assets must exist before the installer is distributed.
+
+## 5. Audit findings
+
+### 5.1 Confirmed: no published GitHub Releases
+
+At the time of this audit, the GitHub Releases API for `helalxp/clippy` returned an empty list.
+
+Therefore, the current setup engine has no published release asset to download. An HTTP 404 is the expected result until a matching release is created and populated.
+
+### 5.2 Confirmed: the installed 0.2.1 setup engine differs from the audited 0.2.2 source
+
+The user's installed setup log requested:
+
+```text
+clippy-python-cuda-0.2.1.zip
+```
+
+The audited `windows-installer-hardening` source has `VERSION = 0.2.2` and constructs the release asset URL using the unversioned asset name:
+
+```text
+/releases/download/v0.2.2/clippy-python-cuda.zip
+```
+
+This indicates that the tested installer contains an older setup-runtime implementation/payload than the source currently being audited. It is not evidence that the current branch's version-validation script failed. It is evidence that the installed artifact and current source are from different application versions.
+
+The next installer must be built from the intended release commit, and its embedded payload version must be checked before distribution.
+
+### 5.3 Confirmed: current version consistency checks are useful but do not publish releases
+
+`desktop/validate-version.ps1` checks the application manifests and optional tag. The release workflow invokes it before building the installer.
+
+This prevents several source-level version mismatches, but it cannot create a missing release asset by itself. The release workflow must complete successfully and publish the runtime assets.
+
+### 5.4 Confirmed: runtime archive builder stops at the GitHub asset-size limit
+
+`desktop/build-python-runtime.ps1` creates:
+
+```text
+clippy-python-cpu.zip
+clippy-python-cuda.zip
+```
+
+It then rejects any archive at or above 2 GiB before writing its checksum and before testing the exact compressed archive. The observed CUDA archive is approximately 3.35 GB, so the current builder intentionally fails before the release workflow can publish it.
+
+### 5.5 Confirmed: release workflow expects single ZIP files
+
+`.github/workflows/release-windows.yml` currently:
+
+1. Builds CPU and CUDA runtime archives in a matrix.
+2. Uploads each archive and its checksum as a workflow artifact.
+3. Downloads those artifacts in the publishing job.
+4. validates the checksum.
+5. Publishes `desktop/runtime-dist/*.zip` and `*.zip.sha256` to the GitHub Release.
+
+That workflow cannot publish the current 3.35 GB CUDA ZIP as one release asset.
+
+### 5.6 Documentation drift
+
+The existing `RELEASING.md` refers to a `windows-installer-release` branch, while this audit is being performed against `windows-installer-hardening`. Before the next release, the project should designate and document one authoritative release branch and update the release instructions accordingly.
+
+## 6. Proposed version-mismatch prevention rules
+
+The following rules should be treated as release gates:
+
+1. **One canonical version:** only the root `VERSION` file is edited to select the next application version; the existing validator checks all mirrored manifests.
+2. **Tag equality:** a release tag must be exactly `v<VERSION>`.
+3. **Payload equality:** the packaged payload's `VERSION` must equal the canonical source version used to build the installer.
+4. **Release equality:** the runtime downloader uses the payload version to construct the release URL. It must not use `latest`.
+5. **Asset contract equality:** the release workflow and setup engine must share one documented asset naming convention.
+6. **Pre-publication gate:** the release workflow must verify that every required runtime asset and checksum/manifest is present, correctly named, and valid before publishing the installer.
+7. **Post-publication gate:** after publishing, the workflow should query the created release and verify that every required asset is attached and has the expected size before the release is considered ready.
+8. **Fail clearly:** a missing asset should produce a diagnostic naming the requested release tag and asset. It must not be presented as a generic Python installation failure.
+9. **No manual customer overrides:** local archive environment variables remain development/test hooks only. They are not part of the customer installation procedure.
+
+## 7. CUDA archive size: multipart feasibility assessment
+
+### 7.1 Platform constraint
+
+GitHub documents that each individual release asset must be under 2 GiB. A release may contain up to 1,000 assets, and GitHub does not impose a total-size limit on the release assets.
+
+Official reference: [GitHub Docs: About releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
+
+The current CUDA archive is approximately 3.35 GB, so it cannot be attached as one GitHub Release asset.
+
+### 7.2 Recommendation: split the completed archive into binary parts
+
+**Assessment: viable and recommended for the current GitHub Releases hosting plan.**
+
+The build should first create and validate the complete ZIP archive. It should then split that exact byte stream into ordered binary parts, each comfortably below the platform limit. A conservative target is approximately 1.75 GiB per part rather than attempting to approach 2 GiB.
+
+Illustrative assets:
+
+```text
+clippy-python-cuda.part001
+clippy-python-cuda.part002
+clippy-python-cuda.manifest.json
+clippy-python-cuda.parts.sha256
+```
+
+The exact number of parts must be calculated from the archive size; larger future archives may produce more than two parts. Part names must be deterministic and zero-padded.
+
+This is byte-level segmentation of the already-compressed ZIP, not recompression into independent ZIP files. Concatenating the parts in the specified order reconstructs the original ZIP byte-for-byte.
+
+### 7.3 Manifest contract
+
+The manifest should contain at least:
+
+- Manifest schema version.
+- Clippy application release version.
+- Runtime package variant (`cpu` or `cuda`).
+- Original archive filename and exact byte length.
+- Original archive SHA-256.
+- Ordered list of part filenames.
+- Exact byte length and SHA-256 for every part.
+- Total part count.
+
+The release tag, manifest application version, and setup payload version must agree.
+
+### 7.4 Installer download and reconstruction flow
+
+For a multipart runtime, the setup engine should:
+
+1. Read the manifest from the same versioned GitHub Release.
+2. Validate the manifest schema, application version, runtime variant, part count, names, and declared sizes.
+3. Download each part to the managed Clippy download directory, using the existing resumable-download mechanism.
+4. Verify each part's exact size and SHA-256 before accepting it.
+5. Concatenate the parts in manifest order using buffered file streams. Do not load the multi-gigabyte archive into memory.
+6. Verify the reconstructed archive's exact byte length and whole-file SHA-256.
+7. Extract only after all integrity checks pass.
+8. Preserve verified parts after an interrupted setup so a retry does not download completed parts again.
+9. Remove temporary parts and reconstructed archive after successful installation, subject to the chosen cache policy.
+
+A missing, duplicated, reordered, truncated, or modified part must stop setup before extraction.
+
+### 7.5 Why this is preferable to recompressing or splitting the runtime into separate packages
+
+- It preserves the already-tested archive byte-for-byte.
+- It does not change Python package layout or runtime import behavior.
+- It does not require the customer to install a third-party archive utility.
+- It avoids loading the complete archive into RAM.
+- It uses ordinary GitHub Release assets and the existing release hosting workflow.
+- It permits independent resume and integrity checks for each part.
+
+The split operation itself is simple; the important engineering work is the manifest contract, reliable part download/resume, ordered reconstruction, and end-to-end checksum verification.
+
+### 7.6 Required CI changes when this design is approved
+
+- Remove the current single-file 2 GiB rejection as the final packaging outcome.
+- Split the completed CUDA archive into bounded parts.
+- Generate a manifest and per-part checksums, retaining the whole-archive checksum.
+- Test reconstruction in CI and compare the reconstructed archive's size and SHA-256 with the original.
+- Test extraction and imports from the reconstructed archive, not merely from the pre-split source.
+- Upload all parts and metadata as workflow artifacts.
+- Update release validation and release asset globs to include the parts and manifest.
+- Ensure the release job rejects any individual part at or above the configured safe maximum.
+
+The CPU package can remain a single ZIP plus checksum while it remains below the per-asset limit.
+
+## 8. Release readiness checklist
+
+A Windows release is not ready to distribute until all of the following are true:
+
+- [ ] Root `VERSION` and all mirrored application manifests agree.
+- [ ] Git tag equals `v<VERSION>`.
+- [ ] Installer payload contains the same `VERSION`.
+- [ ] CPU runtime asset is published and verified.
+- [ ] CUDA runtime manifest and every part are published and verified, or a single CUDA archive is below the limit.
+- [ ] Runtime package SHA-256 checks pass.
+- [ ] CI reconstructs and extracts the exact CUDA archive successfully.
+- [ ] The release contains the installer and its checksum.
+- [ ] A clean Windows installation completes without environment overrides or manual files.
+- [ ] The published release is checked for all expected assets before users receive the installer.
+
+## 9. Scope and implementation status
+
+This document records the audit and recommended contract. The multipart packaging/downloading implementation and release-workflow changes are not yet applied. They should be implemented as one coordinated change after the contract is accepted, then validated through a complete tagged release and a clean-machine installer test.
