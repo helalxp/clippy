@@ -286,15 +286,39 @@ $ExpectedState = New-ClippyRuntimeState -PythonVersion $PythonVersion -PythonVar
 if (Test-Path $ManifestPath) {
     try {
         $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+        $PythonExe = Join-Path $PythonDir "python.exe"
+        $NodeExe = Join-Path $NodeDir "node.exe"
+        $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
         $RuntimeFilesPresent =
-            (Test-Path (Join-Path $PythonDir "python.exe")) -and
-            (Test-Path (Join-Path $NodeDir "node.exe")) -and
-            (Test-Path (Join-Path $FfmpegDir "ffmpeg.exe")) -and
+            (Test-Path -LiteralPath $PythonExe -PathType Leaf) -and
+            (Test-Path -LiteralPath $NodeExe -PathType Leaf) -and
+            (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) -and
             (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -and
             (Test-Path -LiteralPath $BrowserVersionFile -PathType Leaf) -and
             ((Get-Content -LiteralPath $BrowserVersionFile -Raw).Trim() -eq $RemotionVersion)
-        if ($Existing.state -eq $ExpectedState -and $RuntimeFilesPresent) {
-            Write-Stage "Verifying installed backend and Remotion dependencies..."
+        $ManifestComponentsHealthy = $Existing.version -eq "1.0.0" -and $Existing.schema -eq 1
+        foreach ($componentName in @("python", "node", "ffmpeg", "browser")) {
+            $component = $Existing.components.$componentName
+            if (-not $component -or -not $component.installed -or [string]::IsNullOrWhiteSpace([string]$component.version)) {
+                $ManifestComponentsHealthy = $false
+            }
+        }
+        $ManifestComponentsHealthy = $ManifestComponentsHealthy -and
+            ($Existing.components.python.version -eq $PythonVersion) -and
+            ($Existing.components.node.version -eq $NodeVersion) -and
+            ($Existing.components.ffmpeg.version -eq "gyan-release-essentials") -and
+            ($Existing.components.browser.version -eq $RemotionVersion) -and
+            ($Existing.requirementsSha256 -eq $RequirementsHash) -and
+            ($Existing.browserSha256 -match "^[a-fA-F0-9]{64}$") -and
+            ($Existing.browserSha256 -eq (Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant())
+        if ($Existing.state -eq $ExpectedState -and $RuntimeFilesPresent -and $ManifestComponentsHealthy) {
+            Write-Stage "Verifying installed Python, Node.js, FFmpeg, backend, and Remotion dependencies..."
+            $PythonVersionOutput = (& $PythonExe --version 2>&1 | Out-String).Trim()
+            $PythonVersionHealthy = ($LASTEXITCODE -eq 0 -and $PythonVersionOutput -eq "Python $PythonVersion")
+            $NodeVersionOutput = (& $NodeExe --version 2>&1 | Out-String).Trim()
+            $NodeVersionHealthy = ($LASTEXITCODE -eq 0 -and $NodeVersionOutput.TrimStart('v') -eq $NodeVersion)
+            & $FfmpegExe -version *> $null
+            $FfmpegHealthy = ($LASTEXITCODE -eq 0)
             $PythonHealthy = $false
             $NodeHealthy = $false
             Push-Location $App
@@ -303,23 +327,22 @@ if (Test-Path $ManifestPath) {
                 $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
                 $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
                 $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
-                & (Join-Path $PythonDir "python.exe") -c "import app; import torch; import faster_whisper" *> $null
-                $PythonHealthy = ($LASTEXITCODE -eq 0)
+                & $PythonExe -c "import app; import torch; import faster_whisper" *> $null
+                $PythonHealthy = ($PythonVersionHealthy -and $LASTEXITCODE -eq 0)
                 $env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
                 $BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); }).catch(e => { console.error(e); process.exit(1); });"
                 Push-Location (Join-Path $App "render-service")
                 try {
-                    & (Join-Path $NodeDir "node.exe") -e $BrowserCheck *> $null
-                    $NodeHealthy = ($LASTEXITCODE -eq 0)
+                    & $NodeExe -e $BrowserCheck *> $null
                     $BrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
-                    $NodeHealthy = $NodeHealthy -and ($BrowserSignature.Status -eq "Valid") -and ($BrowserSignature.SignerCertificate.Subject -match "Google")
+                    $NodeHealthy = ($NodeVersionHealthy -and $LASTEXITCODE -eq 0) -and ($BrowserSignature.Status -eq "Valid") -and ($BrowserSignature.SignerCertificate.Subject -match "Google")
                 } finally {
                     Pop-Location
                 }
             } finally {
                 Pop-Location
             }
-            if ($PythonHealthy -and $NodeHealthy) {
+            if ($PythonHealthy -and $NodeHealthy -and $FfmpegHealthy) {
                 Write-Stage "Managed runtimes and application dependencies are healthy. No downloads needed."
                 exit 0
             }
