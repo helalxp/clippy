@@ -182,6 +182,18 @@ class OverlayRecipe(ContractModel):
     kind: Literal["watermark", "image", "text"]
     asset_id: str | None = None
     text: str | None = Field(default=None, max_length=240)
+    font_family: str = Field(default="Arial", min_length=1, max_length=120)
+    font_asset_id: str | None = None
+    font_size_ratio: float = Field(default=0.045, gt=0, le=0.15)
+    font_color: HexColor = "#FFFFFF"
+    background_color: HexColor | None = None
+    outline_color: HexColor = "#000000"
+    outline_ratio: float = Field(default=0.002, ge=0, le=0.03)
+    text_align: Literal["left", "center", "right"] = "center"
+    text_box_width_ratio: float = Field(default=0.8, ge=0.1, le=1)
+    text_box_height_ratio: float = Field(default=0.18, ge=0.04, le=0.6)
+    max_lines: int = Field(default=2, ge=1, le=5)
+    line_spacing_ratio: float = Field(default=0.005, ge=0, le=0.05)
     anchor_x: float = Field(default=0.9, ge=0, le=1)
     anchor_y: float = Field(default=0.9, ge=0, le=1)
     width_ratio: float = Field(default=0.12, gt=0, le=1)
@@ -192,8 +204,24 @@ class OverlayRecipe(ContractModel):
     def validate_overlay_payload(self) -> "OverlayRecipe":
         if self.kind in ("watermark", "image") and not self.asset_id:
             raise ValueError(f"{self.kind} overlays require asset_id")
-        if self.kind == "text" and not self.text:
-            raise ValueError("text overlays require text")
+        if self.kind == "text":
+            if not self.text or not self.text.strip():
+                raise ValueError("text overlays require non-empty text")
+            if self.asset_id is not None:
+                raise ValueError("text overlays cannot reference an image asset")
+            if self.rotation_degrees != 0:
+                raise ValueError("text overlay rotation is not supported")
+            if len(self.text.replace("\\r\\n", "\\n").replace("\\r", "\\n").split("\\n")) > self.max_lines:
+                raise ValueError("text overlay exceeds max_lines; add explicit line breaks or increase max_lines")
+            estimated_height = self.font_size_ratio * self.max_lines * 1.35
+            if self.text_box_height_ratio < estimated_height:
+                raise ValueError("text_box_height_ratio is too small for font_size_ratio and max_lines")
+            if self.anchor_x < self.text_box_width_ratio / 2 or self.anchor_x > 1 - self.text_box_width_ratio / 2:
+                raise ValueError("text overlay horizontal anchor places its box outside the canvas")
+            if self.anchor_y < self.text_box_height_ratio / 2 or self.anchor_y > 1 - self.text_box_height_ratio / 2:
+                raise ValueError("text overlay vertical anchor places its box outside the canvas")
+        elif self.font_asset_id is not None:
+            raise ValueError("font_asset_id is only valid for text overlays")
         return self
 
 
@@ -409,6 +437,7 @@ class TemplateDocument(ContractModel):
             for asset_id in (
                 self.recipe.captions.font_asset_id,
                 self.recipe.hook.font_asset_id,
+                *(overlay.font_asset_id for overlay in self.recipe.overlays),
             )
             if asset_id is not None
         }
