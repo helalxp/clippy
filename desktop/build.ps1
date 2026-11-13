@@ -27,7 +27,7 @@ try {
 
     Write-Host "Building dashboard for the local Clippy API..."
     $previousApiUrl = $env:VITE_API_URL
-    $env:VITE_API_URL = "http://127.0.0.1:8000"
+    $env:VITE_API_URL = "" # The desktop supervisor supplies its dynamically allocated local API address at startup.
     try {
         npm run build
         if ($LASTEXITCODE -ne 0) { throw "Dashboard build failed (exit $LASTEXITCODE)." }
