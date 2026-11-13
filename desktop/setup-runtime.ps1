@@ -26,6 +26,12 @@ $PythonDir = Join-Path $Runtime "python"
 $NodeDir = Join-Path $Runtime "node"
 $FfmpegDir = Join-Path $Runtime "ffmpeg\bin"
 $ManifestPath = Join-Path $Root "runtime-manifest.json"
+# Browser binaries are durable user data, not part of app\current. Updating the
+# application payload must not force a multi-hundred-MB browser download.
+$BrowserRoot = Join-Path $Root "browser"
+$BrowserDir = Join-Path $BrowserRoot "headless-shell"
+$BrowserExecutable = Join-Path $BrowserDir "chrome-headless-shell.exe"
+$BrowserVersionFile = Join-Path $BrowserRoot "remotion-version.txt"
 $LogDir = Join-Path $Root "logs"
 $SetupLogPath = Join-Path $LogDir "runtime-setup.log"
 
@@ -220,14 +226,23 @@ foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "VERS
 }
 
 $RequirementsHash = (Get-FileHash (Join-Path $App "requirements.txt") -Algorithm SHA256).Hash.ToLowerInvariant()
-$ExpectedState = "python=$PythonVersion;pythonVariant=$TorchVariant;node=$NodeVersion;ffmpeg=gyan-release-essentials;requirements=$RequirementsHash"
+$RemotionPackagePath = Join-Path $App "render-service\node_modules\@remotion\renderer\package.json"
+if (-not (Test-Path -LiteralPath $RemotionPackagePath -PathType Leaf)) {
+    throw "Remotion renderer package is missing from the application payload: $RemotionPackagePath"
+}
+$RemotionVersion = (Get-Content -LiteralPath $RemotionPackagePath -Raw | ConvertFrom-Json).version
+if ([string]::IsNullOrWhiteSpace($RemotionVersion)) { throw "Could not determine the bundled Remotion renderer version." }
+$ExpectedState = "python=$PythonVersion;pythonVariant=$TorchVariant;node=$NodeVersion;ffmpeg=gyan-release-essentials;browser=$RemotionVersion;requirements=$RequirementsHash"
 if (Test-Path $ManifestPath) {
     try {
         $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
         $RuntimeFilesPresent =
             (Test-Path (Join-Path $PythonDir "python.exe")) -and
             (Test-Path (Join-Path $NodeDir "node.exe")) -and
-            (Test-Path (Join-Path $FfmpegDir "ffmpeg.exe"))
+            (Test-Path (Join-Path $FfmpegDir "ffmpeg.exe")) -and
+            (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -and
+            (Test-Path -LiteralPath $BrowserVersionFile -PathType Leaf) -and
+            ((Get-Content -LiteralPath $BrowserVersionFile -Raw).Trim() -eq $RemotionVersion)
         if ($Existing.state -eq $ExpectedState -and $RuntimeFilesPresent) {
             Write-Stage "Verifying installed backend and Remotion dependencies..."
             $PythonHealthy = $false
@@ -240,11 +255,14 @@ if (Test-Path $ManifestPath) {
                 $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
                 & (Join-Path $PythonDir "python.exe") -c "import app; import torch; import faster_whisper" *> $null
                 $PythonHealthy = ($LASTEXITCODE -eq 0)
-                $BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser(); }).catch(e => { console.error(e); process.exit(1); });"
+                $env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
+                $BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); }).catch(e => { console.error(e); process.exit(1); });"
                 Push-Location (Join-Path $App "render-service")
                 try {
                     & (Join-Path $NodeDir "node.exe") -e $BrowserCheck *> $null
                     $NodeHealthy = ($LASTEXITCODE -eq 0)
+                    $BrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
+                    $NodeHealthy = $NodeHealthy -and ($BrowserSignature.Status -eq "Valid") -and ($BrowserSignature.SignerCertificate.Subject -match "Google")
                 } finally {
                     Pop-Location
                 }
@@ -489,12 +507,49 @@ try {
     Pop-Location
 }
 
-Write-Stage "Installing Remotion's browser runtime..."
-$BrowserCheck = "import('@remotion/renderer').then(async m => { await m.ensureBrowser(); console.log('Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
+Write-Stage "Verifying the persistent Remotion browser runtime..."
+$InstalledBrowserVersion = if (Test-Path -LiteralPath $BrowserVersionFile) { (Get-Content -LiteralPath $BrowserVersionFile -Raw).Trim() } else { "" }
+if (-not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -or $InstalledBrowserVersion -ne $RemotionVersion) {
+    Write-Stage "Installing the Remotion browser for renderer version $RemotionVersion..."
+    $BrowserCheck = "import('@remotion/renderer').then(async m => { const b = await m.ensureBrowser(); console.log('CLIPPY_BROWSER_PATH=' + b.path); }).catch(e => { console.error(e); process.exit(1); });"
+    Push-Location (Join-Path $App "render-service")
+    try {
+        $BrowserOutput = & $NodeExe -e $BrowserCheck 2>&1
+        foreach ($OutputLine in $BrowserOutput) { Write-Stage ([string]$OutputLine) }
+        if ($LASTEXITCODE -ne 0) { throw "Remotion browser installation failed." }
+    } finally {
+        Pop-Location
+    }
+    $BrowserPathLine = @($BrowserOutput | Where-Object { ([string]$_).StartsWith("CLIPPY_BROWSER_PATH=") } | Select-Object -Last 1)
+    if ($BrowserPathLine.Count -lt 1) { throw "Remotion did not report the installed browser executable path." }
+    $DownloadedBrowserExe = ([string]$BrowserPathLine[0]).Substring("CLIPPY_BROWSER_PATH=".Length)
+    if (-not (Test-Path -LiteralPath $DownloadedBrowserExe -PathType Leaf)) {
+        throw "Remotion reported a browser executable that does not exist: $DownloadedBrowserExe"
+    }
+    $DownloadedBrowserDir = Split-Path -Parent $DownloadedBrowserExe
+    if (Test-Path -LiteralPath $BrowserDir) { Remove-Item -LiteralPath $BrowserDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $BrowserDir -Force | Out-Null
+    Copy-Item -Path (Join-Path $DownloadedBrowserDir "*") -Destination $BrowserDir -Recurse -Force
+    $BrowserExecutable = Join-Path $BrowserDir (Split-Path -Leaf $DownloadedBrowserExe)
+    [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
+} else {
+    Write-Stage "Reusing the browser already installed for Remotion $RemotionVersion."
+}
+
+if (-not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf)) {
+    throw "Persistent Remotion browser executable is missing: $BrowserExecutable"
+}
+$BrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
+if ($BrowserSignature.Status -ne "Valid" -or $BrowserSignature.SignerCertificate.Subject -notmatch "Google") {
+    throw "Remotion browser signature is invalid or not issued to Google. The downloaded browser will not be trusted."
+}
+$BrowserSha256 = (Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+$env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
+$BrowserValidation = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); console.log('Persistent Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
 Push-Location (Join-Path $App "render-service")
 try {
-    & $NodeExe -e $BrowserCheck
-    if ($LASTEXITCODE -ne 0) { throw "Remotion browser installation failed." }
+    & $NodeExe -e $BrowserValidation
+    if ($LASTEXITCODE -ne 0) { throw "Persistent Remotion browser validation failed." }
 } finally {
     Pop-Location
 }
@@ -506,11 +561,13 @@ $Manifest = @{
         python = @{ version = $PythonVersion; installed = $true }
         node = @{ version = $NodeVersion; installed = $true }
         ffmpeg = @{ version = "gyan-release-essentials"; installed = $true }
+        browser = @{ version = $RemotionVersion; installed = $true }
     }
     schema = 1
     state = $ExpectedState
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
     requirementsSha256 = $RequirementsHash
+    browserSha256 = $BrowserSha256
     gpuMode = if ($TorchVariant -eq "cuda") { "cuda128" } else { "cpu" }
 }
 $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
