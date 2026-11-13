@@ -130,9 +130,17 @@ impl ProcessJob {
 }
 
 const BACKEND_HOST: &str = "127.0.0.1";
-const BACKEND_PORT: u16 = 8000;
 const RENDERER_HOST: &str = "127.0.0.1";
-const RENDERER_PORT: u16 = 13100;
+
+fn allocate_loopback_port() -> Result<u16, String> {
+    // Ask Windows for an available ephemeral port instead of assuming that
+    // fixed ports belong to Clippy. The listener is released immediately
+    // before the child binds; startup health checks catch the rare race.
+    let listener = TcpListener::bind((BACKEND_HOST, 0))
+        .map_err(|e| format!("Could not reserve a local service port: {e}"))?;
+    listener.local_addr().map(|address| address.port())
+        .map_err(|e| format!("Could not inspect the reserved local service port: {e}"))
+}
 
 #[derive(Default)]
 pub struct Supervisor {
@@ -140,6 +148,8 @@ pub struct Supervisor {
     renderer: Option<Child>,
     paths: Option<RuntimePaths>,
     job: Option<ProcessJob>,
+    backend_port: u16,
+    renderer_port: u16,
 }
 
 #[derive(Clone)]
@@ -159,6 +169,8 @@ struct RuntimePaths {
 pub struct ServiceStatus {
     pub backend: String,
     pub renderer: String,
+    pub backend_url: String,
+    pub renderer_url: String,
     pub output_directory: String,
     pub setup_required: bool,
     pub message: String,
@@ -280,12 +292,19 @@ impl Supervisor {
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
         let child_path = managed_child_path(&paths)?;
         let job = ProcessJob::new()?;
+        let backend_port = allocate_loopback_port()?;
+        let mut renderer_port = allocate_loopback_port()?;
+        while renderer_port == backend_port {
+            renderer_port = allocate_loopback_port()?;
+        }
+        let backend_port_arg = backend_port.to_string();
+        let renderer_port_arg = renderer_port.to_string();
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
         let renderer_stdout = renderer_log.try_clone().map_err(|e| e.to_string())?;
         let mut backend = Command::new(&paths.python)
-            .args(["-m", "uvicorn", "app:app", "--host", BACKEND_HOST, "--port", "8000"])
+            .args(["-m", "uvicorn", "app:app", "--host", BACKEND_HOST, "--port", &backend_port_arg])
             .current_dir(&paths.root)
             // Do not allow a user's Python/Conda environment to influence the
             // interpreter or imports. The executable is always Clippy's private
@@ -316,9 +335,9 @@ impl Supervisor {
             .env_remove("NPM_CONFIG_PREFIX")
             .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
-            .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{RENDERER_PORT}"))
+            .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{renderer_port}"))
             .env("HOST", BACKEND_HOST)
-            .env("PORT", BACKEND_PORT.to_string())
+            .env("PORT", backend_port_arg.clone())
             .stdout(Stdio::from(backend_log.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::from(backend_log))
             .spawn()
@@ -334,7 +353,7 @@ impl Supervisor {
             .current_dir(paths.root.join("render-service"))
             .env("HOST", RENDERER_HOST)
             .env("NODE_ENV", "production")
-            .env("PORT", RENDERER_PORT.to_string())
+            .env("PORT", renderer_port_arg.clone())
             .env("OUTPUT_DIR", &paths.output)
             .env_remove("NODE_PATH")
             .env_remove("NODE_OPTIONS")
@@ -356,12 +375,12 @@ impl Supervisor {
             return Err(error);
         }
 
-        if let Err(error) = wait_for_health(&mut backend, BACKEND_PORT, "/health/ready", Duration::from_secs(90)) {
+        if let Err(error) = wait_for_health(&mut backend, backend_port, "/health/ready", Duration::from_secs(180)) {
             let _ = renderer.kill(); let _ = renderer.wait();
             let _ = backend.kill(); let _ = backend.wait();
             return Err(format!("Backend startup failed: {error}. See {}", paths.logs.join("backend.log").display()));
         }
-        if let Err(error) = wait_for_health(&mut renderer, RENDERER_PORT, "/health", Duration::from_secs(120)) {
+        if let Err(error) = wait_for_health(&mut renderer, renderer_port, "/health", Duration::from_secs(180)) {
             let _ = renderer.kill(); let _ = renderer.wait();
             let _ = backend.kill(); let _ = backend.wait();
             return Err(format!("Renderer startup failed: {error}. See {}", paths.logs.join("renderer.log").display()));
@@ -371,6 +390,8 @@ impl Supervisor {
         self.renderer = Some(renderer);
         self.paths = Some(paths);
         self.job = Some(job);
+        self.backend_port = backend_port;
+        self.renderer_port = renderer_port;
         self.status()
     }
 
@@ -378,6 +399,8 @@ impl Supervisor {
         stop_child(&mut self.renderer);
         stop_child(&mut self.backend);
         self.job.take(); // Closing the job also terminates any surviving descendants.
+        self.backend_port = 0;
+        self.renderer_port = 0;
         self.status()
     }
 
@@ -385,6 +408,8 @@ impl Supervisor {
         let backend = child_status(&mut self.backend);
         let renderer = child_status(&mut self.renderer);
         let paths = self.paths.clone().or_else(|| RuntimePaths::discover().ok());
+        let backend_url = if self.backend_port > 0 { format!("http://{BACKEND_HOST}:{}", self.backend_port) } else { String::new() };
+        let renderer_url = if self.renderer_port > 0 { format!("http://{RENDERER_HOST}:{}", self.renderer_port) } else { String::new() };
         let output_directory = paths.as_ref().map(|p| p.output.display().to_string()).unwrap_or_default();
         let setup_required = paths.as_ref().map(|p| p.validate().is_err()).unwrap_or(true);
         let message = if setup_required {
@@ -394,7 +419,7 @@ impl Supervisor {
         } else {
             "Clippy services are not running.".to_string()
         };
-        Ok(ServiceStatus { backend, renderer, output_directory, setup_required, message })
+        Ok(ServiceStatus { backend, renderer, backend_url, renderer_url, output_directory, setup_required, message })
     }
 }
 
