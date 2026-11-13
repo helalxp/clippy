@@ -181,6 +181,14 @@ Provide a visual preview beside structured controls. Organize settings into mean
 - `EffectSegment.zoom` and non-centered effect crop coordinates are not supported by this first adapter. Values outside the FFmpeg EQ exact range are rejected by capability preflight rather than silently clamped.
 - Motion and color effects are applied before image overlays, captions, and hook/title layers. This keeps brand assets and text color stable while footage effects change.
 
+**Initial text-overlay semantics (Python/FFmpeg v1):**
+- Text overlays use explicit newline characters for line breaks. `max_lines` is a hard validation limit; the renderer does not silently rewrite or auto-wrap user copy.
+- Typography is defined by `font_family` or an owner-scoped `font_asset_id`, `font_size_ratio`, `font_color`, `outline_color`, and `outline_ratio`. Optional `background_color` creates a backing box. `opacity` affects text, outline, and backing together.
+- `text_box_width_ratio` and `text_box_height_ratio` define a normalized layout box. `text_anchor_x` and `text_anchor_y` identify its center. `text_align` aligns each explicit line within that box.
+- Text overlays render for the full clip duration and participate in the same back-to-front recipe order as image/watermark overlays. Rotation is not supported for text.
+- Text is written to a temporary UTF-8 file and passed through FFmpeg drawtext with expansion disabled. User text is never interpolated into filter syntax.
+- A conservative line-width estimate marks unusually long lines as approximate. The user must explicitly allow approximate rendering for those cases; the renderer does not silently shrink text or invent line breaks.
+
 Provide simple controls by default and advanced controls for users who want precise values. Every control must map to a documented schema property and a renderer capability.
 
 ### 4.5 Apply and preview workflow
