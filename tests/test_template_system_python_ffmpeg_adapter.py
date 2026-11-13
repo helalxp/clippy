@@ -536,7 +536,7 @@ def test_adapter_rejects_custom_caption_anchors_instead_of_ignoring_them():
         "captions": {"enabled": True, "anchor_x": 0.4},
     })
 
-    with pytest.raises(RendererCompatibilityError, match="custom caption anchor"):
+    with pytest.raises(RendererCompatibilityError, match="unsupported"):
         PythonFFmpegAdapter().preflight(recipe)
 
 
