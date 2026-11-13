@@ -225,6 +225,6 @@ Next: implement template-driven caption styling as the next isolated Python/FFmp
 - When a template references a font asset, the application service resolves the owner-scoped asset and the adapter stages it in a temporary FFmpeg fonts directory. Temporary ASS/font files are cleaned after render.
 - Template application receives the saved job transcript, remaps recut EDL segments onto the clip timeline, and prefers saved user-edited caption words when present. A template that enables captions without available words fails clearly instead of silently rendering without captions.
 - Custom x/y caption anchors are explicitly unsupported. Non-default max_lines values are approximate because glyph wrapping varies by font and language. Hook/title rendering, generic overlays, and Remotion preview parity remain outstanding.
-- GitHub Actions run 43421566510 passed: 152 focused template tests, 1,357 backend tests passed with 53 skipped, and frontend production build passed.
+- GitHub Actions run 43421896913 passed on the current branch head: 154 focused template tests, 1,371 backend tests passed with 55 skipped, and frontend production build passed.
 
 Next: implement hook/title rendering as a separate adapter capability with deterministic timing/position tests, then move to overlays. Do not claim full template fidelity until preview and final-render parity is separately proven.
