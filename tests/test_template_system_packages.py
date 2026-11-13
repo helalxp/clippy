@@ -124,9 +124,11 @@ def test_import_rejects_symlink_entries(tmp_path):
 
 def test_import_rejects_duplicate_paths(tmp_path):
     document = TemplateDocument(id="tpl_packagedup1", name="Duplicate fixture")
-    payload = _package_bytes(document.to_storage_dict())
-    with zipfile.ZipFile(io.BytesIO(payload), "a") as archive:
-        archive.writestr(PACKAGE_MANIFEST, b"{}")
+    duplicate_manifest = zipfile.ZipInfo(PACKAGE_MANIFEST)
+    payload = _package_bytes(
+        document.to_storage_dict(),
+        extra_entries=[(duplicate_manifest, b"{}")],
+    )
     with pytest.raises(TemplatePackageError, match="duplicate"):
         import_template_package(LocalTemplateStorage(tmp_path), payload)
 
