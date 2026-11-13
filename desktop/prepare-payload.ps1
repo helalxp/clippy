@@ -78,6 +78,7 @@ Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
+Copy-Item (Join-Path $PSScriptRoot "runtime-archive.ps1") -Destination $stageRoot
 
 $directories = @("assets", "fonts", "reference_templates", "render-service", "remotion", "bin")
 foreach ($name in $directories) {
