@@ -308,7 +308,7 @@ class PythonFFmpegAdapter:
                 shutil.rmtree(render_temp_dir, ignore_errors=True)
             if isinstance(exc, RenderAdapterError):
                 raise
-            raise RenderAdapterError(f"could not prepare template text layers: {exc}") from exc
+            raise RenderAdapterError(f"could not prepare template render assets: {exc}") from exc
 
         try:
             filter_graph = self._filter_graph(
