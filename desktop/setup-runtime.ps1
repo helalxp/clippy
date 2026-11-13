@@ -481,12 +481,22 @@ if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
 } else {
     $PythonRuntimeManifestPath = Join-Path $Downloads "$AppVersion-$PythonRuntimeManifestName"
     Download-File $PythonRuntimeManifestUrl $PythonRuntimeManifestPath
-    try {
-        $RuntimeManifest = Get-Content -LiteralPath $PythonRuntimeManifestPath -Raw | ConvertFrom-Json
-    } catch {
-        Remove-Item -LiteralPath $PythonRuntimeManifestPath -Force -ErrorAction SilentlyContinue
-        throw "The runtime manifest downloaded from release v$AppVersion is not valid JSON: $PythonRuntimeManifestUrl"
+    $ManifestParsed = $false
+    for ($ManifestAttempt = 1; $ManifestAttempt -le 2; $ManifestAttempt++) {
+        try {
+            $RuntimeManifest = Get-Content -LiteralPath $PythonRuntimeManifestPath -Raw | ConvertFrom-Json
+            $ManifestParsed = $true
+            break
+        } catch {
+            Remove-Item -LiteralPath $PythonRuntimeManifestPath -Force -ErrorAction SilentlyContinue
+            if ($ManifestAttempt -eq 2) {
+                throw "The runtime manifest downloaded from release v$AppVersion is not valid JSON: $PythonRuntimeManifestUrl"
+            }
+            Write-Stage "Cached runtime manifest was invalid; downloading it again."
+            Download-File $PythonRuntimeManifestUrl $PythonRuntimeManifestPath
+        }
     }
+    if (-not $ManifestParsed) { throw "Could not read the runtime manifest for release v$AppVersion." }
     Assert-ClippyRuntimeArchiveManifest -Manifest $RuntimeManifest -ExpectedApplicationVersion $AppVersion -ExpectedVariant $TorchVariant | Out-Null
 
     foreach ($Part in @($RuntimeManifest.parts)) {
@@ -762,5 +772,14 @@ $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
 # Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
 # serde_json expects plain JSON, so write UTF-8 explicitly without a BOM.
 [System.IO.File]::WriteAllText($ManifestPath, $ManifestJson, [System.Text.UTF8Encoding]::new($false))
+# Remove the multi-gigabyte Python archive and release parts only after the
+# complete runtime setup has succeeded. If setup fails earlier, verified parts
+# remain available for a retry without downloading them again.
+if ([string]::IsNullOrWhiteSpace($LocalRuntimeArchive) -and $RuntimeManifest) {
+    Remove-Item -LiteralPath $PythonRuntimeArchive, $PythonRuntimeManifestPath -Force -ErrorAction SilentlyContinue
+    foreach ($Part in @($RuntimeManifest.parts)) {
+        Remove-Item -LiteralPath (Join-Path $Downloads ([string]$Part.name)) -Force -ErrorAction SilentlyContinue
+    }
+}
 try { Remove-Item $ScratchRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 Write-Stage "Runtime setup completed successfully."
