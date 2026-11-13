@@ -400,7 +400,7 @@ def test_application_service_refuses_template_with_unsupported_features(tmp_path
     template = TemplateDocument(
         id="tpl_unsupported01",
         name="Unsupported template",
-        recipe=TemplateRecipe.model_validate({"hook": {"enabled": True, "text": "Unsupported hook"}}),
+        recipe=TemplateRecipe.model_validate({"effects": [{"start_seconds": 0.0, "end_seconds": 1.0}]}),
     )
     storage.create(template)
 
