@@ -27,6 +27,7 @@ if ($LASTEXITCODE -ne 0 -or $BuildPython -notmatch "^Python 3\.12\.") { throw "R
 
 if (Test-Path $WorkRoot) { Remove-Item $WorkRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $WorkRoot, $OutputDirectory -Force | Out-Null
+Get-ChildItem -LiteralPath $OutputDirectory -File -Filter "clippy-python-$Variant*" -ErrorAction SilentlyContinue | Remove-Item -Force
 $PythonArchive = Join-Path $WorkRoot $PythonArchiveName
 Write-Host "Downloading official CPython $PythonVersion embeddable distribution..."
 Invoke-WebRequest -Uri $PythonArchiveUrl -OutFile $PythonArchive -UseBasicParsing
