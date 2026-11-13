@@ -270,7 +270,7 @@ $ScratchPrefix = "ClippySetupTemp-" + $env:USERNAME + "-"
 Get-ChildItem -LiteralPath $ScratchDrive.RootDirectory.FullName -Directory -Filter "$ScratchPrefix*" -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-24) } |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ($ScratchPrefix + $PID)
+$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ($ScratchPrefix + $PID + "-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
