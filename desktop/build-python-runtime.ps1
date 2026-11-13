@@ -51,11 +51,13 @@ if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import valid
 if ($Variant -eq "cuda") {
     & $StagedPython -c "import torch; assert torch.version.cuda is not None and torch.version.cuda.startswith('12.8'), 'CUDA 12.8 PyTorch wheel was not selected'"
     if ($LASTEXITCODE -ne 0) { throw "CUDA package does not contain the required CUDA 12.8 PyTorch build." }
-    $CudaDllRoot = Join-Path $SitePackages "nvidia"
+    # Windows PyTorch CUDA wheels bundle the CUDA runtime DLLs in torch\lib.
+    # The Linux nvidia-* package directory layout does not apply to this wheel.
+    $CudaDllDirectory = Join-Path $SitePackages "torch\lib"
     $RequiredCudaDlls = @(
-        (Join-Path $CudaDllRoot "cublas\bin\cublas64_12.dll"),
-        (Join-Path $CudaDllRoot "cudnn\bin\cudnn64_9.dll"),
-        (Join-Path $CudaDllRoot "cuda_runtime\bin\cudart64_12.dll")
+        (Join-Path $CudaDllDirectory "cublas64_12.dll"),
+        (Join-Path $CudaDllDirectory "cudnn64_9.dll"),
+        (Join-Path $CudaDllDirectory "cudart64_12.dll")
     )
     foreach ($dll in $RequiredCudaDlls) {
         if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
