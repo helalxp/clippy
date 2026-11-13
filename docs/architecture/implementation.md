@@ -233,4 +233,13 @@ Implemented: the Python/FFmpeg adapter now renders canonical hook/title layers t
 
 - GitHub Actions run `43424728800` passed on commit `2e4d438348ae5813372bcf9fc0275c7f7a8659f7`: **157 focused template tests passed**, **1,371 backend tests passed with 58 skipped**, and the frontend production build passed.
 
-Next: implement measurable motion/effect recipe support and subject-tracking only against explicit contracts and fixtures. Text overlays need an expanded typography schema. Do not claim full template fidelity until preview and final-render parity are separately proven.
+Next: define the text-overlay typography/backing schema and measurable subject-tracking and transition contracts. Do not claim full template fidelity until preview and final-render parity are separately proven.
+
+
+## Latest implementation update: deterministic motion and color effects
+
+- Added a dedicated FFmpeg filter builder for frame-timed `punch_in`, `slow_zoom`, and `pan` motion. Punch-in reaches its target over the first 20% of its interval and holds; slow zoom ramps linearly; pan moves from the center to the normalized target while zoomed.
+- Added time-bounded brightness, contrast, and saturation through FFmpeg EQ. Effects are applied before image/watermark overlays, captions, and hook/title layers.
+- Capability preflight rejects EffectSegment zoom/crop-center fields and EQ values outside the exact supported range. Motion/effect segments starting after the clip duration fail clearly.
+- Real FFmpeg tests verify that slow zoom changes the active interval and returns to baseline outside it, and that brightness changes only during its configured interval.
+- GitHub Actions run [43427264281](https://github.com/helalxp/clippy/actions/runs/43427264281) passed on commit `866b703324733b6091eafa8522e132a5cc9df3bc`: **166 focused template tests passed**, **1,371 backend tests passed with 67 skipped**, and frontend production build passed.
