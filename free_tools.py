@@ -346,6 +346,7 @@ def fetch_transcript(video_id: str, lang: Optional[str] = None) -> dict:
             for use_cookies in ([False, True] if ck_path else [False]):
                 opts = {"skip_download": True, "quiet": True, "no_warnings": True,
                         "noplaylist": True, "logger": _QuietLogger(),
+                        "js_runtimes": {"node": {"path": os.environ.get("CLIPPY_NODE_EXE") or "node"}},
                         "socket_timeout": 15,
                         # Captions only: without this a video whose formats are
                         # SABR-only fails with "Requested format is not available"
