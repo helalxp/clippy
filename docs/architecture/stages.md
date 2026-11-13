@@ -215,7 +215,7 @@ Acceptance:
 
 ## Stage 7 — API, library, and visual editor
 
-**Status: PARTIAL.** Local owner-scoped CRUD and raster image asset lifecycle endpoints are implemented; package import/export, font upload, library UI, and editor workflow remain outstanding.
+**Status: PARTIAL.** Local owner-scoped CRUD, raster image and font asset lifecycle endpoints, and versioned package import/export are implemented; library UI and editor workflow remain outstanding.
 
 Objective: expose template management and application through a cohesive user workflow.
 
@@ -288,7 +288,7 @@ Acceptance:
 | 8. Migration and lifecycle | Planned |
 | 9. Release readiness | Planned |
 
-**Immediate next action:** add font asset support and versioned template package import/export, then connect canonical caption styling to the existing subtitle pipeline and implement hook/title rendering as separately tested adapter capabilities. Keep live Gemini validation opt-in. Latest CI run `43310755521` passed: 123 focused template/API/edit-lock tests, 1,331 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
+**Immediate next action:** complete CI verification for font assets and package import/export, then connect canonical caption styling to the existing subtitle pipeline and implement hook/title rendering as separately tested adapter capabilities. Keep live Gemini validation opt-in. Latest CI run `43310755521` passed: 123 focused template/API/edit-lock tests, 1,331 backend tests passed with 50 skipped, and frontend build passed. Managed/cloud template application remains disabled until durable per-user storage and tenant lifecycle controls exist. Stage 5 is not a claim of full template support: captions, hooks, overlays, tracking, and Remotion parity remain unfinished.
 
 
 ### Stage 5 update: shared edit locking
@@ -346,6 +346,19 @@ The local API slice now includes:
 - `PUT /api/templates/{template_id}` with `expected_revision` conflict protection.
 - `DELETE /api/templates/{template_id}` for owned template removal.
 
-The same hashed owner scope is used by template application and library CRUD. Updates, asset uploads, and deletions use revision checks, preventing stale clients from overwriting or removing newer work. Raster image upload accepts PNG, JPEG, and WebP up to 20 MB, checks file signatures and decoded formats, enforces dimension/pixel bounds, generates opaque IDs and safe paths, and stores size/SHA-256 metadata. Verified assets are served through an owner-scoped route. Removing an asset still referenced by a recipe or evidence is rejected. Font uploads and template package import/export remain outstanding. Managed mode remains blocked.
+The same hashed owner scope is used by template application and library CRUD. Updates, asset uploads, and deletions use revision checks, preventing stale clients from overwriting or removing newer work. Raster image upload accepts PNG, JPEG, and WebP up to 20 MB, checks file signatures and decoded formats, enforces dimension/pixel bounds, generates opaque IDs and safe paths, and stores size/SHA-256 metadata. Verified assets are served through an owner-scoped route. Removing an asset still referenced by a recipe or evidence is rejected. Font uploads and template package import/export are now implemented with bounded validation and integrity checks. Managed mode remains blocked.
 
 Initial API commit: `c208028afa3e453efa27eeed09c071dc42ba3b3a`. CRUD test commit: `ab80b3a82810fb50bc4dec397cc462a7beb39073`. Revision-safety hardening: `c620cb708fbca0502cd2fcd1448e9665fc97fb78`, `e80f0e3d06eb2b6c6f86c96906dcd868158a59db`, `be791d4746e167a78ab8e7d463282ec26ce19be0`, and `6e49046629eca2b41f4cd5a19aae668536c8758d`. Image asset storage/API: `46f4c1b7ed231a084acdd5a8c865adb73f708845`, `9448c8d030549e7fb35d2b59758e92a99b0f1622`, `caf8e21ea26120519df36f5a700264c1098b042a`, `c689c65540aa245b5622ca8f5c64786a674c1eac`, `a5ef16f9b9e5cf5f83e1da5eb2acc1a1742bfed8`, `a6ba2ff34d924679ec7a52ba037881b0c6e1f1de`, `11a50ebd49be06c0249fe5d54aaebf3fc4346560`, and `f92a52ffcec39d5c65fe12dc22bb64c39650968c`. CI run `43310755521` passed the current image asset lifecycle code.
+
+
+## Latest update — font assets and portable template packages (2026-11-13)
+
+Implemented on feature/template-reference-system-clean:
+
+- The template asset upload endpoint now accepts TrueType and OpenType SFNT fonts in addition to PNG/JPEG/WebP images. Font uploads are bounded to 25 MB and validated for supported signatures, table-directory bounds, duplicate tags, overlapping tables, required metadata tables, and supported outline tables.
+- Font asset metadata, opaque storage paths, SHA-256 integrity, revision conflict protection, retrieval, and reference-safe deletion use the existing asset lifecycle. Renderer-side font loading is not implemented yet.
+- Added versioned .clippy-template ZIP export/import. Packages carry the canonical template document and its assets. Import validates safe paths, archive entry types, compression, sizes, package version, exact asset inventory, decoded image/font structure, and checksums. Imported templates receive a new local ID and revision 1.
+- Added owner-scoped export and import API endpoints.
+- Focused and full CI validation is pending for this update. Do not treat it as complete until all workflow jobs pass.
+
+Next vertical slice: implement caption styling in the Python/FFmpeg adapter using canonical font references and normalized style properties, then add hook/title rendering as a separate capability. Keep preview/Remotion parity as a later explicit gate.
