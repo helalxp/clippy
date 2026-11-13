@@ -352,14 +352,12 @@ mod manifest_state_tests {
         assert_eq!(parsed.get("pythonVariant").unwrap(), "cpu");
         assert_eq!(parsed.get("node").unwrap(), "22.23.3");
         assert_eq!(parsed.get("ffmpeg").unwrap(), "gyan-release-essentials");
-        assert_eq!(parsed.get("requirements").unwrap(), "0123456789abcdef");
+        assert_eq!(parsed.get("requirements").unwrap(), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     }
 
     #[test]
     fn accepts_power_shell_generated_cuda_manifest_state() {
-        let parsed = parse_manifest_state(
-            "python=3.12.10;pythonVariant=cuda;node=22.23.3;ffmpeg=gyan-release-essentials;browser=4.0.0;requirements=0123456789abcdef"
-        ).unwrap();
+        let parsed = parse_manifest_state(include_str!("../../tests/fixtures/runtime-manifest-state-cuda.txt").trim()).unwrap();
         assert_eq!(parsed.get("pythonVariant").unwrap(), "cuda");
     }
 
