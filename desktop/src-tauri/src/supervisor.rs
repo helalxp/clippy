@@ -160,6 +160,7 @@ struct RuntimePaths {
     python: PathBuf,
     node: PathBuf,
     ffmpeg: PathBuf,
+    bgutil_script: PathBuf,
     output: PathBuf,
     uploads: PathBuf,
     models: PathBuf,
@@ -193,12 +194,13 @@ impl RuntimePaths {
         let python = runtime.join("python").join("python.exe");
         let node = runtime.join("node").join("node.exe");
         let ffmpeg = runtime.join("ffmpeg").join("bin");
+        let bgutil_script = app.join("bgutil-provider").join("server").join("build").join("generate_once.js");
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
         let models = root.join("data").join("models");
         let settings_file = root.join("settings.json");
         let logs = root.join("logs");
-        Ok(Self { root: app, python, node, ffmpeg, output, uploads, models, settings_file, logs })
+        Ok(Self { root: app, python, node, ffmpeg, bgutil_script, output, uploads, models, settings_file, logs })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -206,6 +208,7 @@ impl RuntimePaths {
             (&self.python, "Managed Python runtime"),
             (&self.node, "Managed Node.js runtime"),
             (&self.ffmpeg.join("ffmpeg.exe"), "Managed FFmpeg runtime"),
+            (&self.bgutil_script, "YouTube PO-token provider script"),
             (&self.root.join("app.py"), "Clippy backend payload (app.py)"),
             (&self.root.join("render-service").join("dist").join("server.js"), "Compiled renderer"),
             (&self.root.join("remotion").join("src").join("index.ts"), "Remotion source"),
@@ -338,6 +341,7 @@ impl Supervisor {
             .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
             .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{renderer_port}"))
+            .env("BGUTIL_SCRIPT_PATH", &paths.bgutil_script)
             .env("HOST", BACKEND_HOST)
             .env("PORT", backend_port_arg.clone())
             .stdout(Stdio::from(backend_log.try_clone().map_err(|e| e.to_string())?))
