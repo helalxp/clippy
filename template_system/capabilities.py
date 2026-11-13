@@ -175,6 +175,14 @@ def _capability_for_recipe(
                 "captions", "unsupported",
                 "The first ASS adapter supports top, middle, and bottom caption anchors, not arbitrary x/y placement.",
             )
+        if (
+            recipe.captions.anchor_x != 0.5
+            or recipe.captions.anchor_y != 0.82
+        ):
+            return FeatureCapability(
+                "captions", "unsupported",
+                "Custom caption anchor coordinates are not applied by the top/middle/bottom ASS layouts.",
+            )
         if recipe.captions.max_lines != 2:
             return FeatureCapability(
                 "captions", "approximate",
