@@ -504,6 +504,56 @@ def test_adapter_renders_canonical_caption_recipe_with_word_highlight(tmp_path):
     assert not list(tmp_path.glob("clippy_template_caption_*"))
 
 
+def test_adapter_renders_image_overlay_with_opacity_rotation_and_center_anchor(tmp_path):
+    source = tmp_path / "black-source.mp4"
+    output = tmp_path / "image-overlay.mp4"
+    image_path = tmp_path / "logo.png"
+    make_black_source_video(source)
+    Image.new("RGBA", (80, 40), (255, 0, 0, 255)).save(image_path)
+    recipe = TemplateRecipe.model_validate({
+        "canvas": {"width": 360, "height": 640, "fps": 24},
+        "overlays": [{
+            "id": "brand-mark",
+            "kind": "watermark",
+            "asset_id": "asset_logo",
+            "anchor_x": 0.8,
+            "anchor_y": 0.75,
+            "width_ratio": 0.2,
+            "opacity": 0.5,
+            "rotation_degrees": 90,
+        }],
+    })
+
+    result = PythonFFmpegAdapter(timeout_seconds=120).render(
+        source,
+        output,
+        recipe,
+        overlay_asset_paths={"asset_logo": image_path},
+    )
+
+    frame = extract_output_frame(output)
+    center = frame.getpixel((288, 480))
+    corner = frame.getpixel((5, 5))
+    assert result.compatibility.status == "compatible"
+    assert center[0] > 70 and center[0] < 210
+    assert center[1] < 70 and center[2] < 70
+    assert max(corner) < 35
+    assert not list(tmp_path.glob("clippy_template_render_*"))
+
+
+def test_adapter_rejects_text_overlay_until_its_style_contract_exists():
+    recipe = TemplateRecipe.model_validate({
+        "overlays": [{
+            "id": "text-label",
+            "kind": "text",
+            "text": "Unstyled text",
+        }],
+    })
+
+    with pytest.raises(RendererCompatibilityError, match="text overlays"):
+        PythonFFmpegAdapter().preflight(recipe)
+
+
 def test_adapter_requires_transcript_when_template_captions_are_enabled(tmp_path):
     source = tmp_path / "source.mp4"
     output = tmp_path / "captioned.mp4"
@@ -583,6 +633,74 @@ def test_template_service_resolves_uploaded_font_and_passes_caption_context(tmp_
     assert adapter.kwargs["caption_transcript"] == transcript
     assert Path(adapter.kwargs["font_path"]).read_bytes() == payload
     assert Path(adapter.kwargs["hook_font_path"]).read_bytes() == payload
+
+
+def test_template_service_resolves_uploaded_image_overlay_asset(tmp_path):
+    import hashlib
+    from io import BytesIO
+
+    from template_system.capabilities import check_compatibility
+    from template_system.models import TemplateAsset
+    from template_system.adapters.python_ffmpeg import RenderResult
+
+    image_buffer = BytesIO()
+    Image.new("RGBA", (8, 4), (255, 0, 0, 255)).save(image_buffer, format="PNG")
+    payload = image_buffer.getvalue()
+    asset = TemplateAsset(
+        id="asset_overlayfixture",
+        path="assets/asset_overlayfixture.png",
+        media_type="image/png",
+        size_bytes=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        width=8,
+        height=4,
+    )
+    recipe = TemplateRecipe.model_validate({
+        "overlays": [{
+            "id": "logo",
+            "kind": "image",
+            "asset_id": asset.id,
+            "anchor_x": 0.9,
+            "anchor_y": 0.9,
+            "width_ratio": 0.1,
+        }],
+    })
+    template = TemplateDocument(
+        id="tpl_overlayasset01",
+        name="Overlay asset fixture",
+        recipe=recipe,
+        assets=[asset],
+    )
+    storage = LocalTemplateStorage(tmp_path / "template-library")
+    storage.create(template, asset_payloads={asset.id: payload})
+
+    class CapturingAdapter:
+        def __init__(self):
+            self.kwargs = None
+
+        def render(self, source, output, resolved_recipe, **kwargs):
+            self.kwargs = kwargs
+            return RenderResult(
+                output_path=Path(output).resolve(),
+                source_fingerprint="source",
+                output_fingerprint="output",
+                duration_seconds=1.0,
+                width=360,
+                height=640,
+                frame_rate=24.0,
+                has_audio=False,
+                compatibility=check_compatibility(resolved_recipe, "python_ffmpeg"),
+            )
+
+    adapter = CapturingAdapter()
+    TemplateApplicationService(storage, adapter=adapter).apply(
+        template.id,
+        tmp_path / "source.mp4",
+        tmp_path / "rendered.mp4",
+    )
+
+    resolved_path = adapter.kwargs["overlay_asset_paths"][asset.id]
+    assert Path(resolved_path).read_bytes() == payload
 
 
 def test_adapter_rejects_custom_caption_anchors_instead_of_ignoring_them():
