@@ -607,8 +607,13 @@ try {
 
 Write-Stage "Verifying the persistent Remotion browser runtime..."
 $InstalledBrowserVersion = if (Test-Path -LiteralPath $BrowserVersionFile) { (Get-Content -LiteralPath $BrowserVersionFile -Raw).Trim() } else { "" }
-if (-not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -or $InstalledBrowserVersion -ne $RemotionVersion) {
-    Write-Stage "Installing the Remotion browser for renderer version $RemotionVersion..."
+$BrowserNeedsInstall = -not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -or $InstalledBrowserVersion -ne $RemotionVersion
+if (-not $BrowserNeedsInstall) {
+    $ExistingBrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
+    $BrowserNeedsInstall = ($ExistingBrowserSignature.Status -ne "Valid" -or $ExistingBrowserSignature.SignerCertificate.Subject -notmatch "Google")
+}
+if ($BrowserNeedsInstall) {
+    Write-Stage "Installing or repairing the Remotion browser for renderer version $RemotionVersion..."
     $BrowserCheck = "import('@remotion/renderer').then(async m => { const b = await m.ensureBrowser(); console.log('CLIPPY_BROWSER_PATH=' + b.path); }).catch(e => { console.error(e); process.exit(1); });"
     Push-Location (Join-Path $App "render-service")
     try {
