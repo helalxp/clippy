@@ -161,6 +161,7 @@ def test_hook_text_is_written_to_a_file_not_interpolated_into_filter_syntax(tmp_
 
     assert text_path.read_text(encoding="utf-8") == "Quoted: 'hello', [world] %{metadata\\:title}\\nsecond line"
     assert "Quoted" not in filter_value
+    assert filter_value.startswith(",drawtext=textfile=")
     assert "textfile=" in filter_value
     assert "expansion=none" in filter_value
     assert "enable='between(t,0,3)'" in filter_value
