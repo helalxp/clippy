@@ -85,6 +85,8 @@ def main() -> int:
             # A watch?v=X&list=... link is the one video; without this
             # yt-dlp walks the whole list (see cloud/metering.py).
             'noplaylist': True,
+            # Match the Windows packaged runtime: Node is installed, Deno is not.
+            'js_runtimes': {'node': {'path': os.environ.get('CLIPPY_NODE_EXE') or 'node'}},
         }
         # yt-dlp's default player clients (tv_downgraded/web_safari with
         # cookies, android_vr/web_safari anonymous) are the ones that still
