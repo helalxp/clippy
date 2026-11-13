@@ -230,4 +230,6 @@ Next: implement template-driven caption styling as the next isolated Python/FFmp
 
 Implemented: the Python/FFmpeg adapter now renders canonical hook/title layers through a dedicated drawtext adapter. It supports uploaded hook fonts, UTF-8 text-file input with drawtext expansion disabled, optional solid backing, top/center/bottom/custom normalized placement, safe-area-aware top/bottom positions, timed visibility, and all declared entrance styles (none, fade, slide_up, spring, pop). Hooks are applied after captions. The application service resolves hook font assets independently from caption font assets. Real FFmpeg tests cover hook visibility and expiry on original, blurred, and solid background paths, plus text-injection safety and uploaded-font resolution.
 
+- GitHub Actions run `43424728800` passed on commit `2e4d438348ae5813372bcf9fc0275c7f7a8659f7`: **157 focused template tests passed**, **1,371 backend tests passed with 58 skipped**, and the frontend production build passed.
+
 Next: implement generic image/text overlays only after alpha, sizing, anchor, and asset-lifecycle semantics are validated. Do not claim full template fidelity until preview and final-render parity is separately proven.
