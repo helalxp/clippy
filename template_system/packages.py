@@ -8,6 +8,7 @@ import stat
 import uuid
 import warnings
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Final
@@ -37,13 +38,25 @@ def _safe_archive_path(name: str) -> str:
     if not name or "\\" in name or "\x00" in name:
         raise TemplatePackageError("package contains an invalid asset path")
     path = PurePosixPath(name)
+    reserved_windows_names = {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+    invalid_windows_chars = set('<>:"|?*')
     if (
         path.is_absolute()
         or any(part in ("", ".", "..") for part in path.parts)
         or (path.parts and ":" in path.parts[0])
         or str(path) != name
+        or any(
+            part.endswith((" ", "."))
+            or any(ord(char) < 32 or char in invalid_windows_chars for char in part)
+            or part.split(".", 1)[0].upper() in reserved_windows_names
+            for part in path.parts
+        )
     ):
-        raise TemplatePackageError("package asset paths must be safe relative paths")
+        raise TemplatePackageError("package asset paths must be safe portable relative paths")
     return name
 
 
@@ -174,7 +187,7 @@ def import_template_package(
             name = _safe_archive_path(info.filename)
             if info.is_dir():
                 raise TemplatePackageError("directory entries are not allowed in template packages")
-            if name in by_name:
+            if name.casefold() in by_name:
                 raise TemplatePackageError("package contains duplicate file paths")
             if info.flag_bits & 0x1:
                 raise TemplatePackageError("encrypted ZIP entries are not supported")
@@ -198,9 +211,9 @@ def import_template_package(
             total_uncompressed += info.file_size
             if total_uncompressed > MAX_TOTAL_UNCOMPRESSED_BYTES:
                 raise TemplatePackageError("package expands beyond the 250 MB limit")
-            by_name[name] = info
+            by_name[name.casefold()] = info
 
-        manifest_info = by_name.get(PACKAGE_MANIFEST)
+        manifest_info = by_name.get(PACKAGE_MANIFEST.casefold())
         if manifest_info is None:
             raise TemplatePackageError("package manifest is missing")
 
@@ -211,7 +224,7 @@ def import_template_package(
             )
         except TemplatePackageError:
             raise
-        except (UnicodeDecodeError, json.JSONDecodeError, RuntimeError, zipfile.BadZipFile) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, RuntimeError, zipfile.BadZipFile, zlib.error) as exc:
             raise TemplatePackageError("package manifest is not valid UTF-8 JSON") from exc
         if not isinstance(package_data, dict):
             raise TemplatePackageError("package manifest must be a JSON object")
@@ -232,16 +245,17 @@ def import_template_package(
 
         expected_paths = {PACKAGE_MANIFEST}
         asset_paths = [asset.path for asset in original.assets]
-        if len(asset_paths) != len(set(asset_paths)):
+        if len({path.casefold() for path in asset_paths}) != len(asset_paths):
             raise TemplatePackageError("template contains duplicate asset paths")
         for asset_path in asset_paths:
             safe_path = _safe_archive_path(asset_path)
-            if safe_path == PACKAGE_MANIFEST:
+            if safe_path.casefold() == PACKAGE_MANIFEST.casefold():
                 raise TemplatePackageError("template asset path collides with the package manifest")
             expected_paths.add(safe_path)
-        if set(by_name) != expected_paths:
-            missing = sorted(expected_paths - set(by_name))
-            extra = sorted(set(by_name) - expected_paths)
+        if set(by_name) != {path.casefold() for path in expected_paths}:
+            expected_keys = {path.casefold() for path in expected_paths}
+            missing = sorted(expected_keys - set(by_name))
+            extra = sorted(set(by_name) - expected_keys)
             raise TemplatePackageError(
                 f"package files do not match the template asset inventory (missing={missing}, extra={extra})"
             )
@@ -249,8 +263,8 @@ def import_template_package(
         asset_payloads: dict[str, bytes] = {}
         for asset in original.assets:
             try:
-                asset_bytes = archive.read(by_name[asset.path])
-            except (RuntimeError, zipfile.BadZipFile, OSError) as exc:
+                asset_bytes = archive.read(by_name[asset.path.casefold()])
+            except (RuntimeError, zipfile.BadZipFile, OSError, zlib.error) as exc:
                 raise TemplatePackageError(f"could not read package asset {asset.path!r}") from exc
             _validate_asset_bytes(asset, asset_bytes)
             asset_payloads[asset.id] = asset_bytes
