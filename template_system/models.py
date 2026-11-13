@@ -222,8 +222,11 @@ class OverlayRecipe(ContractModel):
                 raise ValueError("text overlay horizontal anchor places its box outside the canvas")
             if self.text_anchor_y < self.text_box_height_ratio / 2 or self.text_anchor_y > 1 - self.text_box_height_ratio / 2:
                 raise ValueError("text overlay vertical anchor places its box outside the canvas")
-        elif self.font_asset_id is not None:
-            raise ValueError("font_asset_id is only valid for text overlays")
+        else:
+            if self.font_asset_id is not None:
+                raise ValueError("font_asset_id is only valid for text overlays")
+            if self.text is not None:
+                raise ValueError("text is only valid for text overlays")
         return self
 
 
