@@ -667,7 +667,7 @@ def test_adapter_renders_styled_text_overlay_without_expanding_user_text(tmp_pat
         "overlays": [{
             "id": "brand-copy",
             "kind": "text",
-            "text": "CLIPPY\\n%{metadata\\:title}",
+            "text": "CLIPPY\n%{metadata\\:title}",
             "font_family": "DejaVu Sans",
             "font_size_ratio": 0.06,
             "font_color": "#FFFFFF",
@@ -708,7 +708,7 @@ def test_text_overlay_file_is_literal_and_uses_configured_style(tmp_path):
         "overlays": [{
             "id": "literal-copy",
             "kind": "text",
-            "text": "Percent %{metadata\\:title}\\nsecond line",
+            "text": "Percent %{metadata\\:title}\nsecond line",
             "font_family": "DejaVu Sans",
             "text_align": "right",
             "background_color": "#123456",
@@ -721,7 +721,7 @@ def test_text_overlay_file_is_literal_and_uses_configured_style(tmp_path):
         text_path,
     )
 
-    assert text_path.read_text(encoding="utf-8") == "Percent %{metadata\\:title}\\nsecond line"
+    assert text_path.read_text(encoding="utf-8") == "Percent %{metadata\\:title}\nsecond line"
     assert "Percent" not in filter_value
     assert filter_value.startswith(",drawtext=textfile=")
     assert "expansion=none" in filter_value
