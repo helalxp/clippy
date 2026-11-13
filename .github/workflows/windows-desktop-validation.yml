@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - windows-installer-release
+      - windows-installer-hardening
   pull_request:
     branches:
       - windows-installer-release
@@ -55,6 +56,8 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
+          Import-Module Pester -MinimumVersion 5.0 -Force
+          Invoke-Pester -Path ./desktop/tests/RuntimeManifestState.Tests.ps1 -CI
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
