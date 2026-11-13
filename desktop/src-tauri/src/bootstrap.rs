@@ -347,9 +347,7 @@ mod manifest_state_tests {
 
     #[test]
     fn accepts_power_shell_generated_cpu_manifest_state() {
-        let parsed = parse_manifest_state(
-            "python=3.12.10;pythonVariant=cpu;node=22.23.3;ffmpeg=gyan-release-essentials;browser=4.0.0;requirements=0123456789abcdef"
-        ).unwrap();
+        let parsed = parse_manifest_state(include_str!("../../tests/fixtures/runtime-manifest-state.txt").trim()).unwrap();
         assert_eq!(parsed.get("python").unwrap(), "3.12.10");
         assert_eq!(parsed.get("pythonVariant").unwrap(), "cpu");
         assert_eq!(parsed.get("node").unwrap(), "22.23.3");
