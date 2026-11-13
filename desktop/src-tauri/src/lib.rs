@@ -374,8 +374,24 @@ fn setup_runtime_blocking(app: tauri::AppHandle) -> Result<String, String> {
         if recent.len() >= 80 { recent.remove(0); }
         recent.push(line.clone());
         let stage = line.split("[Clippy setup] ").nth(1).unwrap_or(&line).to_string();
+        let mut component: Option<String> = None;
+        let mut progress: Option<f32> = None;
+        if let Some(rest) = stage.strip_prefix("Downloading ") {
+            component = Some(rest.split(';').next().unwrap_or(rest).to_string());
+            progress = Some(0.0);
+        }
+        if let Some((name, rest)) = stage.split_once(": ") {
+            if let Some((value, _)) = rest.split_once('%') {
+                if let Ok(parsed) = value.trim().parse::<f32>() {
+                    component = Some(name.to_string());
+                    progress = Some(parsed.clamp(0.0, 100.0));
+                }
+            }
+        }
         let _ = app.emit("clippy://runtime-setup-progress", serde_json::json!({
             "stage": stage,
+            "component": component,
+            "progress": progress,
             "stream": stream_name,
             "logPath": log_path.to_string_lossy()
         }));
