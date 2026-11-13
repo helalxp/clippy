@@ -2516,11 +2516,41 @@ app.include_router(_mcp_server.router)
 import free_tools as _free_tools
 app.include_router(_free_tools.router)
 
-# Enable CORS for frontend. Cloud mode locks this down to the configured origins;
-# self-host keeps the permissive wildcard it has always used.
+# Desktop mode is a loopback service, not a public web API. A per-launch
+# secret is injected by the native supervisor and required on every request
+# except health probes and CORS preflight. This also protects /mcp.
+_DESKTOP_API_TOKEN = os.environ.get("CLIPPY_API_TOKEN", "").strip()
+
+@app.middleware("http")
+async def require_desktop_api_token(request: Request, call_next):
+    if not _DESKTOP_API_TOKEN:
+        return await call_next(request)
+    if request.method == "OPTIONS" or request.url.path in ("/health", "/health/ready"):
+        return await call_next(request)
+    supplied = request.headers.get("X-Clippy-Token", "")
+    if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
+        return JSONResponse({"detail": "This local Clippy API requires its active desktop session token."}, status_code=401)
+    return await call_next(request)
+
+# Cloud mode uses its configured web origins. The installed desktop build only
+# accepts its own Tauri origins; the Vite origin is allowed for native dev.
+if BILLING_ENABLED:
+    _allowed_frontend_origins = cloud.settings.allowed_origins
+elif _DESKTOP_API_TOKEN:
+    _allowed_frontend_origins = [
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
+else:
+    # Preserve the existing standalone self-host/web development behavior.
+    _allowed_frontend_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cloud.settings.allowed_origins if BILLING_ENABLED else ["*"],
+    allow_origins=_allowed_frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
