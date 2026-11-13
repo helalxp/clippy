@@ -348,7 +348,7 @@ impl Supervisor {
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
         let renderer_stdout = renderer_log.try_clone().map_err(|e| e.to_string())?;
         let mut backend = Command::new(&paths.python)
-            .args(["-m", "uvicorn", "app:app", "--host", BACKEND_HOST, "--port", &backend_port_arg])
+            .args(["-m", "uvicorn", "app:app", "--host", BACKEND_HOST, "--port", &backend_port_arg, "--no-access-log"])
             .current_dir(&paths.root)
             // Do not allow a user's Python/Conda environment to influence the
             // interpreter or imports. The executable is always Clippy's private
