@@ -55,7 +55,7 @@ _REGISTRY: dict[RendererBackend, dict[str, FeatureCapability]] = {
         "framing": FeatureCapability("framing", "exact", "The canonical FFmpeg adapter implements deterministic cover, contain, and anchored crop modes; subject tracking is explicitly unsupported."),
         "safe_area": FeatureCapability("safe_area", "unsupported", "The first FFmpeg adapter does not place generic overlays against canonical safe-area margins."),
         "captions": FeatureCapability("captions", "exact", "The FFmpeg adapter maps canonical caption typography, colors, word highlighting, reveal, and top/middle/bottom placement into the existing ASS subtitle generator."),
-        "hook": FeatureCapability("hook", "unsupported", "The first FFmpeg adapter does not yet translate canonical hook typography and animation."),
+        "hook": FeatureCapability("hook", "exact", "The FFmpeg adapter renders canonical hook text, uploaded fonts, optional solid text backing, normalized placement, timed visibility, and all declared entrance animations."),
         "background": FeatureCapability("background", "exact", "The FFmpeg adapter implements black/original matte, blurred duplicate, and solid-color contain backgrounds; background fill is incompatible with cover crop."),
         "overlays": FeatureCapability("overlays", "unsupported", "The first FFmpeg adapter does not implement the generic overlay collection."),
         "effects": FeatureCapability("effects", "unsupported", "The first FFmpeg adapter does not implement canonical effect segments."),
