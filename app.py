@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import time
 import zipfile
+import tempfile
 import math
 import itertools
 import functools
@@ -44,6 +45,13 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Permanent local Library storage is deliberately outside OUTPUT_DIR. The
+# latter is a bounded, temporary generation workspace and is swept by cleanup.
+from local_library import LocalLibrary
+LIBRARY_DIR = os.getenv("CLIPPY_LIBRARY_DIR", str(Path(OUTPUT_DIR).resolve().parent / "library"))
+local_library = LocalLibrary(LIBRARY_DIR)
+
 
 # First-run wizard state
 _FIRST_RUN = True
@@ -1131,6 +1139,10 @@ def _recover_jobs_from_disk():
                     clip['video_url'] = (
                         f"/videos/{job_id}/"
                         f"{_canonical_clip_file(job_path, base_name, i)}")
+            source_name = os.path.basename(str(data.get("source_video") or ""))
+            upload_source = os.path.join(UPLOAD_DIR, source_name) if source_name else None
+            if not upload_source or not os.path.isfile(upload_source):
+                upload_source = None
             owner = None
             owner_path = os.path.join(job_path, ".owner")
             if os.path.exists(owner_path):
@@ -1141,6 +1153,7 @@ def _recover_jobs_from_disk():
                 'status': 'completed',
                 'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
+                'source_path': upload_source,
                 'user_id': owner,
                 'result': {'clips': clips, 'cost_analysis': data.get('cost_analysis')},
             }
@@ -1930,6 +1943,13 @@ async def run_job_wrapper(job_id):
         interrupted = True
     except Exception as e:
          print(f"❌ Job wrapper error {job_id}: {e}")
+         if job and job.get("status") not in ("completed", "failed"):
+             job["status"] = "failed"
+             if not BILLING_ENABLED:
+                 try:
+                     local_library.update_project_status(job_id, "failed")
+                 except Exception:
+                     pass
     finally:
         if interrupted or (_stopping and job and job.get('status') != 'completed'):
             _running_jobs.discard(job_id)
@@ -1940,6 +1960,11 @@ async def run_job_wrapper(job_id):
                 raise asyncio.CancelledError()
             return
         if _should_auto_retry(job):
+            if not BILLING_ENABLED:
+                try:
+                    local_library.update_project_status(job_id, "queued")
+                except Exception:
+                    pass
             _schedule_auto_retry(job_id, job)
             _running_jobs.discard(job_id)
             concurrency_semaphore.release()
@@ -2469,6 +2494,12 @@ async def lifespan(app: FastAPI):
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
     # reservations must survive the orphan sweep so the resumed run can settle them.
     _resumed_reservation_ids = _resume_interrupted_jobs()
+    if not BILLING_ENABLED:
+        active_library_jobs = {
+            job_id for job_id, job in jobs.items()
+            if job.get("status") in {"queued", "processing"}
+        }
+        local_library.mark_interrupted_projects(active_library_jobs)
     # Deploy handover: claim the marker (any older instance sees it and drains),
     # keep watching it in case a newer one appears, keep looking for manifests
     # left behind, and drain instead of dying on docker stop.
@@ -2708,6 +2739,11 @@ async def run_job(job_id, job_data):
     output_dir = job_data['output_dir']
     
     jobs[job_id]['status'] = 'processing'
+    if not BILLING_ENABLED:
+        try:
+            local_library.update_project_status(job_id, "processing")
+        except Exception as library_error:
+            print(f"⚠️ Could not update Library status for {job_id}: {library_error}")
     jobs[job_id]['logs'].append("Job started by worker.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
     
@@ -2788,7 +2824,8 @@ async def run_job(job_id, job_data):
         returncode = process.returncode
         
         if returncode == 0:
-            jobs[job_id]['status'] = 'completed'
+            # Keep the job non-terminal until its permanent Library archive is
+            # committed. The UI must not advertise completion before persistence.
             jobs[job_id]['logs'].append("Process finished successfully.")
             
             # Self-host: silent AWS S3 backup. Cloud mode stores to R2 instead
@@ -2829,6 +2866,30 @@ async def run_job(job_id, job_data):
             else:
                  jobs[job_id]['status'] = 'failed'
                  jobs[job_id]['logs'].append("No metadata file generated.")
+
+            # Local desktop Library: archive successful deliverables before the
+            # temporary job workspace can expire. Source retention is OFF by
+            # default and must never move/delete the user's original input.
+            if not BILLING_ENABLED and jobs[job_id].get('status') != 'failed':
+                try:
+                    archived = local_library.archive_job(
+                        job_id, output_dir, job_data, jobs[job_id].get('result'),
+                        keep_source=local_library.get_settings().get("keep_source_default", False),
+                    )
+                    jobs[job_id]['logs'].append(
+                        f"📚 Saved {archived['clip_count']} clips to the local Library.")
+                except Exception as archive_error:
+                    print(f"⚠️ Local Library archive failed for {job_id}: {archive_error}")
+                    jobs[job_id]['logs'].append(
+                        "⚠️ Clips were generated, but saving them to the Library failed. Keep this session open and check the logs.")
+                    try:
+                        local_library.update_project_status(job_id, "archive_failed")
+                    except Exception:
+                        pass
+                finally:
+                    jobs[job_id]['status'] = 'completed'
+            elif jobs[job_id].get('status') != 'failed':
+                jobs[job_id]['status'] = 'completed'
         else:
             jobs[job_id]['status'] = 'failed'
             jobs[job_id]['logs'].append(_scrub_secrets(f"Process failed with exit code {returncode}"))
@@ -2838,6 +2899,12 @@ async def run_job(job_id, job_data):
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+
+    if not BILLING_ENABLED and jobs.get(job_id, {}).get('status') == 'failed':
+        try:
+            local_library.update_project_status(job_id, "failed")
+        except Exception as library_error:
+            print(f"⚠️ Could not mark Library project failed for {job_id}: {library_error}")
 
 @app.get("/api/local-models/whisper")
 async def get_local_whisper_model():
@@ -3495,6 +3562,8 @@ async def process_endpoint(
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
 
+
+
     # Prepare Command
     # sys.executable, not "python": bare "python" resolves against PATH, which
     # outside Docker is whatever interpreter happens to be first — not the venv
@@ -3753,6 +3822,15 @@ async def process_endpoint(
     # caller connected to.
     api_base = os.environ.get("PUBLIC_API_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
 
+    # Reserve a local project only after source validation and upload staging
+    # have succeeded. This makes queued/in-progress work visible in Library.
+    if not BILLING_ENABLED:
+        try:
+            fallback_title = Path(input_path).stem.removeprefix(f"{job_id}_") if input_path else "Processing YouTube video"
+            local_library.reserve_project(job_id, fallback_title, input_path, url)
+        except Exception as library_error:
+            print(f"⚠️ Could not reserve Library project for {job_id}: {library_error}")
+
     # Enqueue Job
     jobs[job_id] = {
         'status': 'queued',
@@ -3760,6 +3838,8 @@ async def process_endpoint(
         'cmd': cmd,
         'env': env,
         'output_dir': job_output_dir,
+        'source_path': input_path,
+        'source_url': url,
         'attestation': attestation,
         'user_id': user_id,
         'reservation_id': reservation_id,
@@ -3977,9 +4057,233 @@ async def get_source_video(job_id: str, request: Request,
     return FileResponse(source_path, media_type="video/mp4")
 
 
+@app.get("/api/library/settings")
+async def get_local_library_settings():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    return local_library.get_settings()
+
+
+@app.put("/api/library/settings")
+async def update_local_library_settings(request: Request):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Settings payload must be an object.")
+        return local_library.update_settings(payload.get("keep_source_default"))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid Library settings.")
+
+
+@app.get("/api/library/projects")
+async def local_library_projects():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    # One-time-friendly migration: completed jobs still inside the current
+    # retention window are imported the first time the local Library is opened.
+    for job_id, job in list(jobs.items()):
+        if job.get("status") != "completed" or local_library.is_deleted(job_id):
+            continue
+        try:
+            project_dir = local_library._project_dir(job_id)
+            existing_project = None
+            if (project_dir / "project.json").is_file():
+                existing_project = local_library.get_project(job_id)
+            output_dir = job.get("output_dir") or os.path.join(OUTPUT_DIR, job_id)
+            keep_source = local_library.get_settings().get("keep_source_default", False)
+            if os.path.isdir(output_dir) and (
+                not existing_project
+                or local_library.needs_sync(job_id, output_dir, job, job.get("result"), keep_source)
+            ):
+                local_library.archive_job(
+                    job_id, output_dir, job, job.get("result"),
+                    keep_source=keep_source,
+                )
+        except (ValueError, OSError, FileNotFoundError) as error:
+            print(f"⚠️ Could not import existing job {job_id} into Library: {error}")
+    return {"projects": local_library.list_projects(), "storage_root": str(local_library.root)}
+
+
+@app.post("/api/library/projects/{project_id}/sync")
+async def sync_local_library_project(project_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    if local_library.is_deleted(project_id):
+        return {"deleted": True, "project_id": project_id}
+    job = jobs.get(project_id)
+    if not job or job.get("status") != "completed":
+        try:
+            return local_library.get_project(project_id)
+        except (ValueError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Completed local project is not available to sync.")
+    output_dir = job.get("output_dir") or os.path.join(OUTPUT_DIR, project_id)
+    if not os.path.isdir(output_dir):
+        try:
+            return local_library.get_project(project_id)
+        except (ValueError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Project files have expired and no Library archive exists.")
+    keep_source = local_library.get_settings().get("keep_source_default", False)
+    try:
+        if not local_library.needs_sync(project_id, output_dir, job, job.get("result"), keep_source):
+            return local_library.get_project(project_id)
+        return local_library.archive_job(
+            project_id, output_dir, job, job.get("result"),
+            keep_source=keep_source,
+        )
+    except (OSError, ValueError, FileNotFoundError) as error:
+        print(f"⚠️ Local Library sync failed for {project_id}: {error}")
+        raise HTTPException(status_code=500, detail="Could not synchronize this project to the Library.")
+
+
+@app.get("/api/library/projects/{project_id}")
+async def local_library_project(project_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        return local_library.get_project(project_id)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+
+@app.put("/api/library/projects/{project_id}")
+async def rename_local_library_project(project_id: str, request: Request):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Project payload must be an object.")
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Project title cannot be empty.")
+        if len(title) > 120:
+            raise HTTPException(status_code=400, detail="Project title must be 120 characters or fewer.")
+        return local_library.rename_project(project_id, title)
+    except HTTPException:
+        raise
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+
+@app.get("/api/library/projects/{project_id}/clips/{clip_id}/captions")
+async def get_local_library_captions(project_id: str, clip_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        project = local_library.get_project(project_id)
+        clip = next((item for item in project.get("clips", []) if item.get("clip_id") == clip_id), None)
+        if not clip:
+            raise FileNotFoundError("Clip not found.")
+        caption_path = (local_library._project_dir(project_id) / clip["captions_path"]).resolve()
+        if not caption_path.is_relative_to(local_library._project_dir(project_id)) or not caption_path.is_file():
+            raise FileNotFoundError("Captions not found.")
+        return json.loads(caption_path.read_text(encoding="utf-8"))
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Project, clip, or captions not found.")
+
+
+@app.put("/api/library/projects/{project_id}/clips/{clip_id}/captions")
+async def update_local_library_captions(project_id: str, clip_id: str, request: Request):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Caption payload must be an object.")
+        return local_library.update_captions(project_id, clip_id, payload.get("platforms") or {})
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Project or clip not found.")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Caption data is invalid.")
+
+
+@app.get("/api/library/projects/{project_id}/clips/{clip_id}/video")
+async def local_library_clip_video(project_id: str, clip_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        path = local_library.clip_path(project_id, clip_id)
+        return FileResponse(path, media_type="video/mp4", headers={"Content-Disposition": "inline"})
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Archived clip not found.")
+
+
+@app.get("/api/library/projects/{project_id}/download-all")
+async def download_local_library_project(project_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        project = local_library.get_project(project_id)
+        project_dir = local_library._project_dir(project_id)
+        export_dir = local_library.root / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        fd, zip_name = tempfile.mkstemp(prefix=f"clippy-{project_id[:8]}-", suffix=".zip", dir=str(export_dir))
+        os.close(fd)
+        zip_path = Path(zip_name)
+        try:
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+                for clip in project.get("clips", []):
+                    clip_path = local_library.clip_path(project_id, clip["clip_id"])
+                    archive.write(clip_path, arcname=f"{project['title']}/clips/{clip['clip_id']}.mp4")
+                    captions_path = (project_dir / clip["captions_path"]).resolve()
+                    if captions_path.is_file() and captions_path.is_relative_to(project_dir):
+                        archive.write(captions_path, arcname=f"{project['title']}/captions/{clip['clip_id']}.json")
+                workspace_dir = (project_dir / "workspace").resolve()
+                if workspace_dir.is_dir() and workspace_dir.is_relative_to(project_dir):
+                    for workspace_file in workspace_dir.rglob("*"):
+                        resolved = workspace_file.resolve()
+                        if resolved.is_file() and resolved.is_relative_to(workspace_dir):
+                            relative_name = resolved.relative_to(workspace_dir).as_posix()
+                            archive.write(resolved, arcname=f"{project['title']}/workspace/{relative_name}")
+                if (project.get("source_video") or {}).get("retained"):
+                    source_dir = (project_dir / "source").resolve()
+                    if source_dir.is_dir() and source_dir.is_relative_to(project_dir):
+                        for source_file in source_dir.iterdir():
+                            resolved = source_file.resolve()
+                            if resolved.is_file() and resolved.is_relative_to(source_dir):
+                                archive.write(resolved, arcname=f"{project['title']}/source/{resolved.name}")
+                archive.write(project_dir / "project.json", arcname=f"{project['title']}/project.json")
+        except Exception:
+            zip_path.unlink(missing_ok=True)
+            raise
+        return FileResponse(
+            zip_path, media_type="application/zip",
+            filename=f"clippy-{project['title'][:60]}.zip",
+            background=BackgroundTask(lambda: zip_path.unlink(missing_ok=True)),
+        )
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+
+@app.delete("/api/library/projects/{project_id}/clips/{clip_id}")
+async def delete_local_library_clip(project_id: str, clip_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        project = local_library.delete_clip(project_id, clip_id)
+        return {"deleted": True, "project": project}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Project or clip not found.")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid clip location.")
+
+
+@app.delete("/api/library/projects/{project_id}")
+async def delete_local_library_project(project_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        local_library.delete_project(project_id)
+        return {"deleted": True, "project_id": project_id}
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+
 @app.get("/api/jobs/{job_id}/download-all")
 async def download_all_clips(job_id: str, request: Request):
-    """Bundle the current version of every clip of a job into one ZIP."""
+    """Bundle every expected current clip into a uniquely staged ZIP."""
     await _ensure_job_files(job_id, request)
     if job_id in jobs:
         await _assert_job_owner(request, jobs[job_id])
@@ -3989,47 +4293,66 @@ async def download_all_clips(job_id: str, request: Request):
     if not json_files:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    with open(json_files[0], 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    with open(json_files[0], "r", encoding="utf-8") as stream:
+        data = json.load(stream)
 
-    # The metadata file on disk never carries video_url — the pipeline doesn't
-    # write it, it's injected into the in-memory job record. So prefer the live
-    # record (it also tracks edits like subtitled_/hook_ renames) and fall back
-    # to the canonical name a job/restore rebuilds, instead of finding nothing.
-    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
-    mem_clips = ((jobs.get(job_id) or {}).get('result') or {}).get('clips') or []
-
+    base_name = os.path.basename(json_files[0]).replace("_metadata.json", "")
+    job_record = jobs.get(job_id) or {}
+    mem_clips = ((job_record.get("result") or {}).get("clips") or [])
+    ready_files = job_record.get("ready_files") or {}
+    expected = list(data.get("shorts", []))
     files = []
-    for i, clip in enumerate(data.get('shorts', [])):
-        url = None
-        if i < len(mem_clips):
-            url = (mem_clips[i] or {}).get('video_url')
-        url = url or clip.get('video_url')
-        filename = (os.path.basename(url.split('/')[-1]) if url
-                    else _canonical_clip_file(output_dir, base_name, i))
-        path = os.path.join(output_dir, filename)
-        if filename and os.path.exists(path):
-            files.append((i, path))
+    missing = []
 
+    for index, clip in enumerate(expected):
+        # The result list omits failed renders, so it can be shorter than the
+        # metadata's original shorts array. Match by source timestamps first;
+        # only use positional matching when both lists have equal length.
+        current_clip = next((
+            item for item in mem_clips
+            if item.get("start") == clip.get("start") and item.get("end") == clip.get("end")
+        ), None)
+        if current_clip is None and len(mem_clips) == len(expected):
+            current_clip = mem_clips[index]
+        url = (current_clip or {}).get("video_url") or clip.get("video_url")
+        filename = (
+            os.path.basename(url.split("?", 1)[0].split("/")[-1]) if url
+            else ready_files.get(index) or _canonical_clip_file(output_dir, base_name, index)
+        )
+        path = os.path.join(output_dir, filename)
+        if filename and os.path.isfile(path) and os.path.getsize(path) > 0:
+            files.append((index, path))
+        else:
+            missing.append(index + 1)
+
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot create a complete archive: clip(s) {', '.join(map(str, missing))} are missing. Regenerate or remove the missing clips first.",
+        )
     if not files:
         raise HTTPException(status_code=404, detail="No clip files found for this job")
 
-    zip_path = os.path.join(output_dir, f"clips_{int(time.time())}.zip")
-
-    def build_zip():
-        # Videos are already compressed; store instead of deflate for speed.
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zf:
-            for i, path in files:
-                zf.write(path, arcname=f"clip_{i + 1:02d}_{os.path.basename(path)}")
-
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, build_zip)
+    fd, zip_path = tempfile.mkstemp(prefix="clippy-clips-", suffix=".zip", dir=output_dir)
+    os.close(fd)
+    try:
+        # Videos are already compressed; STORE avoids spending CPU recompressing
+        # them. A unique temp name prevents simultaneous exports from colliding.
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            for index, file_path in files:
+                archive.write(file_path, arcname=f"clip_{index + 1:02d}_{os.path.basename(file_path)}")
+    except Exception:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        raise
 
     return FileResponse(
         zip_path,
         media_type="application/zip",
-        filename=f"openshorts_clips_{job_id[:8]}.zip",
-        background=BackgroundTask(os.remove, zip_path),
+        filename=f"Clippy-clips-{job_id[:8]}.zip",
+        background=BackgroundTask(lambda: os.path.exists(zip_path) and os.remove(zip_path)),
     )
 
 

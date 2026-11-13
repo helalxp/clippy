@@ -29,6 +29,7 @@ struct RuntimePaths {
     ffmpeg: PathBuf,
     output: PathBuf,
     uploads: PathBuf,
+    library: PathBuf,
     models: PathBuf,
     settings_file: PathBuf,
     logs: PathBuf,
@@ -60,10 +61,11 @@ impl RuntimePaths {
         let ffmpeg = runtime.join("ffmpeg").join("bin");
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
+        let library = root.join("data").join("library");
         let models = root.join("data").join("models");
         let settings_file = root.join("settings.json");
         let logs = root.join("logs");
-        Ok(Self { root: app, python, node, ffmpeg, output, uploads, models, settings_file, logs })
+        Ok(Self { root: app, python, node, ffmpeg, output, uploads, library, models, settings_file, logs })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -155,6 +157,7 @@ impl Supervisor {
         paths.validate()?;
         fs::create_dir_all(&paths.output).map_err(|e| format!("Cannot create output directory: {e}"))?;
         fs::create_dir_all(&paths.uploads).map_err(|e| format!("Cannot create uploads directory: {e}"))?;
+        fs::create_dir_all(&paths.library).map_err(|e| format!("Cannot create Library directory: {e}"))?;
         fs::create_dir_all(&paths.models).map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
         let child_path = managed_child_path(&paths)?;
@@ -183,6 +186,7 @@ impl Supervisor {
             .env("PYTHONUTF8", "1")
             .env("OUTPUT_DIR", &paths.output)
             .env("UPLOAD_DIR", &paths.uploads)
+            .env("CLIPPY_LIBRARY_DIR", &paths.library)
             .env("CLIPPY_MODELS_DIR", &paths.models)
             .env("CLIPPY_SETTINGS_PATH", &paths.settings_file)
             .env("HF_HOME", paths.models.join("huggingface"))
