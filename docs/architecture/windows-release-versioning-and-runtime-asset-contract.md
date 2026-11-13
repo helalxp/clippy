@@ -1,8 +1,8 @@
 # Windows Release Versioning and Runtime Asset Delivery Contract
 
-**Status:** Audit baseline and proposed release contract  
+**Status:** Implementation committed on `windows-installer-hardening`; awaiting CI and clean-machine validation  
 **Audited branch:** `windows-installer-hardening`  
-**Audited commit:** `43a9f3e5413eb48901c439525abaa8d887905437`  
+**Implementation branch:** `windows-installer-hardening`  
 **Application version in source:** `0.2.2`  
 **Last reviewed:** 2026-11-13
 
@@ -55,17 +55,18 @@ The build must validate the canonical version before creating the payload. The p
 
 ## 4. Runtime asset naming and release contract
 
-The audited source currently uses this convention:
+The implemented release contract uses this convention:
 
 | Item | Expected value for version 0.2.2 |
 |---|---|
 | Release tag | `v0.2.2` |
 | CPU runtime archive asset | `clippy-python-cpu.zip` |
-| CUDA runtime archive asset | `clippy-python-cuda.zip` |
-| CPU checksum asset | `clippy-python-cpu.zip.sha256` |
-| CUDA checksum asset | `clippy-python-cuda.zip.sha256` |
-| CPU download URL | `https://github.com/helalxp/clippy/releases/download/v0.2.2/clippy-python-cpu.zip` |
-| CUDA download URL | `https://github.com/helalxp/clippy/releases/download/v0.2.2/clippy-python-cuda.zip` |
+| CPU runtime manifest | `clippy-python-cpu.manifest.json` |
+| CUDA runtime manifest | `clippy-python-cuda.manifest.json` |
+| CPU runtime asset | `clippy-python-cpu.zip` while it remains below the part-size threshold |
+| CUDA runtime assets | Ordered `clippy-python-cuda.partNNN` files when multipart |
+| Per-variant metadata | `clippy-python-<variant>.parts.sha256` |
+| Example manifest URL | `https://github.com/helalxp/clippy/releases/download/v0.2.2/clippy-python-cuda.manifest.json` |
 
 The archive asset names are intentionally stable within each versioned release. The release tag supplies the application-version boundary. The local cache filename may include the application version to avoid collisions between cached packages.
 
@@ -110,26 +111,21 @@ This prevents several source-level version mismatches, but it cannot create a mi
 
 ### 5.4 Confirmed: runtime archive builder stops at the GitHub asset-size limit
 
-`desktop/build-python-runtime.ps1` creates:
-
-```text
-clippy-python-cpu.zip
-clippy-python-cuda.zip
-```
-
-It then rejects any archive at or above 2 GiB before writing its checksum and before testing the exact compressed archive. The observed CUDA archive is approximately 3.35 GB, so the current builder intentionally fails before the release workflow can publish it.
+`desktop/build-python-runtime.ps1` now creates the complete runtime ZIP, computes its whole-archive SHA-256, and calls `desktop/runtime-archive.ps1` to produce a manifest and release-safe assets. Files below the 1.75 GiB target remain a single ZIP; larger files are segmented into ordered binary parts. The builder reconstructs the parts and tests extraction/imports from that reconstructed archive. The original multi-part ZIP is not uploaded as an oversized release asset.
 
 ### 5.5 Confirmed: release workflow expects single ZIP files
 
-`.github/workflows/release-windows.yml` currently:
+`.github/workflows/release-windows.yml` now:
 
 1. Builds CPU and CUDA runtime archives in a matrix.
-2. Uploads each archive and its checksum as a workflow artifact.
+2. Uploads all per-variant runtime assets and metadata as workflow artifacts.
 3. Downloads those artifacts in the publishing job.
-4. validates the checksum.
-5. Publishes `desktop/runtime-dist/*.zip` and `*.zip.sha256` to the GitHub Release.
+4. Runs `desktop/validate-runtime-assets.ps1` to validate manifests, parts, and reconstructed archive hashes.
+5. Runs the PowerShell runtime contract tests.
+6. Builds and signs the installer.
+7. Creates a draft release, uploads the installer and runtime assets, verifies every expected asset name and exact size through the GitHub API, and publishes only after verification.
 
-That workflow cannot publish the current 3.35 GB CUDA ZIP as one release asset.
+The actual Windows Actions run remains the authoritative validation of this workflow.
 
 ### 5.6 Documentation drift
 
@@ -146,7 +142,7 @@ The audited setup engine already has useful production-oriented download behavio
 - Preservation of partial data for retry.
 - SHA-256 verification of the completed runtime archive before extraction.
 
-However, the current downloader treats HTTP 404 like a general download failure and retries it. A missing release or asset is not a transient network interruption. The production implementation should detect 404 explicitly, stop retrying, and report the exact release tag and asset URL that are missing. Retries should be reserved for transient network/server failures and interrupted transfers.
+The downloader now detects HTTP 404 and stops retrying, reporting the exact missing asset URL and reminding the user to verify the matching release. The existing resumable transfer behavior is reused for every manifest-listed part.
 
 ## 6. Proposed version-mismatch prevention rules
 
@@ -261,6 +257,19 @@ A Windows release is not ready to distribute until all of the following are true
 - [ ] A clean Windows installation completes without environment overrides or manual files.
 - [ ] The published release is checked for all expected assets before users receive the installer.
 
-## 9. Scope and implementation status
+## 9. Implementation status
 
-This document records the audit and recommended contract. The multipart packaging/downloading implementation and release-workflow changes are not yet applied. They should be implemented as one coordinated change after the contract is accepted, then validated through a complete tagged release and a clean-machine installer test.
+The coordinated implementation has been committed on `windows-installer-hardening`:
+
+- `desktop/runtime-archive.ps1`: manifest validation, safe part naming, per-part hashing, streaming reconstruction, and whole-archive verification.
+- `desktop/build-python-runtime.ps1`: manifest generation, automatic splitting below the 2 GiB platform limit, reconstruction, and validation of the reconstructed archive.
+- `desktop/setup-runtime.ps1`: manifest download, strict version/variant checks, per-part download and verification, resumable part caching, streaming reconstruction, and explicit 404 handling.
+- `desktop/prepare-payload.ps1`: includes the runtime archive helper in the installed payload.
+- `desktop/validate-runtime-assets.ps1`: CI validation of both runtime variants and their reconstructed archives.
+- `desktop/tests/RuntimeArchive.Tests.ps1`: Pester coverage for multipart round trips, single-part archives, mismatched versions/variants, corrupted parts, and unsafe filenames.
+- `.github/workflows/release-windows.yml`: uploads manifest-based runtime assets and uses a draft-first, verify-before-publish release flow.
+- `RELEASING.md`: documents the release contract, branch flow, and required signing secrets.
+
+**Not yet proven:** the implementation has not yet completed a GitHub Actions run, produced a new signed installer, or passed a clean Windows installation on either test PC. Do not treat the branch as release-ready until those checks pass.
+
+The hardening branch is intentionally not merged into `windows-installer-release` until the user has completed testing on both PCs and approved the merge.
