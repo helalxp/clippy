@@ -101,7 +101,7 @@ function New-ClippyRuntimeArchiveManifest {
 
     # Reconstruct and verify the exact archive before CI is allowed to upload it.
     $reconstructed = Join-Path $OutputDirectory "clippy-python-$Variant.reconstructed.zip"
-    Join-ClippyRuntimeArchiveParts -Manifest $manifest -PartsDirectory $OutputDirectory -Destination $reconstructed
+    Join-ClippyRuntimeArchiveParts -Manifest $manifest -PartsDirectory $OutputDirectory -Destination $reconstructed | Out-Null
     if ((Get-Item -LiteralPath $reconstructed).Length -ne $archiveSize -or
         (Get-ClippyFileSha256 $reconstructed) -ne $archiveHash) {
         throw "Reconstructed $Variant runtime archive does not match the original archive."
