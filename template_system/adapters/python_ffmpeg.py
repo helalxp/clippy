@@ -21,6 +21,7 @@ from ..analysis import ReferenceAnalysisError, _local_video_path, probe_media
 from ..capabilities import CompatibilityReport, check_compatibility
 from ..models import OverlayRecipe, TemplateRecipe
 from .motion_effects import build_effect_filters, build_motion_filter
+from .text_overlays import write_text_overlay
 
 
 class RenderAdapterError(RuntimeError):
@@ -82,7 +83,8 @@ class PythonFFmpegAdapter:
         ass_path: str | Path | None = None,
         fonts_dir: str | Path | None = None,
         hook_filter: str | None = None,
-        overlay_inputs: list[tuple[OverlayRecipe, int]] | None = None,
+        overlay_input_indices: Mapping[str, int] | None = None,
+        text_overlay_filters: Mapping[str, str] | None = None,
     ) -> str:
         width, height = recipe.canvas.width, recipe.canvas.height
         caption_filter = ""
@@ -146,11 +148,28 @@ class PythonFFmpegAdapter:
             filters.append(f"[{current_label}]{effect_filter}[{next_label}]")
             current_label = next_label
 
-        for index, (overlay, input_index) in enumerate(overlay_inputs or []):
+        image_index = 0
+        for index, overlay in enumerate(recipe.overlays):
+            next_label = f"overlay_layer{index}"
             if overlay.kind == "text":
-                raise RenderAdapterError("text overlays are not supported by the first overlay adapter")
+                text_filter = (text_overlay_filters or {}).get(overlay.id)
+                if not text_filter:
+                    raise RenderAdapterError(
+                        f"text overlay {overlay.id!r} is missing its prepared drawtext layer"
+                    )
+                filters.append(
+                    f"[{current_label}]{text_filter.lstrip(',')}[{next_label}]"
+                )
+                current_label = next_label
+                continue
+
+            input_index = (overlay_input_indices or {}).get(overlay.id)
+            if input_index is None:
+                raise RenderAdapterError(
+                    f"image overlay {overlay.id!r} is missing its prepared input"
+                )
             overlay_width = max(2, round(width * overlay.width_ratio))
-            overlay_label = f"template_overlay_{index}"
+            overlay_label = f"template_overlay_{image_index}"
             transforms = [
                 f"[{input_index}:v]scale={overlay_width}:-1:flags=lanczos",
                 "format=rgba",
@@ -162,7 +181,6 @@ class PythonFFmpegAdapter:
                     f"rotate={radians:.8f}:ow=rotw(iw):oh=roth(ih):c=none"
                 )
             filters.append(",".join(transforms) + f"[{overlay_label}]")
-            next_label = f"overlay_composite{index}"
             x = f"W*{overlay.anchor_x:.6f}-w/2"
             y = f"H*{overlay.anchor_y:.6f}-h/2"
             filters.append(
@@ -170,6 +188,7 @@ class PythonFFmpegAdapter:
                 f"overlay=x='{x}':y='{y}':eof_action=repeat[{next_label}]"
             )
             current_label = next_label
+            image_index += 1
 
         final_filters = ",".join(
             value.lstrip(",")
@@ -204,6 +223,7 @@ class PythonFFmpegAdapter:
         font_path: str | Path | None = None,
         hook_font_path: str | Path | None = None,
         overlay_asset_paths: Mapping[str, str | Path] | None = None,
+        overlay_font_paths: Mapping[str, str | Path] | None = None,
     ) -> RenderResult:
         report = self.preflight(recipe)
         if report.status == "partial" and not allow_approximate:
@@ -256,12 +276,38 @@ class PythonFFmpegAdapter:
         fonts_dir = None
         hook_filter = None
         overlay_inputs: list[tuple[OverlayRecipe, int, Path]] = []
+        overlay_input_indices: dict[str, int] = {}
+        text_overlay_filters: dict[str, str] = {}
         if recipe.captions.enabled or recipe.hook.enabled or recipe.overlays:
             render_temp_dir = tempfile.mkdtemp(prefix="clippy_template_render_")
         try:
             for index, overlay in enumerate(recipe.overlays):
                 if overlay.kind == "text":
-                    raise RenderAdapterError("text overlays are not supported by the first overlay adapter")
+                    staged_font_path = None
+                    if overlay.font_asset_id:
+                        if overlay_font_paths is None or overlay.font_asset_id not in overlay_font_paths:
+                            raise RenderAdapterError(
+                                f"text overlay {overlay.id!r} is missing its resolved font asset"
+                            )
+                        source_font = Path(overlay_font_paths[overlay.font_asset_id]).expanduser()
+                        if source_font.is_symlink():
+                            raise RenderAdapterError("text overlay font assets must not be symbolic links")
+                        source_font = source_font.resolve(strict=True)
+                        if not source_font.is_file():
+                            raise RenderAdapterError("text overlay font asset is not a regular file")
+                        if source_font.suffix.lower() not in {".ttf", ".otf"}:
+                            raise RenderAdapterError("text overlay font asset has an unsupported extension")
+                        staged_font_path = Path(render_temp_dir) / f"text_overlay_font_{index}{source_font.suffix.lower()}"
+                        shutil.copyfile(source_font, staged_font_path)
+                    text_path = Path(render_temp_dir) / f"text_overlay_{index}.txt"
+                    text_overlay_filters[overlay.id] = write_text_overlay(
+                        overlay,
+                        recipe.canvas,
+                        text_path,
+                        font_path=staged_font_path,
+                    )
+                    continue
+
                 if not overlay.asset_id or overlay_asset_paths is None or overlay.asset_id not in overlay_asset_paths:
                     raise RenderAdapterError(
                         f"template overlay {overlay.id!r} is missing its resolved image asset"
@@ -277,7 +323,9 @@ class PythonFFmpegAdapter:
                     raise RenderAdapterError("template overlay asset has an unsupported image extension")
                 staged_asset_path = Path(render_temp_dir) / f"overlay_{index}{suffix}"
                 shutil.copyfile(original_asset_path, staged_asset_path)
-                overlay_inputs.append((overlay, index + 1, staged_asset_path))
+                input_index = len(overlay_inputs) + 1
+                overlay_inputs.append((overlay, input_index, staged_asset_path))
+                overlay_input_indices[overlay.id] = input_index
 
             if recipe.captions.enabled:
                 if caption_transcript is None:
@@ -340,7 +388,8 @@ class PythonFFmpegAdapter:
                 ass_path=ass_path,
                 fonts_dir=fonts_dir,
                 hook_filter=hook_filter,
-                overlay_inputs=[(overlay, input_index) for overlay, input_index, _ in overlay_inputs],
+                overlay_input_indices=overlay_input_indices,
+                text_overlay_filters=text_overlay_filters,
             )
         except Exception:
             if render_temp_dir:
