@@ -187,14 +187,15 @@ Implemented in this update:
 
 Remaining:
 - [ ] Audit any other metadata-mutating routes and add lock coverage where required.
-- [ ] Confirm concurrency tests and full backend CI are green.
+- [x] Confirm concurrency tests and full backend CI are green.
 - [x] Failure-injection test verifies metadata replacement failure preserves the last valid manifest/render and removes only the uncommitted output.
 - [x] Canonical caption styling is translated through the existing ASS subtitle generator, including transcript remapping for recut clips and optional uploaded font assets.
 - [x] Implement template-driven hook/title rendering as a separate capability, with exact compatibility reporting and real FFmpeg timing/placement tests.
-- [ ] Implement overlays only after asset sizing, alpha, and normalized-position semantics are validated.
+- [x] Implement image/watermark overlays with preserved aspect ratio, normalized center anchors, opacity, rotation, and deterministic back-to-front order.
+- [ ] Add text overlays only after the canonical contract includes font, size, color, background, and line-layout properties.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
 - [ ] Prove repeated template application is deterministic and never stacks burned-in derivatives.
-- [ ] Run the full backend suite green after the two pre-existing baseline failures are resolved.
+- [x] Run the full backend suite green: 1,371 passed, 63 skipped.
 ## Stage 6 — Preview and Remotion parity
 
 **Status: PLANNED.**
@@ -362,7 +363,7 @@ Implemented on feature/template-reference-system-clean:
 - Added owner-scoped export and import API endpoints.
 - GitHub Actions run 43420728540 passed: 149 focused template tests, 1,371 backend tests passed with 50 skipped, and frontend production build passed.
 
-Next vertical slice: implement generic image/text overlays with explicit alpha, sizing, asset resolution, and normalized placement. Keep preview/Remotion parity as a later explicit gate.
+Next vertical slice: implement measurable motion/effect recipe support and subject tracking only after their contracts and quality metrics are specified. Text overlays need an expanded style schema. Keep preview/Remotion parity as a later explicit gate.
 
 
 ## Latest update — template-driven captions (2026-11-13)
@@ -382,6 +383,13 @@ Implemented in this update:
 - Hook font assets are resolved independently from caption font assets and staged only for the render. Temporary text/font files are cleaned on success and failure.
 - Hook rendering is applied after captions so it remains a distinct top layer.
 - Real FFmpeg fixtures verify visible and expired hook frames across original, blur, and solid background paths. Unit coverage verifies text-file isolation and uploaded-font pass-through.
-- GitHub Actions run `43424728800` passed on commit `2e4d438348ae5813372bcf9fc0275c7f7a8659f7`: **157 focused template tests passed**, **1,371 backend tests passed with 58 skipped**, and the frontend production build passed.
+- GitHub Actions run `43425496250` passed on commit `7a46f6d1d257ed3132a9b440d27a52bfe906d5df`: **162 focused template tests passed**, **1,371 backend tests passed with 63 skipped**, and the frontend production build passed.
 
-Remaining in Stage 5: generic overlays, motion/effect recipe support, further render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
+Implemented in this update:
+- The Python/FFmpeg adapter renders ordered PNG, JPEG, and WebP image/watermark overlays from owner-scoped template assets.
+- Overlay anchors are normalized center points; width is relative to canvas width, source aspect ratio is preserved, opacity multiplies source alpha, and rotation is applied around the center.
+- Recipe order is back-to-front. Overlays are composited before captions and hook/title layers and work with original, blur, and solid background paths.
+- The application service resolves image assets from the template's own asset store. Missing, symbolic-link, non-image, or unsupported-extension assets fail safely.
+- Text overlays remain explicitly unsupported because the current recipe has no font, size, color, backing, or line-layout fields.
+
+Remaining in Stage 5: text-overlay schema/rendering, motion/effect recipe support, subject tracking, render-provenance hardening, and deterministic repeated-application checks. Stage 6 Remotion preview/final parity remains a separate release gate.
