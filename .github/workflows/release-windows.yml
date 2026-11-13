@@ -62,7 +62,6 @@ jobs:
         with:
           name: clippy-python-runtime-${{ matrix.variant }}
           path: desktop/runtime-dist/clippy-python-${{ matrix.variant }}*
-
           if-no-files-found: error
           retention-days: 2
 
@@ -201,7 +200,7 @@ jobs:
           $expected = @{}
           foreach ($file in $expectedFiles) { $expected[$file.Name] = [long]$file.Length }
 
-          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME"
+          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | Out-String
           if ($LASTEXITCODE -ne 0) { throw "Could not read the newly created draft release." }
           $release = $releaseJson | ConvertFrom-Json
           if (-not $release.draft) { throw "Release was published before asset verification; expected a draft." }
