@@ -149,23 +149,26 @@ fn reveal_clip_download(path: String) -> Result<(), String> {
 async fn start_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<Supervisor>>();
-        state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.start()
+        let result = state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.start();
+        result
     }).await.map_err(|e| format!("Service startup worker failed: {e}"))?
 }
 
 #[tauri::command]
 fn get_api_token(app: tauri::AppHandle) -> Result<String, String> {
     let state = app.state::<Mutex<Supervisor>>();
-    state.lock()
+    let result = state.lock()
         .map_err(|_| "Service supervisor is unavailable".to_string())?
-        .api_token()
+        .api_token();
+    result
 }
 
 #[tauri::command]
 async fn stop_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<Supervisor>>();
-        state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.stop()
+        let result = state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.stop();
+        result
     }).await.map_err(|e| format!("Service shutdown worker failed: {e}"))?
 }
 
@@ -173,7 +176,8 @@ async fn stop_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
 async fn service_status(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<Supervisor>>();
-        state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.status()
+        let result = state.lock().map_err(|_| "Service supervisor is unavailable".to_string())?.status();
+        result
     }).await.map_err(|e| format!("Service status worker failed: {e}"))?
 }
 
