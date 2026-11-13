@@ -189,7 +189,8 @@ Remaining:
 - [ ] Audit any other metadata-mutating routes and add lock coverage where required.
 - [ ] Confirm concurrency tests and full backend CI are green.
 - [x] Failure-injection test verifies metadata replacement failure preserves the last valid manifest/render and removes only the uncommitted output.
-- [ ] Implement caption styling and hook/title adapters one capability at a time.
+- [x] Canonical caption styling is translated through the existing ASS subtitle generator, including transcript remapping for recut clips and optional uploaded font assets.
+- [ ] Implement template-driven hook/title rendering as a separate capability.
 - [ ] Implement overlays only after asset sizing, alpha, and normalized-position semantics are validated.
 - [ ] Implement subject tracking only with a measurable, fixture-tested contract.
 - [ ] Prove repeated template application is deterministic and never stacks burned-in derivatives.
@@ -362,3 +363,17 @@ Implemented on feature/template-reference-system-clean:
 - GitHub Actions run 43420728540 passed: 149 focused template tests, 1,371 backend tests passed with 50 skipped, and frontend production build passed.
 
 Next vertical slice: implement caption styling in the Python/FFmpeg adapter using canonical font references and normalized style properties, then add hook/title rendering as a separate capability. Keep preview/Remotion parity as a later explicit gate.
+
+
+## Latest update — template-driven captions (2026-11-13)
+
+Implemented on feature/template-reference-system-clean:
+
+- Python/FFmpeg now maps the canonical CaptionRecipe into the existing ASS generator. It supports font family, normalized font size, text/highlight/outline colors, outline/shadow, word highlighting, reveal, uppercase, and top/middle/bottom positioning.
+- Top/bottom positions use canonical safe-area margins. Arbitrary x/y anchors are rejected. Non-default max_lines values are reported as approximate rather than silently claimed as exact.
+- Template application passes the clip's saved transcript into the renderer. Recut EDL segments are remapped to clip-relative time, and saved user-edited caption words take precedence when present.
+- Referenced font assets are resolved from owner-scoped template storage and staged for FFmpeg. Temporary ASS and font files are removed after render.
+- Missing transcript/word data causes a clear application failure when captions are enabled; the adapter never silently drops requested captions.
+- GitHub Actions run 43421566510 passed: 152 focused template tests, 1,357 backend tests passed with 53 skipped, and frontend build passed.
+
+Remaining in Stage 5: template-driven hook/title rendering, generic overlays, motion/effect recipe support, and further render-provenance hardening. Stage 6 Remotion preview/final parity remains a separate release gate.
