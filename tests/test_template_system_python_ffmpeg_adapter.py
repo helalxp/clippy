@@ -150,7 +150,7 @@ def test_hook_text_is_written_to_a_file_not_interpolated_into_filter_syntax(tmp_
     recipe = TemplateRecipe.model_validate({
         "hook": {
             "enabled": True,
-            "text": "Quoted: 'hello', [world]\\nsecond line",
+            "text": "Quoted: 'hello', [world] %{metadata\\:title}\\nsecond line",
             "entrance": "slide_up",
         },
     })
@@ -162,6 +162,7 @@ def test_hook_text_is_written_to_a_file_not_interpolated_into_filter_syntax(tmp_
     assert text_path.read_text(encoding="utf-8") == "Quoted: 'hello', [world]\\nsecond line"
     assert "Quoted" not in filter_value
     assert "textfile=" in filter_value
+    assert "expansion=none" in filter_value
     assert "enable='between(t,0,3)'" in filter_value
 
 
