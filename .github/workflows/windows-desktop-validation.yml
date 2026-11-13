@@ -14,6 +14,37 @@ permissions:
 
 jobs:
   validate-windows:
+
+  build-python-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cpu, cuda]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 build tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+
+      - name: Build and validate relocatable Python runtime
+        shell: pwsh
+        run: ./desktop/build-python-runtime.ps1 -Variant "${{ matrix.variant }}"
+
+      - name: Retain tested runtime package
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-python-runtime-${{ matrix.variant }}
+          path: |
+            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip
+            desktop/runtime-dist/clippy-python-${{ matrix.variant }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
