@@ -1,7 +1,6 @@
 # Windows Release Versioning and Runtime Asset Delivery Contract
 
 **Status:** Implementation committed on `windows-installer-hardening`; awaiting CI and clean-machine validation  
-**Audited branch:** `windows-installer-hardening`  
 **Implementation branch:** `windows-installer-hardening`  
 **Application version in source:** `0.2.2`  
 **Last reviewed:** 2026-11-13
@@ -14,7 +13,7 @@ The production requirement is simple:
 
 > A user downloads one Clippy installer, installs it, opens it, and Clippy automatically downloads and installs the exact runtime package required by that installer. The user must not need PowerShell commands, manually supplied archives, Python, or environment-variable overrides.
 
-This document records the current audit findings and the proposed delivery contract. It does not itself change the runtime implementation.
+This document records the audit baseline and the implemented delivery contract. The implementation is committed on `windows-installer-hardening`; CI and real-machine validation remain release gates.
 
 ## 2. Canonical application version
 
@@ -60,7 +59,6 @@ The implemented release contract uses this convention:
 | Item | Expected value for version 0.2.2 |
 |---|---|
 | Release tag | `v0.2.2` |
-| CPU runtime archive asset | `clippy-python-cpu.zip` |
 | CPU runtime manifest | `clippy-python-cpu.manifest.json` |
 | CUDA runtime manifest | `clippy-python-cuda.manifest.json` |
 | CPU runtime asset | `clippy-python-cpu.zip` while it remains below the part-size threshold |
@@ -90,13 +88,13 @@ The user's installed setup log reports a local download/cache filename:
 clippy-python-cuda-0.2.1.zip
 ```
 
-The current setup implementation uses the application version in the local cache filename, but constructs the remote release URL with an unversioned asset name. Therefore, the log's filename alone does **not** prove that GitHub was asked for an asset with the `.0.2.1` suffix.
+The old setup implementation used the application version in the local cache filename but constructed the remote release URL with an unversioned asset name. Therefore, the historical log's filename alone did **not** prove that GitHub was asked for an asset with the `.0.2.1` suffix.
 
 The installed payload is using application version `0.2.1`; the audited branch has `VERSION = 0.2.2`. Under the current contract, the expected remote URLs are:
 
 ```text
-Installed 0.2.1: /releases/download/v0.2.1/clippy-python-cuda.zip
-Audited 0.2.2:   /releases/download/v0.2.2/clippy-python-cuda.zip
+Installed 0.2.1 (old format): /releases/download/v0.2.1/clippy-python-cuda.zip
+Current 0.2.2 (manifest):     /releases/download/v0.2.2/clippy-python-cuda.manifest.json
 ```
 
 This is an installer/source version difference, not proof that the source-level version validator failed. Since the repository currently has no published releases, neither version has a runtime asset available through the expected release path.
@@ -109,11 +107,11 @@ The next installer must be built from the intended release commit, and its embed
 
 This prevents several source-level version mismatches, but it cannot create a missing release asset by itself. The release workflow must complete successfully and publish the runtime assets.
 
-### 5.4 Confirmed: runtime archive builder stops at the GitHub asset-size limit
+### 5.4 Implemented: runtime archive builder handles the GitHub asset-size limit
 
 `desktop/build-python-runtime.ps1` now creates the complete runtime ZIP, computes its whole-archive SHA-256, and calls `desktop/runtime-archive.ps1` to produce a manifest and release-safe assets. Files below the 1.75 GiB target remain a single ZIP; larger files are segmented into ordered binary parts. The builder reconstructs the parts and tests extraction/imports from that reconstructed archive. The original multi-part ZIP is not uploaded as an oversized release asset.
 
-### 5.5 Confirmed: release workflow expects single ZIP files
+### 5.5 Implemented: release workflow handles manifest-based runtime assets
 
 `.github/workflows/release-windows.yml` now:
 
@@ -127,9 +125,9 @@ This prevents several source-level version mismatches, but it cannot create a mi
 
 The actual Windows Actions run remains the authoritative validation of this workflow.
 
-### 5.6 Documentation drift
+### 5.6 Branch roles and merge timing
 
-The existing `RELEASING.md` refers to a `windows-installer-release` branch, while this audit is being performed against `windows-installer-hardening`. Before the next release, the project should designate and document one authoritative release branch and update the release instructions accordingly.
+`windows-installer-release` is the integration target and `windows-installer-hardening` is the isolated implementation branch. The draft pull request is #10. The branches currently share a merge base at the current integration-branch head, so the hardening branch is ahead without the target containing unique commits. The pull request currently reports `mergeable: true`. Do not merge until both user test PCs pass.
 
 ### 5.7 Runtime download resilience
 
@@ -144,7 +142,7 @@ The audited setup engine already has useful production-oriented download behavio
 
 The downloader now detects HTTP 404 and stops retrying, reporting the exact missing asset URL and reminding the user to verify the matching release. The existing resumable transfer behavior is reused for every manifest-listed part.
 
-## 6. Proposed version-mismatch prevention rules
+## 6. Release gates and version-mismatch prevention rules
 
 The following rules should be treated as release gates:
 
@@ -158,7 +156,7 @@ The following rules should be treated as release gates:
 8. **Fail clearly:** a missing asset should produce a diagnostic naming the requested release tag and asset. It must not be presented as a generic Python installation failure.
 9. **No manual customer overrides:** local archive environment variables remain development/test hooks only. They are not part of the customer installation procedure.
 
-## 7. CUDA archive size: multipart feasibility assessment
+## 7. CUDA archive size and multipart implementation
 
 ### 7.1 Platform constraint
 
@@ -170,7 +168,7 @@ The current CUDA archive is approximately 3.35 GB, so it cannot be attached as o
 
 ### 7.2 Recommendation: split the completed archive into binary parts
 
-**Assessment: viable and recommended for the current GitHub Releases hosting plan.**
+**Implemented:** the builder segments the completed ZIP as raw byte ranges for the current GitHub Releases hosting plan.
 
 The build should first create and validate the complete ZIP archive. It should then split that exact byte stream into ordered binary parts, each comfortably below the platform limit. A conservative target is approximately 1.75 GiB per part rather than attempting to approach 2 GiB.
 
@@ -204,7 +202,7 @@ The release tag, manifest application version, and setup payload version must ag
 
 ### 7.4 Installer download and reconstruction flow
 
-For a multipart runtime, the setup engine should:
+For a multipart runtime, the setup engine now:
 
 1. Read the manifest from the same versioned GitHub Release.
 2. Validate the manifest schema, application version, runtime variant, part count, names, and declared sizes.
@@ -229,7 +227,7 @@ A missing, duplicated, reordered, truncated, or modified part must stop setup be
 
 The split operation itself is simple; the important engineering work is the manifest contract, reliable part download/resume, ordered reconstruction, and end-to-end checksum verification.
 
-### 7.6 Required CI changes when this design is approved
+### 7.6 CI implementation
 
 - Remove the current single-file 2 GiB rejection as the final packaging outcome.
 - Split the completed CUDA archive into bounded parts.
@@ -240,7 +238,7 @@ The split operation itself is simple; the important engineering work is the mani
 - Update release validation and release asset globs to include the parts and manifest.
 - Ensure the release job rejects any individual part at or above the configured safe maximum.
 
-The CPU package can remain a single ZIP plus checksum while it remains below the per-asset limit.
+The CPU package remains a single ZIP plus checksum while it remains below the configured part-size threshold.
 
 ## 8. Release readiness checklist
 
