@@ -31,16 +31,18 @@ after interruption and must not delete user data or model files.
 Expected managed components include the embedded Python runtime and required
 Python packages, Node runtime and renderer packages, FFmpeg/FFprobe, the
 Remotion browser runtime, and compatible GPU runtime libraries when needed.
-The Windows implementation now stages the application payload into the
-installer and extracts it to `%LOCALAPPDATA%\\Clippy\\app\\current` on first
-launch. Its setup script provisions private Python 3.12.10, Node.js 22.23.3,
-and FFmpeg essentials; verifies Python and Microsoft installer signatures,
-verifies Node and FFmpeg SHA-256 checksums, installs the pinned Python
-requirements, selects PyTorch CUDA 12.6 when an NVIDIA driver is detected
-(and CPU PyTorch otherwise), and asks Remotion to ensure its browser runtime.
-The script writes a per-user runtime state file only after successful
-verification and checks the backend imports and Remotion browser on later
-launches before skipping setup.
+The Windows implementation stages the application payload into the installer
+and extracts it to `%LOCALAPPDATA%\\Clippy\\app\\current` on first launch.
+Python 3.12.10 and the complete pinned Python dependency set are built on
+Windows CI into separate CPU and NVIDIA/CUDA 12.6 runtime archives. The release
+publishes each archive with a SHA-256 sidecar. First-run setup selects the
+variant from the detected NVIDIA driver, downloads and verifies the archive,
+extracts it into a staging directory, checks the interpreter and critical
+imports, and only then activates it. Customer machines do not run pip or
+bootstrap Python packages. Node.js 22.23.3 and FFmpeg essentials are still
+provisioned as private runtimes and verified against their published hashes;
+Remotion still performs its browser setup during first run. The runtime state
+manifest is written only after all required components pass verification.
 
 A Microsoft Visual C++ x64 redistributable may require a one-time UAC approval
 on machines where that runtime is missing. Clean-machine testing is still
