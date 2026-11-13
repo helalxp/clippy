@@ -9,6 +9,126 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Keep the backend, renderer, and every descendant in one Windows Job
+// Object. Windows closes the job handle when Clippy is force-terminated; the
+// KILL_ON_JOB_CLOSE limit then reaps uvicorn workers, ffmpeg, Chromium, and
+// other grandchildren even when Rust Drop cannot run.
+#[cfg(windows)]
+struct ProcessJob {
+    handle: *mut std::ffi::c_void,
+}
+
+#[cfg(windows)]
+impl ProcessJob {
+    fn new() -> Result<Self, String> {
+        use std::{mem, ptr};
+        const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: u32 = 9;
+        const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct BasicLimitInformation {
+            per_process_user_time_limit: i64,
+            per_job_user_time_limit: i64,
+            limit_flags: u32,
+            minimum_working_set_size: usize,
+            maximum_working_set_size: usize,
+            active_process_limit: u32,
+            affinity: usize,
+            priority_class: u32,
+            scheduling_class: u32,
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct IoCounters {
+            read_operation_count: u64,
+            write_operation_count: u64,
+            other_operation_count: u64,
+            read_transfer_count: u64,
+            write_transfer_count: u64,
+            other_transfer_count: u64,
+        }
+        #[repr(C)]
+        struct ExtendedLimitInformation {
+            basic_limit_information: BasicLimitInformation,
+            io_info: IoCounters,
+            process_memory_limit: usize,
+            job_memory_limit: usize,
+            peak_process_memory_used: usize,
+            peak_job_memory_used: usize,
+        }
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn CreateJobObjectW(attributes: *const std::ffi::c_void, name: *const u16) -> *mut std::ffi::c_void;
+            fn SetInformationJobObject(job: *mut std::ffi::c_void, class: u32, info: *const std::ffi::c_void, length: u32) -> i32;
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+
+        unsafe {
+            let handle = CreateJobObjectW(ptr::null(), ptr::null());
+            if handle.is_null() {
+                return Err(format!("Could not create the Clippy process job (Windows error {}).", std::io::Error::last_os_error()));
+            }
+            let mut info: ExtendedLimitInformation = mem::zeroed();
+            info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = SetInformationJobObject(
+                handle,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                &info as *const _ as *const std::ffi::c_void,
+                mem::size_of::<ExtendedLimitInformation>() as u32,
+            );
+            if configured == 0 {
+                let error = std::io::Error::last_os_error();
+                CloseHandle(handle);
+                return Err(format!("Could not configure Clippy process cleanup: {error}"));
+            }
+            Ok(Self { handle })
+        }
+    }
+
+    fn assign(&self, child: &Child) -> Result<(), String> {
+        const PROCESS_TERMINATE: u32 = 0x0001;
+        const PROCESS_SET_QUOTA: u32 = 0x0100;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, process_id: u32) -> *mut std::ffi::c_void;
+            fn AssignProcessToJobObject(job: *mut std::ffi::c_void, process: *mut std::ffi::c_void) -> i32;
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+        unsafe {
+            let process = OpenProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, 0, child.id());
+            if process.is_null() {
+                return Err(format!("Could not open service process {} for job assignment: {}", child.id(), std::io::Error::last_os_error()));
+            }
+            let assigned = AssignProcessToJobObject(self.handle, process);
+            let error = if assigned == 0 { Some(std::io::Error::last_os_error()) } else { None };
+            CloseHandle(process);
+            if let Some(error) = error {
+                return Err(format!("Could not attach service process {} to the Clippy cleanup job: {error}", child.id()));
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessJob {
+    fn drop(&mut self) {
+        #[link(name = "kernel32")]
+        extern "system" { fn CloseHandle(handle: *mut std::ffi::c_void) -> i32; }
+        unsafe { CloseHandle(self.handle); }
+    }
+}
+
+#[cfg(not(windows))]
+struct ProcessJob;
+
+#[cfg(not(windows))]
+impl ProcessJob {
+    fn new() -> Result<Self, String> { Ok(Self) }
+    fn assign(&self, _child: &Child) -> Result<(), String> { Ok(()) }
+}
+
 const BACKEND_HOST: &str = "127.0.0.1";
 const BACKEND_PORT: u16 = 8000;
 const RENDERER_HOST: &str = "127.0.0.1";
@@ -19,6 +139,7 @@ pub struct Supervisor {
     backend: Option<Child>,
     renderer: Option<Child>,
     paths: Option<RuntimePaths>,
+    job: Option<ProcessJob>,
 }
 
 #[derive(Clone)]
@@ -158,6 +279,7 @@ impl Supervisor {
         fs::create_dir_all(&paths.models).map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
         let child_path = managed_child_path(&paths)?;
+        let job = ProcessJob::new()?;
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
@@ -201,6 +323,11 @@ impl Supervisor {
             .stderr(Stdio::from(backend_log))
             .spawn()
             .map_err(|e| format!("Could not start the Clippy backend: {e}"))?;
+        if let Err(error) = job.assign(&backend) {
+            let _ = backend.kill();
+            let _ = backend.wait();
+            return Err(error);
+        }
 
         let renderer = Command::new(&paths.node)
             .arg(paths.root.join("render-service").join("dist").join("server.js"))
@@ -223,6 +350,11 @@ impl Supervisor {
             Ok(child) => child,
             Err(error) => { let _ = backend.kill(); let _ = backend.wait(); return Err(format!("Could not start the Remotion renderer: {error}")); }
         };
+        if let Err(error) = job.assign(&renderer) {
+            let _ = renderer.kill(); let _ = renderer.wait();
+            let _ = backend.kill(); let _ = backend.wait();
+            return Err(error);
+        }
 
         if let Err(error) = wait_for_health(&mut backend, BACKEND_PORT, "/health/ready", Duration::from_secs(90)) {
             let _ = renderer.kill(); let _ = renderer.wait();
@@ -238,12 +370,14 @@ impl Supervisor {
         self.backend = Some(backend);
         self.renderer = Some(renderer);
         self.paths = Some(paths);
+        self.job = Some(job);
         self.status()
     }
 
     pub fn stop(&mut self) -> Result<ServiceStatus, String> {
         stop_child(&mut self.renderer);
         stop_child(&mut self.backend);
+        self.job.take(); // Closing the job also terminates any surviving descendants.
         self.status()
     }
 
