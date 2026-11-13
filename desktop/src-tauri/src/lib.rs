@@ -155,6 +155,14 @@ async fn start_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> 
 }
 
 #[tauri::command]
+fn get_api_token(app: tauri::AppHandle) -> Result<String, String> {
+    let state = app.state::<Mutex<Supervisor>>();
+    state.lock()
+        .map_err(|_| "Service supervisor is unavailable".to_string())?
+        .api_token()
+}
+
+#[tauri::command]
 async fn stop_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<Supervisor>>();
@@ -404,6 +412,7 @@ pub fn run() {
             start_services,
             stop_services,
             service_status,
+            get_api_token,
             check_runtime,
             install_app_payload,
             setup_runtime,
