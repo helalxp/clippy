@@ -131,13 +131,27 @@ function Download-File([string]$Url, [string]$Destination) {
             } elseif ($Status -ne 200 -and $Status -ne 206) {
                 throw "Unexpected HTTP status $Status while downloading $Url"
             }
+
+            $ExpectedTotalBytes = $null
             if ($Status -eq 206) {
                 $ContentRange = $Response.Headers["Content-Range"]
-                if ($Offset -gt 0 -and $ContentRange -notmatch "^bytes\s+$Offset-") {
-                    throw "Server returned an invalid Content-Range while resuming $Url"
+                if ($ContentRange -notmatch "^bytes\s+(\d+)-(\d+)/(\d+)$") {
+                    throw "Server returned a missing or invalid Content-Range while resuming $Url"
                 }
+                $RangeStart = [long]$Matches[1]
+                $RangeEnd = [long]$Matches[2]
+                $ExpectedTotalBytes = [long]$Matches[3]
+                if ($RangeStart -ne $Offset -or $RangeEnd -lt $RangeStart -or $ExpectedTotalBytes -le $RangeEnd) {
+                    throw "Server returned an inconsistent Content-Range while resuming $Url"
+                }
+                $ExpectedResponseBytes = $RangeEnd - $RangeStart + 1
+                if ($Response.ContentLength -ge 0 -and $Response.ContentLength -ne $ExpectedResponseBytes) {
+                    throw "Server Content-Length does not match Content-Range while downloading $Url"
+                }
+            } elseif ($Response.ContentLength -ge 0) {
+                $ExpectedTotalBytes = [long]$Response.ContentLength
             }
-            $TotalBytes = if ($Response.ContentLength -ge 0) { $Offset + $Response.ContentLength } else { 0L }
+
             $InputStream = $Response.GetResponseStream()
             $Mode = if ($Offset -gt 0 -and $Status -eq 206) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
             $OutputStream = [IO.File]::Open($Partial, $Mode, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -147,11 +161,11 @@ function Download-File([string]$Url, [string]$Destination) {
             while (($Read = $InputStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
                 $OutputStream.Write($Buffer, 0, $Read)
                 $Downloaded += $Read
-                if ($TotalBytes -gt 0) {
-                    $Percent = [int][math]::Floor(($Downloaded * 100.0) / $TotalBytes)
+                if ($ExpectedTotalBytes -gt 0) {
+                    $Percent = [int][math]::Floor(($Downloaded * 100.0) / $ExpectedTotalBytes)
                     if ($Percent -ge $LastReportedPercent + 10) {
                         $LastReportedPercent = $Percent
-                        Write-Stage ("{0}: {1}% ({2:N0}/{3:N0} bytes)." -f [IO.Path]::GetFileName($Destination), $Percent, $Downloaded, $TotalBytes)
+                        Write-Stage ("{0}: {1}% ({2:N0}/{3:N0} bytes)." -f [IO.Path]::GetFileName($Destination), $Percent, $Downloaded, $ExpectedTotalBytes)
                     }
                 }
             }
@@ -162,6 +176,9 @@ function Download-File([string]$Url, [string]$Destination) {
             if ((Get-Item -LiteralPath $Partial).Length -lt 1) {
                 throw "Download returned an empty file: $Url"
             }
+            if ($null -ne $ExpectedTotalBytes -and (Get-Item -LiteralPath $Partial).Length -ne $ExpectedTotalBytes) {
+                throw "Download ended before the server-declared content length was received. Partial data has been preserved for resume."
+            }
             Move-Item -LiteralPath $Partial -Destination $Destination -Force
             Write-Stage "Download complete: $([IO.Path]::GetFileName($Destination))."
             return
@@ -170,8 +187,39 @@ function Download-File([string]$Url, [string]$Destination) {
             if ($OutputStream) { $OutputStream.Dispose(); $OutputStream = $null }
             if ($InputStream) { $InputStream.Dispose(); $InputStream = $null }
             if ($Response) { $Response.Close(); $Response = $null }
+
+            # A completed partial file can legitimately receive HTTP 416 when
+            # the server is asked to resume exactly at EOF. Promote it and let
+            # the caller's mandatory SHA-256 verification decide whether it is
+            # usable. If it is longer than the server object, discard it and
+            # retry from byte zero.
+            $ErrorResponse = $_.Exception.Response
+            if ($ErrorResponse -is [System.Net.HttpWebResponse]) {
+                try {
+                    if ([int]$ErrorResponse.StatusCode -eq 416) {
+                        $RangeHeader = $ErrorResponse.Headers["Content-Range"]
+                        if ($RangeHeader -match "^bytes\s+\*/(\d+)$") {
+                            $ServerLength = [long]$Matches[1]
+                            $PartialLength = if (Test-Path -LiteralPath $Partial) { (Get-Item -LiteralPath $Partial).Length } else { 0L }
+                            if ($PartialLength -eq $ServerLength -and $ServerLength -gt 0) {
+                                $ErrorResponse.Close()
+                                Move-Item -LiteralPath $Partial -Destination $Destination -Force
+                                Write-Stage "Resumed download was already complete; promoted the verified partial file."
+                                return
+                            }
+                            if ($PartialLength -gt $ServerLength) {
+                                Remove-Item -LiteralPath $Partial -Force -ErrorAction SilentlyContinue
+                                Write-Stage "Discarded an oversized partial download and will restart from byte zero."
+                            }
+                        }
+                    }
+                } finally {
+                    $ErrorResponse.Close()
+                }
+            }
+
             if ($Attempt -eq 3) { throw "Download failed after 3 attempts: $Url. $Message" }
-            Write-Stage "Download interrupted; preserving partial data for resume. $Message"
+            Write-Stage "Download interrupted; preserving valid partial data for resume. $Message"
             Start-Sleep -Seconds ([math]::Min(2 * $Attempt, 6))
         }
     }
