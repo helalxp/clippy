@@ -218,6 +218,12 @@ class PythonFFmpegAdapter:
             raise RenderAdapterError(str(exc)) from exc
         if source_probe.video_stream_count != 1:
             raise RenderAdapterError("the first FFmpeg adapter requires exactly one video stream")
+        for segment in recipe.effects:
+            if segment.start_seconds >= source_probe.duration_seconds:
+                raise RenderAdapterError("template effect starts after the source clip ends")
+        for segment in recipe.motion:
+            if segment.start_seconds >= source_probe.duration_seconds:
+                raise RenderAdapterError("template motion starts after the source clip ends")
         if source_probe.other_stream_types:
             stream_types = ", ".join(source_probe.other_stream_types)
             raise RenderAdapterError(
