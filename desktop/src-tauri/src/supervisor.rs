@@ -15,7 +15,9 @@ use std::{
 // other grandchildren even when Rust Drop cannot run.
 #[cfg(windows)]
 struct ProcessJob {
-    handle: *mut std::ffi::c_void,
+    // Store the opaque HANDLE as an integer so Supervisor remains Send + Sync
+    // when managed by Tauri's thread-safe state container.
+    handle: usize,
 }
 
 #[cfg(windows)]
@@ -82,7 +84,7 @@ impl ProcessJob {
                 CloseHandle(handle);
                 return Err(format!("Could not configure Clippy process cleanup: {error}"));
             }
-            Ok(Self { handle })
+            Ok(Self { handle: handle as usize })
         }
     }
 
@@ -100,7 +102,7 @@ impl ProcessJob {
             if process.is_null() {
                 return Err(format!("Could not open service process {} for job assignment: {}", child.id(), std::io::Error::last_os_error()));
             }
-            let assigned = AssignProcessToJobObject(self.handle, process);
+            let assigned = AssignProcessToJobObject(self.handle as *mut std::ffi::c_void, process);
             let error = if assigned == 0 { Some(std::io::Error::last_os_error()) } else { None };
             CloseHandle(process);
             if let Some(error) = error {
@@ -116,7 +118,7 @@ impl Drop for ProcessJob {
     fn drop(&mut self) {
         #[link(name = "kernel32")]
         extern "system" { fn CloseHandle(handle: *mut std::ffi::c_void) -> i32; }
-        unsafe { CloseHandle(self.handle); }
+        unsafe { CloseHandle(self.handle as *mut std::ffi::c_void); }
     }
 }
 
