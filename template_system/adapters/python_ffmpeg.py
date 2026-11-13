@@ -20,6 +20,7 @@ from typing import Callable, Mapping
 from ..analysis import ReferenceAnalysisError, _local_video_path, probe_media
 from ..capabilities import CompatibilityReport, check_compatibility
 from ..models import OverlayRecipe, TemplateRecipe
+from .motion_effects import build_effect_filters, build_motion_filter
 
 
 class RenderAdapterError(RuntimeError):
@@ -130,6 +131,21 @@ class PythonFFmpegAdapter:
 
         filters = [base_graph]
         current_label = "base0"
+        motion_filter = build_motion_filter(
+            recipe.motion,
+            width=width,
+            height=height,
+            fps=recipe.canvas.fps,
+        )
+        if motion_filter:
+            filters.append(f"[{current_label}]{motion_filter}[motion0]")
+            current_label = "motion0"
+
+        for index, effect_filter in enumerate(build_effect_filters(recipe.effects)):
+            next_label = f"effect{index}"
+            filters.append(f"[{current_label}]{effect_filter}[{next_label}]")
+            current_label = next_label
+
         for index, (overlay, input_index) in enumerate(overlay_inputs or []):
             if overlay.kind == "text":
                 raise RenderAdapterError("text overlays are not supported by the first overlay adapter")
@@ -146,7 +162,7 @@ class PythonFFmpegAdapter:
                     f"rotate={radians:.8f}:ow=rotw(iw):oh=roth(ih):c=none"
                 )
             filters.append(",".join(transforms) + f"[{overlay_label}]")
-            next_label = f"base{index + 1}"
+            next_label = f"overlay_composite{index}"
             x = f"W*{overlay.anchor_x:.6f}-w/2"
             y = f"H*{overlay.anchor_y:.6f}-h/2"
             filters.append(
