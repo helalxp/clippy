@@ -2528,6 +2528,11 @@ async def require_desktop_api_token(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path in ("/health", "/health/ready"):
         return await call_next(request)
     supplied = request.headers.get("X-Clippy-Token", "")
+    # Native <video>/<img> requests cannot attach custom headers. Permit the
+    # session token in the query string only for read-only static media routes.
+    media_paths = ("/videos/", "/thumbnails/", "/reference-templates-media/")
+    if not supplied and request.method in ("GET", "HEAD") and request.url.path.startswith(media_paths):
+        supplied = request.query_params.get("token", "")
     if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
         return JSONResponse({"detail": "This local Clippy API requires its active desktop session token."}, status_code=401)
     return await call_next(request)
