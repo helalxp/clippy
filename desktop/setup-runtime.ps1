@@ -65,6 +65,7 @@ trap {
 }
 
 Write-Stage "Runtime setup engine started."
+Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 
 function Download-File([string]$Url, [string]$Destination) {
     if (Test-Path $Destination) {
@@ -202,8 +203,9 @@ if (-not $VcRuntimeInstalled) {
 $AppVersion = (Get-Content -LiteralPath (Join-Path $App "VERSION") -Raw).Trim()
 if ($AppVersion -notmatch "^\d+\.\d+\.\d+$") { throw "Application VERSION file is missing or invalid." }
 
-$PythonRuntimeName = "clippy-python-$TorchVariant.zip"
-$PythonRuntimeUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeName"
+$PythonRuntimeAssetName = "clippy-python-$TorchVariant.zip"
+$PythonRuntimeName = "clippy-python-$TorchVariant-$AppVersion.zip"
+$PythonRuntimeUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeAssetName"
 $PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
 $PythonRuntimeChecksum = "$PythonRuntimeArchive.sha256"
 
