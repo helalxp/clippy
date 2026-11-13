@@ -5089,29 +5089,28 @@ async def apply_template_to_clip(req: TemplateApplyRequest, request: Request):
             clip_data = clips[req.clip_index]
             if template_document.recipe.captions.enabled:
                 source_transcript = metadata.get("transcript")
-                if not isinstance(source_transcript, dict):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="This template enables captions, but the source job has no saved transcript.",
-                    )
-                recipe_segments = (clip_data.get("recipe") or {}).get("segments")
-                if not recipe_segments:
-                    clip_start = float(clip_data.get("start", 0) or 0)
-                    clip_end = float(clip_data.get("end", 0) or 0)
-                    if clip_end <= clip_start:
-                        raise HTTPException(
-                            status_code=409,
-                            detail="This clip has no valid transcript time range for template captions.",
-                        )
-                    recipe_segments = [{"start": clip_start, "end": clip_end}]
-
                 edited_caption_words = clip_data.get("caption_words")
                 if edited_caption_words:
                     caption_transcript = _words_transcript(
                         edited_caption_words,
-                        source_transcript.get("language", "en"),
+                        (source_transcript or {}).get("language", "en"),
                     )
                 else:
+                    if not isinstance(source_transcript, dict):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="This template enables captions, but the source job has no saved transcript.",
+                        )
+                    recipe_segments = (clip_data.get("recipe") or {}).get("segments")
+                    if not recipe_segments:
+                        clip_start = float(clip_data.get("start", 0) or 0)
+                        clip_end = float(clip_data.get("end", 0) or 0)
+                        if clip_end <= clip_start:
+                            raise HTTPException(
+                                status_code=409,
+                                detail="This clip has no valid transcript time range for template captions.",
+                            )
+                        recipe_segments = [{"start": clip_start, "end": clip_end}]
                     caption_transcript = recut.virtual_transcript(
                         source_transcript,
                         recipe_segments,
