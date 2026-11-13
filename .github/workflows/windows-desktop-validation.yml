@@ -32,7 +32,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12.10"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -65,6 +65,9 @@ jobs:
 
       - name: Check Tauri Rust application
         run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Run Rust unit and manifest compatibility tests
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
       - name: Build complete NSIS installer
         shell: pwsh
