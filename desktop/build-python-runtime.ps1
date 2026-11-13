@@ -10,7 +10,7 @@ $PythonVersion = "3.12.10"
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/$PythonArchiveName"
 $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
-$TorchIndex = if ($Variant -eq "cuda") { "https://download.pytorch.org/whl/cu126" } else { "https://download.pytorch.org/whl/cpu" }
+$TorchIndex = if ($Variant -eq "cuda") { "https://download.pytorch.org/whl/cu128" } else { "https://download.pytorch.org/whl/cpu" }
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $WorkRoot = Join-Path $env:RUNNER_TEMP "clippy-python-runtime-$Variant"
 $RuntimeRoot = Join-Path $WorkRoot "python"
@@ -49,8 +49,19 @@ $ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, sce
 & $StagedPython -c $ImportCheck
 if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import validation." }
 if ($Variant -eq "cuda") {
-    & $StagedPython -c "import torch; assert torch.version.cuda is not None, 'CUDA wheel was not selected'"
-    if ($LASTEXITCODE -ne 0) { throw "CUDA package does not contain CUDA-enabled PyTorch." }
+    & $StagedPython -c "import torch; assert torch.version.cuda is not None and torch.version.cuda.startswith('12.8'), 'CUDA 12.8 PyTorch wheel was not selected'"
+    if ($LASTEXITCODE -ne 0) { throw "CUDA package does not contain the required CUDA 12.8 PyTorch build." }
+    $CudaDllRoot = Join-Path $SitePackages "nvidia"
+    $RequiredCudaDlls = @(
+        (Join-Path $CudaDllRoot "cublas\bin\cublas64_12.dll"),
+        (Join-Path $CudaDllRoot "cudnn\bin\cudnn64_9.dll"),
+        (Join-Path $CudaDllRoot "cuda_runtime\bin\cudart64_12.dll")
+    )
+    foreach ($dll in $RequiredCudaDlls) {
+        if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+            throw "CUDA runtime is missing a required DLL for faster-whisper/PyTorch: $dll"
+        }
+    }
 } else {
     & $StagedPython -c "import torch; assert torch.version.cuda is None, 'CPU package unexpectedly contains a CUDA build'"
     if ($LASTEXITCODE -ne 0) { throw "CPU package unexpectedly resolved a CUDA-enabled PyTorch wheel." }
