@@ -180,3 +180,11 @@ The first GitHub Actions run for the Library branch completed with the following
 7. Repeat Download All with a large project and verify the saved ZIP opens and contains every expected clip and caption file.
 
 Do not treat the CUDA runtime packaging failure as a Library blocker. Track it separately against the Windows runtime packaging/release-size workstream. Do not merge this PR until the packaged Windows smoke test is completed and any Library-specific failures are fixed.
+
+
+## 9. Follow-up hardening (2026-11-13)
+
+- Serialized project deletion with the final archive publish operation using the Library's shared re-entrant lock.
+- Added a final deletion-tombstone check while holding that lock, immediately before publishing the staging directory. This prevents a long-running archive operation from leaving a deleted project directory behind if the user deletes the project during archival.
+- Added a regression test that triggers project deletion during the archive copy and asserts the archive aborts, the tombstone remains, and no project/staging directory is published.
+- This follow-up was committed after the initial CI run. The GitHub connector has not reported a new workflow run or status for this follow-up commit yet, so the new regression test is not claimed as CI-verified.
