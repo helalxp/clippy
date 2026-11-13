@@ -95,6 +95,7 @@ export default function DesktopRuntimeGate({ children }) {
       if (!localApiToken) {
         throw new Error('Clippy did not provide its per-launch local API token.');
       }
+      window.__CLIPPY_API_TOKEN__ = localApiToken;
       installLocalApiAuth(localApiToken, services.backend_url);
       setState((current) => ({
         ...current,
