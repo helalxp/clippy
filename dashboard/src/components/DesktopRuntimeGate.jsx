@@ -37,6 +37,8 @@ export default function DesktopRuntimeGate({ children }) {
     status: isDesktop ? 'checking' : 'ready',
     phase: 'startup',
     stage: 'Checking your Clippy installation…',
+    component: '',
+    progress: null,
     error: '',
     logPath: LOG_PATH,
   });
@@ -124,6 +126,8 @@ export default function DesktopRuntimeGate({ children }) {
             ...current,
             phase: 'setup',
             stage: payload.stage || current.stage,
+            component: payload.component || current.component,
+            progress: typeof payload.progress === 'number' ? payload.progress : current.progress,
             logPath: payload.logPath || current.logPath,
           }));
         });
@@ -182,8 +186,17 @@ export default function DesktopRuntimeGate({ children }) {
 
           {!failed ? (
             <div className="space-y-4">
+              {state.component && (
+                <div className="flex items-center justify-between gap-3 text-[11px] text-white/45">
+                  <span className="min-w-0 truncate">{state.component}</span>
+                  {state.progress !== null && <span className="shrink-0 tabular-nums text-amber-100/80">{Math.round(state.progress)}%</span>}
+                </div>
+              )}
               <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
-                <div className="h-full w-1/3 animate-[setup-progress_2.2s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-amber-700 to-amber-200" />
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r from-amber-700 to-amber-200 transition-[width] duration-300 ${state.progress === null ? 'w-1/3 animate-[setup-progress_2.2s_ease-in-out_infinite]' : ''}`}
+                  style={state.progress !== null ? { width: `${Math.max(0, Math.min(100, state.progress))}%` } : undefined}
+                />
               </div>
               {firstRun ? (
                 <>
