@@ -29,10 +29,15 @@ $LogDir = Join-Path $Root "logs"
 $SetupLogPath = Join-Path $LogDir "runtime-setup.log"
 
 $PythonVersion = "3.12.10"
+$TorchVariant = "cpu"
+$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($Nvidia) {
+    & $Nvidia.Source *> $null
+    if ($LASTEXITCODE -eq 0) { $TorchVariant = "cuda" }
+}
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
-$PipBootstrapUrl = "https://bootstrap.pypa.io/pip/3.12/get-pip.py"
 $NodeVersion = "22.23.3"
 $NodeArchiveName = "node-v$NodeVersion-win-x64.zip"
 $NodeArchiveUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName"
@@ -197,15 +202,6 @@ if (-not $VcRuntimeInstalled) {
 $AppVersion = (Get-Content -LiteralPath (Join-Path $App "VERSION") -Raw).Trim()
 if ($AppVersion -notmatch "^\d+\.\d+\.\d+$") { throw "Application VERSION file is missing or invalid." }
 
-$TorchVariant = "cpu"
-$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-if ($Nvidia) {
-    & $Nvidia.Source *> $null
-    if ($LASTEXITCODE -eq 0) {
-        $TorchVariant = "cuda"
-        Write-Stage "NVIDIA driver detected; selecting the prebuilt CUDA 12.6 Python runtime."
-    }
-}
 $PythonRuntimeName = "clippy-python-$TorchVariant.zip"
 $PythonRuntimeUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeName"
 $PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
