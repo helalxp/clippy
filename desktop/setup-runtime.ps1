@@ -1,4 +1,29 @@
 $ErrorActionPreference = "Stop"
+# The desktop runtime setup is intentionally hosted by Windows PowerShell 5.1.
+# When Clippy is launched from PowerShell 7, the inherited PSModulePath can
+# point only at PowerShell 7 modules. Windows PowerShell then cannot auto-load
+# its own built-in modules (for example Get-FileHash and Expand-Archive).
+# Prepend this host's system module directory while preserving any other
+# module directories already configured by the user.
+$WindowsPowerShellModulePath = [System.IO.Path]::Combine($PSHOME, "Modules")
+if ([System.IO.Directory]::Exists($WindowsPowerShellModulePath)) {
+    $CurrentModulePath = [string]$env:PSModulePath
+    $HasWindowsPowerShellModules = $false
+    foreach ($ModulePathEntry in $CurrentModulePath.Split(';')) {
+        if ([string]::Equals($ModulePathEntry.Trim(), $WindowsPowerShellModulePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $HasWindowsPowerShellModules = $true
+            break
+        }
+    }
+    if (-not $HasWindowsPowerShellModules) {
+        if ([string]::IsNullOrWhiteSpace($CurrentModulePath)) {
+            $env:PSModulePath = $WindowsPowerShellModulePath
+        } else {
+            $env:PSModulePath = $WindowsPowerShellModulePath + ';' + $CurrentModulePath
+        }
+    }
+}
+
 $ProgressPreference = "SilentlyContinue" # Avoid the extremely slow per-byte progress UI in Windows PowerShell 5.1.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
