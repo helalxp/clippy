@@ -5,14 +5,32 @@ BeforeAll {
     $expectedCudaState = (Get-Content -LiteralPath (Join-Path $PSScriptRoot "fixtures/runtime-manifest-state-cuda.txt") -Raw).Trim()
 }
 
+Describe "PyTorch CUDA 12.8 hardware compatibility contract" {
+    It "rejects the CUDA driver immediately below the pinned minimum" {
+        (Test-ClippyCuda128Compatibility -DriverVersion ([Version]"570.64") -ComputeCapability 7.5) | Should -BeFalse
+    }
+    It "rejects Volta compute capability 7.0 with a current driver" {
+        (Test-ClippyCuda128Compatibility -DriverVersion ([Version]"570.65") -ComputeCapability 7.0) | Should -BeFalse
+    }
+    It "accepts Turing compute capability 7.5 at the minimum driver" {
+        (Test-ClippyCuda128Compatibility -DriverVersion ([Version]"570.65") -ComputeCapability 7.5) | Should -BeTrue
+    }
+    It "accepts newer supported architectures with a newer driver" {
+        (Test-ClippyCuda128Compatibility -DriverVersion ([Version]"610.88") -ComputeCapability 12.0) | Should -BeTrue
+    }
+    It "rejects non-finite compute capability values" {
+        (Test-ClippyCuda128Compatibility -DriverVersion ([Version]"610.88") -ComputeCapability ([double]::NaN)) | Should -BeFalse
+    }
+}
+
 Describe "PowerShell runtime manifest contract" {
     It "emits the exact state consumed by the Rust validator" {
-        $state = New-ClippyRuntimeState -PythonVersion "3.12.10" -PythonVariant "cpu" -NodeVersion "22.23.3" -FfmpegVersion "gyan-release-essentials" -BrowserVersion "4.0.0" -RequirementsSha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        $state = New-ClippyRuntimeState -PythonVersion "3.12.10" -PythonVariant "cpu" -NodeVersion "22.23.5" -FfmpegVersion "gyan-release-essentials" -BrowserVersion "4.0.0" -RequirementsSha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         $state | Should -Be $expectedState
     }
 
     It "emits the CUDA variant without changing the component schema" {
-        $state = New-ClippyRuntimeState -PythonVersion "3.12.10" -PythonVariant "cuda" -NodeVersion "22.23.3" -FfmpegVersion "gyan-release-essentials" -BrowserVersion "4.0.0" -RequirementsSha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        $state = New-ClippyRuntimeState -PythonVersion "3.12.10" -PythonVariant "cuda" -NodeVersion "22.23.5" -FfmpegVersion "gyan-release-essentials" -BrowserVersion "4.0.0" -RequirementsSha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         $state | Should -Be $expectedCudaState
     }
 

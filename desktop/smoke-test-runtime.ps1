@@ -309,6 +309,7 @@ $PSModuleAutoLoadingPreference = 'None'
     $pythonExe = Join-Path $root "runtime\python\python.exe"
     $nodeExe = Join-Path $root "runtime\node\node.exe"
     $ffmpegExe = Join-Path $root "runtime\ffmpeg\bin\ffmpeg.exe"
+    $ffprobeExe = Join-Path $root "runtime\ffmpeg\bin\ffprobe.exe"
     $browserExe = Join-Path $root "browser\headless-shell\chrome-headless-shell.exe"
     $manifestPath = Join-Path $root "runtime-manifest.json"
     Save-SmokeDiagnostics
@@ -329,6 +330,7 @@ $PSModuleAutoLoadingPreference = 'None'
         @{ path = $pythonExe; label = "managed Python" },
         @{ path = $nodeExe; label = "managed Node.js" },
         @{ path = $ffmpegExe; label = "managed FFmpeg" },
+        @{ path = $ffprobeExe; label = "managed FFprobe" },
         @{ path = $browserExe; label = "persistent Remotion browser" },
         @{ path = $manifestPath; label = "runtime manifest" }
     )) {
@@ -352,6 +354,11 @@ $PSModuleAutoLoadingPreference = 'None'
     if ($LASTEXITCODE -ne 0) { throw "Managed Node.js executable smoke test failed." }
     & $ffmpegExe -version *> $null
     if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg executable smoke test failed." }
+    & $ffprobeExe -version *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Managed FFprobe executable smoke test failed." }
+    if ([string]$installedManifest.components.node.version -ne "22.23.5") {
+        throw "Clean first-run setup installed an unexpected Node.js version: $($installedManifest.components.node.version)"
+    }
 
     Write-Host "Clean first-run runtime smoke test passed for Clippy $appVersion."
 } catch {

@@ -1,3 +1,21 @@
+function Test-ClippyCuda128Compatibility {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][Version]$DriverVersion,
+        [Parameter(Mandatory = $true)][double]$ComputeCapability
+    )
+
+    # PyTorch 2.11 CUDA 12.8 Windows wheels include Turing (SM 7.5) and newer
+    # architectures. Volta (SM 7.0) is not supported by this build.
+    if ($null -eq $DriverVersion -or $DriverVersion -lt [Version]"570.65") {
+        return $false
+    }
+    if ([double]::IsNaN($ComputeCapability) -or [double]::IsInfinity($ComputeCapability)) {
+        return $false
+    }
+    return ($ComputeCapability -ge 7.5)
+}
+
 function New-ClippyRuntimeState {
     [CmdletBinding()]
     param(

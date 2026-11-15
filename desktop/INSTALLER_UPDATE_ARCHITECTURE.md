@@ -20,11 +20,11 @@ Out of scope for this migration: accounts, billing, cloud authorization, and bra
 - `prepare-payload.ps1` stages Python source, requirements, assets, renderer output, Remotion source, and production Node dependencies into `app-payload.zip`.
 - The Tauri installer embeds that application payload and its SHA-256 file.
 - On first launch, `setup-runtime.ps1` downloads a release-published CPU or NVIDIA/CUDA 12.8 Python runtime archive. CUDA selection checks the minimum Windows driver and GPU compute capability before choosing the CUDA package. Windows CI assembles the archive from official CPython 3.12.10 and the pinned application requirements, then verifies imports and relocation before publishing it with a SHA-256 sidecar. Customer machines do not run pip or install Python packages individually.
-- Node 22.23.3 and FFmpeg essentials are provisioned by first-run setup and verified against publisher SHA-256 sidecars. The Remotion browser is stored outside replaceable app payloads, verified by Authenticode publisher and recorded SHA-256, then reused across app updates.
+- Node 22.23.5 and FFmpeg essentials are provisioned by first-run setup and verified against publisher SHA-256 sidecars. FFmpeg and FFprobe are both required and executed during validation. The Remotion browser is stored outside replaceable app payloads, verified by Authenticode publisher and recorded SHA-256, then reused across app updates.
 - The runtime is installed under `%LOCALAPPDATA%\Clippy\runtime`; application payload is extracted under `%LOCALAPPDATA%\Clippy\app\current`.
 - The current release notes describe a manual installer update. There is no configured Tauri updater in the inspected Tauri configuration.
-- The installer payload hash detects accidental corruption. Public release automation now refuses to publish an unsigned NSIS installer; it requires the configured Authenticode certificate secrets. This is still separate from the future signed component-manifest updater.
-- The setup script selects the prebuilt CUDA 12.8 archive only when the NVIDIA driver is at least 570.65 and compute capability is at least 7.0; otherwise it selects the CPU archive. Both runtime variants are built independently and checked for package imports, relocation, and required CUDA DLLs. The installed CUDA path is smoke-tested with a real PyTorch kernel and CTranslate2 device enumeration.
+- The installer payload hash detects accidental corruption. Authenticode signing is currently optional in release automation: when a signing certificate is configured, CI signs and verifies the installer; otherwise CI warns and publishes an unsigned installer. A signed installer is strongly recommended for public distribution. This is still separate from the future signed component-manifest updater.
+- The setup script selects the prebuilt CUDA 12.8 archive only when the NVIDIA driver is at least 570.65 and compute capability is at least 7.5 (Turing or newer); otherwise it selects the CPU archive. Both runtime variants are built independently and checked for package imports, relocation, and required CUDA DLLs. The installed CUDA path is smoke-tested with a real PyTorch kernel and CTranslate2 device enumeration. The Rust bootstrap also rejects a runtime manifest whose gpuMode disagrees with its Python variant.
 
 ## Target installation layout
 
@@ -77,7 +77,7 @@ GPU packaging decision:
 - Do not silently fall back from CUDA to CPU after a CUDA package or GPU initialization failure. Surface a clear diagnostic and make any fallback an explicit supported recovery path.
 - Do not bundle NVIDIA display drivers. The customer must have a compatible vendor driver.
 
-The build must pin all dependency versions and record the source URL, version, architecture, SHA-256, and license for each redistributable component. Generate an SBOM and retain build provenance with each release.
+The build must pin all dependency versions and record the source URL, version, architecture, SHA-256, and license for each redistributable component. Python 3.12.10 remains a documented exception: 3.12.16 is the newer source-only security release and is not available as an official Windows embeddable binary. Generate an SBOM and retain build provenance with each release.
 
 ## Update architecture
 

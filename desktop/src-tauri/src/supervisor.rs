@@ -246,6 +246,7 @@ impl RuntimePaths {
             (&self.python, "Managed Python runtime"),
             (&self.node, "Managed Node.js runtime"),
             (&self.ffmpeg.join("ffmpeg.exe"), "Managed FFmpeg runtime"),
+            (&self.ffmpeg.join("ffprobe.exe"), "Managed FFprobe runtime"),
             (&self.bgutil_script, "YouTube PO-token provider script"),
             (&self.browser_executable, "Persistent Remotion browser"),
             (&self.root.join("app.py"), "Clippy backend payload (app.py)"),

@@ -9,6 +9,52 @@ permissions:
   contents: write
 
 jobs:
+  powershell-preflight:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Parse installer and test scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scripts = @(
+            "./desktop/build.ps1",
+            "./desktop/build-python-runtime.ps1",
+            "./desktop/prepare-payload.ps1",
+            "./desktop/setup-runtime.ps1",
+            "./desktop/smoke-test-runtime.ps1",
+            "./desktop/runtime-archive.ps1",
+            "./desktop/runtime-manifest-state.ps1",
+            "./desktop/validate-runtime-assets.ps1",
+            "./desktop/validate-version.ps1",
+            "./dashboard/build-desktop.ps1"
+          ) + @(Get-ChildItem "./desktop/tests" -Filter "*.Tests.ps1" -File | ForEach-Object { $_.FullName })
+
+          foreach ($path in $scripts) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "PowerShell preflight script was not found: $path"
+            }
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path -LiteralPath $path).Path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if (@($parseErrors).Count -gt 0) {
+              $details = @($parseErrors | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }) -join [Environment]::NewLine
+              throw ("Windows PowerShell 5.1 could not parse " + $path + ":" + [Environment]::NewLine + $details)
+            }
+            Write-Host "Windows PowerShell 5.1 parse OK: $path"
+          }
+
+      - name: Run runtime helper unit contracts before package builds
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0 -Force
+          Invoke-Pester -Path @(
+            "./desktop/tests/RuntimeArchive.Tests.ps1",
+            "./desktop/tests/RuntimeManifestState.Tests.ps1"
+          ) -CI
+
   validate:
     runs-on: ubuntu-24.04
     steps:
@@ -38,6 +84,7 @@ jobs:
 
 
   build-python-runtimes:
+    needs: [powershell-preflight]
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
@@ -70,7 +117,7 @@ jobs:
           retention-days: 2
 
   build-and-publish:
-    needs: [validate, build-python-runtimes]
+    needs: [validate, powershell-preflight, build-python-runtimes]
     runs-on: windows-latest
     timeout-minutes: 60
     steps:

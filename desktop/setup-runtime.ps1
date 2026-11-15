@@ -104,14 +104,8 @@ if ($NvidiaSmiPath) {
             if ([double]::TryParse($NvidiaFields[2].Trim(), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$ParsedComputeCapability)) {
                 $NvidiaComputeCapability = $ParsedComputeCapability
             }
-            # CUDA 12.8 GA requires Windows driver 570.65. The packaged
-            # PyTorch CUDA runtime targets Volta/Turing-era and newer devices;
-            # Blackwell is supported by cu128. Unsupported/unknown devices use
-            # the CPU runtime instead of failing during the first CUDA kernel.
-            if ($NvidiaDriverVersion -and $NvidiaDriverVersion -ge [Version]"570.65" -and
-                $null -ne $NvidiaComputeCapability -and $NvidiaComputeCapability -ge 7.0) {
-                $TorchVariant = "cuda"
-            }
+            # Decide after loading the shared compatibility helper. PyTorch 2.11
+            # CUDA 12.8 supports Turing (SM 7.5) and newer, not Volta (SM 7.0).
         }
     }
 }
@@ -119,7 +113,7 @@ if ($NvidiaSmiPath) {
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
-$NodeVersion = "22.23.3"
+$NodeVersion = "22.23.5"
 $NodeArchiveName = "node-v$NodeVersion-win-x64.zip"
 $NodeArchiveUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName"
 $NodeChecksumsUrl = "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt"
@@ -161,12 +155,11 @@ Write-Stage ("Process LOCALAPPDATA: " + $env:LOCALAPPDATA)
 Write-Stage ("Resolved Clippy root: " + $Root)
 Write-Stage ("Resolved application payload: " + $App)
 Write-Stage ("Resolved runtime directory: " + $Runtime)
-Write-Stage ("Resolved Python executable: " + (Join-Path $PythonDir "python.exe"))
+Write-Stage ("Resolved Python executable: " + [System.IO.Path]::Combine($PythonDir, "python.exe"))
 Write-Stage ("Resolved setup log: " + $SetupLogPath)
 if (-not [string]::IsNullOrWhiteSpace($env:CLIPPY_SMOKE_DIAGNOSTICS_PATH)) {
     Write-Stage ("Smoke-test child context log: " + $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH)
 }
-Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 if ($ForceCpuRuntime) {
     Write-Stage "CPU runtime selection was explicitly forced by CLIPPY_FORCE_CPU_RUNTIME=1."
 }
@@ -194,12 +187,20 @@ Write-Stage ("Loaded built-in PowerShell utility and security modules from " + $
 
 . (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
 . (Join-Path $PSScriptRoot "runtime-archive.ps1")
+if ($NvidiaDriverVersion -and $null -ne $NvidiaComputeCapability -and
+    (Test-ClippyCuda128Compatibility -DriverVersion $NvidiaDriverVersion -ComputeCapability $NvidiaComputeCapability)) {
+    $TorchVariant = "cuda"
+}
 if ($NvidiaGpuName) {
     Write-Stage ("Detected NVIDIA GPU: " + $NvidiaGpuName + "; driver " + $NvidiaDriverVersion + "; compute capability " + $NvidiaComputeCapability)
-    if ($TorchVariant -eq "cpu") {
-        Write-Stage "NVIDIA driver or compute capability is not supported by the packaged CUDA 12.8 runtime; using the CPU runtime."
+    if ($TorchVariant -eq "cuda") {
+        Write-Stage "NVIDIA GPU meets the PyTorch 2.11 CUDA 12.8 compatibility requirements."
+    } else {
+        Write-Stage "NVIDIA GPU does not meet the driver/architecture requirements for the packaged PyTorch 2.11 CUDA 12.8 runtime; using the CPU runtime."
     }
 }
+$ExpectedGpuMode = if ($TorchVariant -eq "cuda") { "cuda128" } else { "cpu" }
+Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 
 function Download-File([string]$Url, [string]$Destination) {
     if (Test-Path -LiteralPath $Destination -PathType Leaf) {
@@ -474,10 +475,12 @@ if (Test-Path $ManifestPath) {
         $PythonExe = Join-Path $PythonDir "python.exe"
         $NodeExe = Join-Path $NodeDir "node.exe"
         $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+        $FfprobeExe = Join-Path $FfmpegDir "ffprobe.exe"
         $RuntimeFilesPresent =
             (Test-Path -LiteralPath $PythonExe -PathType Leaf) -and
             (Test-Path -LiteralPath $NodeExe -PathType Leaf) -and
             (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) -and
+            (Test-Path -LiteralPath $FfprobeExe -PathType Leaf) -and
             (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -and
             (Test-Path -LiteralPath $BrowserVersionFile -PathType Leaf) -and
             ((Get-Content -LiteralPath $BrowserVersionFile -Raw).Trim() -eq $RemotionVersion)
@@ -493,6 +496,7 @@ if (Test-Path $ManifestPath) {
             ($Existing.components.node.version -eq $NodeVersion) -and
             ($Existing.components.ffmpeg.version -eq "gyan-release-essentials") -and
             ($Existing.components.browser.version -eq $RemotionVersion) -and
+            ($Existing.gpuMode -eq $ExpectedGpuMode) -and
             ($Existing.requirementsSha256 -eq $RequirementsHash) -and
             ($Existing.browserSha256 -match "^[a-fA-F0-9]{64}$") -and
             ($Existing.browserSha256 -eq (Get-ClippyFileSha256 -Path $BrowserExecutable))
@@ -504,6 +508,8 @@ if (Test-Path $ManifestPath) {
             $NodeVersionHealthy = ($LASTEXITCODE -eq 0 -and $NodeVersionOutput.TrimStart('v') -eq $NodeVersion)
             & $FfmpegExe -version *> $null
             $FfmpegHealthy = ($LASTEXITCODE -eq 0)
+            & $FfprobeExe -version *> $null
+            $FfprobeHealthy = ($LASTEXITCODE -eq 0)
             $PythonHealthy = $false
             $NodeHealthy = $false
             $CudaDllDirectories = @()
@@ -549,7 +555,7 @@ if (Test-Path $ManifestPath) {
             } finally {
                 Pop-Location
             }
-            if ($PythonHealthy -and $NodeHealthy -and $FfmpegHealthy) {
+            if ($PythonHealthy -and $NodeHealthy -and $FfmpegHealthy -and $FfprobeHealthy) {
                 Write-Stage "Managed runtimes and application dependencies are healthy. No downloads needed."
                 Remove-ClippyScratchRoot
                 exit 0
@@ -879,13 +885,17 @@ if ($NodeActivationPending) { Complete-ClippyManagedDirectoryInstall -Backup $No
 # the publisher's SHA-256 sidecar before extraction. Install to a sibling staging
 # directory so an interrupted repair never removes the previous working runtime.
 $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+$FfprobeExe = Join-Path $FfmpegDir "ffprobe.exe"
 $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
 $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
 $FfmpegActivationPending = $false
 $ExistingFfmpegHealthy = $false
-if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
+if ((Test-Path -LiteralPath $FfmpegExe -PathType Leaf) -and
+    (Test-Path -LiteralPath $FfprobeExe -PathType Leaf)) {
     & $FfmpegExe -version *> $null
-    $ExistingFfmpegHealthy = ($LASTEXITCODE -eq 0)
+    $FfmpegExitCode = $LASTEXITCODE
+    & $FfprobeExe -version *> $null
+    $ExistingFfmpegHealthy = ($FfmpegExitCode -eq 0 -and $LASTEXITCODE -eq 0)
 }
 if (-not $ExistingFfmpegHealthy) {
     Write-Stage "Managed FFmpeg runtime is missing or unhealthy; staging a verified replacement."
@@ -919,19 +929,27 @@ if (-not $ExistingFfmpegHealthy) {
     New-Item -ItemType Directory -Path $StagedFfmpegDir -Force | Out-Null
     Copy-Item (Join-Path $FfmpegBinary.Directory.FullName "*") -Destination $StagedFfmpegDir -Recurse -Force
     $StagedFfmpegExe = Join-Path $StagedFfmpegDir "ffmpeg.exe"
+    $StagedFfprobeExe = Join-Path $StagedFfmpegDir "ffprobe.exe"
+    if (-not (Test-Path -LiteralPath $StagedFfprobeExe -PathType Leaf)) {
+        throw "FFmpeg essentials archive did not contain the required ffprobe.exe executable."
+    }
     & $StagedFfmpegExe -version *> $null
     if ($LASTEXITCODE -ne 0) { throw "Staged FFmpeg runtime failed its version check." }
+    & $StagedFfprobeExe -version *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Staged FFprobe runtime failed its version check." }
 
     Publish-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Staging $FfmpegStage -Backup $FfmpegBackup -MarkerValue "gyan-release-essentials"
     $FfmpegActivationPending = $true
     Remove-Item $Extract -Recurse -Force
 }
 & $FfmpegExe -version *> $null
-if ($LASTEXITCODE -ne 0) {
+$FfmpegExitCode = $LASTEXITCODE
+& $FfprobeExe -version *> $null
+if ($FfmpegExitCode -ne 0 -or $LASTEXITCODE -ne 0) {
     if ($FfmpegActivationPending) {
         Rollback-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Backup $FfmpegBackup
     }
-    throw "Managed FFmpeg runtime failed its version check."
+    throw "Managed FFmpeg/FFprobe runtime failed its version check."
 }
 if ($FfmpegActivationPending) { Complete-ClippyManagedDirectoryInstall -Backup $FfmpegBackup }
 
@@ -1068,7 +1086,7 @@ $Manifest = @{
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
     requirementsSha256 = $RequirementsHash
     browserSha256 = $BrowserSha256
-    gpuMode = if ($TorchVariant -eq "cuda") { "cuda128" } else { "cpu" }
+    gpuMode = $ExpectedGpuMode
 }
 $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
 # Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
@@ -1081,6 +1099,7 @@ foreach ($RequiredInstalledFile in @(
     (Join-Path $PythonDir "python.exe"),
     (Join-Path $NodeDir "node.exe"),
     (Join-Path $FfmpegDir "ffmpeg.exe"),
+    (Join-Path $FfmpegDir "ffprobe.exe"),
     $BrowserExecutable,
     $ManifestPath
 )) {
@@ -1088,7 +1107,11 @@ foreach ($RequiredInstalledFile in @(
         throw "Runtime setup reached finalization but a required installed file is missing: $RequiredInstalledFile"
     }
 }
-Write-Stage ("Final runtime file validation passed for " + $Root)
+& (Join-Path $FfmpegDir "ffprobe.exe") -version *> $null
+if ($LASTEXITCODE -ne 0) {
+    throw "Final FFprobe executable validation failed."
+}
+Write-Stage ("Final runtime file validation passed for " + $Root + " (Python, Node.js, FFmpeg, FFprobe, browser, and manifest).")
 
 # Remove the multi-gigabyte Python archive and release parts only after the
 # complete runtime setup has succeeded. If setup fails earlier, verified parts

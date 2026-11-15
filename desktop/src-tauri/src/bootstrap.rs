@@ -26,6 +26,7 @@ pub struct RuntimeManifest {
     pub requirements_sha256: String,
     #[serde(default)]
     pub browser_sha256: Option<String>,
+    pub gpu_mode: String,
     pub components: std::collections::HashMap<String, RuntimeComponent>,
 }
 
@@ -53,6 +54,20 @@ pub struct Bootstrap {
 /// Parse the PowerShell-generated manifest state without relying on key order.
 /// Unknown keys are tolerated for forward-compatible optional metadata, while
 /// duplicate, empty, or malformed keys are rejected.
+fn validate_runtime_gpu_mode(variant: &str, gpu_mode: &str) -> Result<(), String> {
+    let expected = match variant {
+        "cpu" => "cpu",
+        "cuda" => "cuda128",
+        other => return Err(format!("Unsupported Python runtime variant '{other}'")),
+    };
+    if gpu_mode != expected {
+        return Err(format!(
+            "Runtime manifest gpuMode '{gpu_mode}' does not match Python runtime variant '{variant}' (expected '{expected}')"
+        ));
+    }
+    Ok(())
+}
+
 fn parse_manifest_state(state: &str) -> Result<std::collections::HashMap<String, String>, String> {
     let mut fields = std::collections::HashMap::new();
     for segment in state.split(';') {
@@ -84,8 +99,14 @@ impl Bootstrap {
             .join("ffmpeg")
             .join("bin")
             .join("ffmpeg.exe");
+        let ffprobe_exe = self
+            .config
+            .runtime_root
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffprobe.exe");
 
-        Ok(python_exe.exists() && node_exe.exists() && ffmpeg_exe.exists())
+        Ok(python_exe.exists() && node_exe.exists() && ffmpeg_exe.exists() && ffprobe_exe.exists())
     }
 
     /// Return all missing or unhealthy components as repairable issues.
@@ -103,11 +124,18 @@ impl Bootstrap {
             .join("ffmpeg")
             .join("bin")
             .join("ffmpeg.exe");
+        let ffprobe_exe = self
+            .config
+            .runtime_root
+            .join("ffmpeg")
+            .join("bin")
+            .join("ffprobe.exe");
 
         for (path, label, args) in [
             (&python_exe, "Python runtime", &["--version"][..]),
             (&node_exe, "Node.js runtime", &["--version"][..]),
             (&ffmpeg_exe, "FFmpeg runtime", &["-version"][..]),
+            (&ffprobe_exe, "FFprobe runtime", &["-version"][..]),
         ] {
             if !path.is_file() {
                 issues.push(format!("{label} not found: {}", path.display()));
@@ -226,9 +254,7 @@ impl Bootstrap {
                 }
                 let variant = state.get("pythonVariant")
                     .ok_or_else(|| "Runtime manifest state is missing required field 'pythonVariant'".to_string())?;
-                if variant != "cpu" && variant != "cuda" {
-                    return Err(format!("Unsupported Python runtime variant '{variant}'"));
-                }
+                validate_runtime_gpu_mode(variant, &manifest.gpu_mode)?;
                 Ok(())
             });
 
@@ -355,7 +381,7 @@ mod manifest_state_tests {
         let parsed = parse_manifest_state(include_str!("../../tests/fixtures/runtime-manifest-state.txt").trim()).unwrap();
         assert_eq!(parsed.get("python").unwrap(), "3.12.10");
         assert_eq!(parsed.get("pythonVariant").unwrap(), "cpu");
-        assert_eq!(parsed.get("node").unwrap(), "22.23.3");
+        assert_eq!(parsed.get("node").unwrap(), "22.23.5");
         assert_eq!(parsed.get("ffmpeg").unwrap(), "gyan-release-essentials");
         assert_eq!(parsed.get("requirements").unwrap(), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     }
@@ -374,6 +400,15 @@ mod manifest_state_tests {
     }
 
     #[test]
+    fn runtime_manifest_gpu_mode_must_match_the_installed_python_variant() {
+        assert!(validate_runtime_gpu_mode("cpu", "cpu").is_ok());
+        assert!(validate_runtime_gpu_mode("cuda", "cuda128").is_ok());
+        assert!(validate_runtime_gpu_mode("cpu", "cuda128").is_err());
+        assert!(validate_runtime_gpu_mode("cuda", "cpu").is_err());
+        assert!(validate_runtime_gpu_mode("volta", "cuda128").is_err());
+    }
+
+    #[test]
     fn damaged_runtime_executables_are_reported_as_repairable_issues() {
         let root = temp_root("bootstrap-repair");
         let python = root.join("python");
@@ -386,6 +421,7 @@ mod manifest_state_tests {
             python.join("python.exe"),
             node.join("node.exe"),
             ffmpeg.join("ffmpeg.exe"),
+            ffmpeg.join("ffprobe.exe"),
         ] {
             fs::write(path, b"not a valid executable").unwrap();
         }
@@ -395,7 +431,7 @@ mod manifest_state_tests {
             manifest_path: root.join("runtime-manifest.json"),
         });
         let issues = bootstrap.validate_components();
-        assert_eq!(issues.len(), 3, "all broken executables must be collected: {issues:?}");
+        assert_eq!(issues.len(), 4, "all broken executables must be collected: {issues:?}");
         assert!(issues.iter().all(|issue| issue.contains("must be repaired")));
 
         // The public status path must return a repair-needed status instead of

@@ -38,7 +38,7 @@ publishes each archive with a SHA-256 sidecar. First-run setup selects the
 variant from the detected NVIDIA driver, downloads and verifies the archive,
 extracts it into a staging directory, checks the interpreter and critical
 imports, and only then activates it. Customer machines do not run pip or
-bootstrap Python packages. Node.js 22.23.3 and FFmpeg essentials are provisioned as private runtimes and verified against publisher SHA-256 sidecars;
+bootstrap Python packages. Node.js 22.23.5 and FFmpeg essentials are provisioned as private runtimes and verified against publisher SHA-256 sidecars;
 Remotion still performs its browser setup during first run. The runtime state
 manifest is written only after all required components pass verification.
 
