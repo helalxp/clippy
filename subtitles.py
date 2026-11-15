@@ -63,10 +63,10 @@ def _whisper_runtime_has_cuda():
 
 def _whisper_cuda_available():
     """Require both a CUDA-enabled installed runtime and a visible GPU."""
-    # The CPU runtime ships CPU-only PyTorch wheels. Do not let a generally
-    # GPU-capable CTranslate2 wheel try CUDA when Clippy deliberately installed
-    # the CPU runtime because the device/driver was unsupported.
-    if _whisper_runtime_has_cuda() is False:
+    # Only a native Clippy desktop install with an explicit CUDA runtime
+    # manifest may auto-select CUDA. Docker/server deployments retain their
+    # historical CPU default unless WHISPER_DEVICE=cuda is set explicitly.
+    if _whisper_runtime_has_cuda() is not True:
         return False
     try:
         import ctranslate2
