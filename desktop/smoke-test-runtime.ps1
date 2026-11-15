@@ -31,9 +31,14 @@ function Assert-Sha256([string]$Path, [string]$ChecksumPath, [string]$Label) {
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $originalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
+if ([string]::IsNullOrWhiteSpace($originalLocalAppData)) {
+    throw "The first-run smoke test requires the Windows LOCALAPPDATA environment variable."
+}
 $tempBase = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $smokeRoot = Join-Path $tempBase ("clippy-first-run-smoke-" + [guid]::NewGuid().ToString("N"))
-$smokeLocalAppData = Join-Path $smokeRoot "LocalAppData"
+# Keep the managed runtime on the normal per-user app-data volume while the
+# setup script independently selects the roomiest fixed volume for scratch.
+$smokeLocalAppData = Join-Path $originalLocalAppData ("ClippySmoke-" + [guid]::NewGuid().ToString("N"))
 $setupStdout = Join-Path $smokeRoot "setup.stdout.log"
 $setupStderr = Join-Path $smokeRoot "setup.stderr.log"
 $setupLog = Join-Path $smokeLocalAppData "Clippy\logs\runtime-setup.log"
