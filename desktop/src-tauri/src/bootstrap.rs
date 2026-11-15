@@ -51,9 +51,7 @@ pub struct Bootstrap {
     config: BootstrapConfig,
 }
 
-/// Parse the PowerShell-generated manifest state without relying on key order.
-/// Unknown keys are tolerated for forward-compatible optional metadata, while
-/// duplicate, empty, or malformed keys are rejected.
+// Ensure the CPU/CUDA capability marker agrees with the installed Python variant.
 fn validate_runtime_gpu_mode(variant: &str, gpu_mode: &str) -> Result<(), String> {
     let expected = match variant {
         "cpu" => "cpu",
@@ -68,6 +66,9 @@ fn validate_runtime_gpu_mode(variant: &str, gpu_mode: &str) -> Result<(), String
     Ok(())
 }
 
+/// Parse the PowerShell-generated manifest state without relying on key order.
+/// Unknown keys are tolerated for forward-compatible optional metadata, while
+/// duplicate, empty, or malformed keys are rejected.
 fn parse_manifest_state(state: &str) -> Result<std::collections::HashMap<String, String>, String> {
     let mut fields = std::collections::HashMap::new();
     for segment in state.split(';') {
