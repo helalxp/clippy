@@ -141,6 +141,7 @@ trap {
 }
 
 Write-Stage "Runtime setup engine started."
+Write-Stage ("PowerShell host version: " + $PSVersionTable.PSVersion + "; PSHOME: " + $PSHOME)
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 if ($ForceCpuRuntime) {
     Write-Stage "CPU runtime selection was explicitly forced by CLIPPY_FORCE_CPU_RUNTIME=1."
@@ -158,7 +159,7 @@ foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
 # Import built-in modules by absolute manifest path. The parent app may have been
 # launched from PowerShell 7 or another host with a restricted PSModulePath, and
 # -NoProfile deliberately prevents relying on a user's module-loading profile.
-foreach ($ModuleName in @("Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security")) {
+foreach ($ModuleName in @("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security")) {
     $ModuleManifest = Join-Path (Join-Path $WindowsPowerShellModulePath $ModuleName) ($ModuleName + ".psd1")
     if (-not (Test-Path -LiteralPath $ModuleManifest -PathType Leaf)) {
         throw "Required Windows PowerShell module is missing: $ModuleManifest"
