@@ -88,8 +88,13 @@ impl Bootstrap {
         Ok(python_exe.exists() && node_exe.exists() && ffmpeg_exe.exists())
     }
 
-    pub fn validate_components(&self) -> Result<Vec<String>, String> {
-        let mut missing = Vec::new();
+    /// Return all missing or unhealthy components as repairable issues.
+    ///
+    /// A damaged executable is a reason to run setup again, not a reason for
+    /// the status command itself to fail. The desktop gate relies on receiving
+    /// a status object with `error` populated so it can invoke setup_runtime.
+    pub fn validate_components(&self) -> Vec<String> {
+        let mut issues = Vec::new();
         let python_exe = self.config.runtime_root.join("python").join("python.exe");
         let node_exe = self.config.runtime_root.join("node").join("node.exe");
         let ffmpeg_exe = self
@@ -99,25 +104,19 @@ impl Bootstrap {
             .join("bin")
             .join("ffmpeg.exe");
 
-        if !python_exe.exists() {
-            missing.push("Python runtime not found".to_string());
-        } else {
-            Self::test_executable(&python_exe, &["--version"])?;
+        for (path, label, args) in [
+            (&python_exe, "Python runtime", &["--version"][..]),
+            (&node_exe, "Node.js runtime", &["--version"][..]),
+            (&ffmpeg_exe, "FFmpeg runtime", &["-version"][..]),
+        ] {
+            if !path.is_file() {
+                issues.push(format!("{label} not found: {}", path.display()));
+            } else if let Err(error) = Self::test_executable(path, args) {
+                issues.push(format!("{label} is not executable and must be repaired: {error}"));
+            }
         }
 
-        if !node_exe.exists() {
-            missing.push("Node.js runtime not found".to_string());
-        } else {
-            Self::test_executable(&node_exe, &["--version"])?;
-        }
-
-        if !ffmpeg_exe.exists() {
-            missing.push("FFmpeg not found".to_string());
-        } else {
-            Self::test_executable(&ffmpeg_exe, &["-version"])?;
-        }
-
-        Ok(missing)
+        issues
     }
 
     fn test_executable(exe: &Path, args: &[&str]) -> Result<(), String> {
@@ -151,7 +150,7 @@ impl Bootstrap {
     }
 
     pub fn get_status(&self) -> Result<BootstrapStatus, String> {
-        let mut issues = self.validate_components()?;
+        let mut issues = self.validate_components();
         let manifest_path = &self.config.manifest_path;
         let app_root = manifest_path.parent().unwrap_or_else(|| Path::new(".")).join("app").join("current");
         let requirements_path = app_root.join("requirements.txt");
@@ -343,7 +342,13 @@ impl Bootstrap {
 
 #[cfg(test)]
 mod manifest_state_tests {
-    use super::parse_manifest_state;
+    use super::{parse_manifest_state, Bootstrap, BootstrapConfig};
+    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        std::env::temp_dir().join(format!("clippy-{label}-{}-{nonce}", std::process::id()))
+    }
 
     #[test]
     fn accepts_power_shell_generated_cpu_manifest_state() {
@@ -366,5 +371,39 @@ mod manifest_state_tests {
         assert!(parse_manifest_state("python=3.12;python=3.13").is_err());
         assert!(parse_manifest_state("python=3.12;broken").is_err());
         assert!(parse_manifest_state("python=").is_err());
+    }
+
+    #[test]
+    fn damaged_runtime_executables_are_reported_as_repairable_issues() {
+        let root = temp_root("bootstrap-repair");
+        let python = root.join("python");
+        let node = root.join("node");
+        let ffmpeg = root.join("ffmpeg").join("bin");
+        fs::create_dir_all(&python).unwrap();
+        fs::create_dir_all(&node).unwrap();
+        fs::create_dir_all(&ffmpeg).unwrap();
+        for path in [
+            python.join("python.exe"),
+            node.join("node.exe"),
+            ffmpeg.join("ffmpeg.exe"),
+        ] {
+            fs::write(path, b"not a valid executable").unwrap();
+        }
+
+        let bootstrap = Bootstrap::new(BootstrapConfig {
+            runtime_root: root.clone(),
+            manifest_path: root.join("runtime-manifest.json"),
+        });
+        let issues = bootstrap.validate_components();
+        assert_eq!(issues.len(), 3, "all broken executables must be collected: {issues:?}");
+        assert!(issues.iter().all(|issue| issue.contains("must be repaired")));
+
+        // The public status path must return a repair-needed status instead of
+        // propagating the executable-launch error to Tauri as a failed command.
+        let status = bootstrap.get_status().unwrap();
+        assert!(status.error.is_some());
+        assert!(status.message.contains("Runtime validation needs attention"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

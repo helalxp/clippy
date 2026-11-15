@@ -1,6 +1,4 @@
 $ErrorActionPreference = "Stop"
-. (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
-. (Join-Path $PSScriptRoot "runtime-archive.ps1")
 $ProgressPreference = "SilentlyContinue" # Avoid the extremely slow per-byte progress UI in Windows PowerShell 5.1.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -36,13 +34,16 @@ $BrowserExecutable = Join-Path $BrowserDir "chrome-headless-shell.exe"
 $BrowserVersionFile = Join-Path $BrowserRoot "remotion-version.txt"
 $LogDir = Join-Path $Root "logs"
 $SetupLogPath = Join-Path $LogDir "runtime-setup.log"
+$script:ScratchRoot = $null
 
 $PythonVersion = "3.12.10"
 $TorchVariant = "cpu"
 $NvidiaDriverVersion = $null
 $NvidiaGpuName = $null
 $NvidiaComputeCapability = $null
-$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+$ForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME -eq "1"
+if (-not $ForceCpuRuntime) {
+    $Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $NvidiaSmiPath = if ($Nvidia) { $Nvidia.Source } else { $null }
 if (-not $NvidiaSmiPath) {
     $NvidiaCandidates = @(
@@ -75,6 +76,7 @@ if ($NvidiaSmiPath) {
         }
     }
 }
+}
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
@@ -94,6 +96,14 @@ function Write-Stage([string]$Message) {
     try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false)) } catch { }
 }
 
+function Remove-ClippyScratchRoot {
+    $scratch = $script:ScratchRoot
+    if (-not [string]::IsNullOrWhiteSpace($scratch) -and (Test-Path -LiteralPath $scratch -PathType Container)) {
+        Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $script:ScratchRoot = $null
+}
+
 trap {
     $Failure = $_
     try {
@@ -101,11 +111,27 @@ trap {
         Write-Stage ("Failure location: " + $Failure.InvocationInfo.PositionMessage)
         Write-Stage ("Diagnostic log: " + $SetupLogPath)
     } catch { }
+    try { Remove-ClippyScratchRoot } catch { }
     exit 1
 }
 
 Write-Stage "Runtime setup engine started."
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
+if ($ForceCpuRuntime) {
+    Write-Stage "CPU runtime selection was explicitly forced by CLIPPY_FORCE_CPU_RUNTIME=1."
+}
+
+# Load script dependencies only after logging and the failure trap are active.
+# This turns missing packaged helpers into a useful diagnostic instead of an
+# early PowerShell dot-source failure with no Clippy setup context.
+foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
+    $HelperPath = Join-Path $PSScriptRoot $Helper
+    if (-not (Test-Path -LiteralPath $HelperPath -PathType Leaf)) {
+        throw "Application payload is incomplete. Missing required runtime helper: $HelperPath"
+    }
+}
+. (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
+. (Join-Path $PSScriptRoot "runtime-archive.ps1")
 if ($NvidiaGpuName) {
     Write-Stage ("Detected NVIDIA GPU: " + $NvidiaGpuName + "; driver " + $NvidiaDriverVersion + "; compute capability " + $NvidiaComputeCapability)
     if ($TorchVariant -eq "cpu") {
@@ -290,13 +316,13 @@ $ScratchPrefix = "ClippySetupTemp-" + $env:USERNAME + "-"
 Get-ChildItem -LiteralPath $ScratchDrive.RootDirectory.FullName -Directory -Filter "$ScratchPrefix*" -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-24) } |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-$ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ($ScratchPrefix + $PID + "-" + [guid]::NewGuid().ToString("N"))
+$script:ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ($ScratchPrefix + $PID + "-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 $env:TEMP = $ScratchRoot
 $env:TMP = $ScratchRoot
 $env:PIP_CACHE_DIR = Join-Path $ScratchRoot "pip-cache"
 Write-Stage ("Using " + $ScratchRoot + " for temporary setup files; managed runtimes remain in " + $Root)
-foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "VERSION")) {
+foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "runtime-manifest-state.ps1", "VERSION", "bgutil-provider\server\build\generate_once.js")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
     }
@@ -393,6 +419,7 @@ if (Test-Path $ManifestPath) {
             }
             if ($PythonHealthy -and $NodeHealthy -and $FfmpegHealthy) {
                 Write-Stage "Managed runtimes and application dependencies are healthy. No downloads needed."
+                Remove-ClippyScratchRoot
                 exit 0
             }
             Write-Stage "A runtime health check failed; repairing dependencies."
@@ -446,7 +473,7 @@ if (-not $VcRuntimeInstalled) {
 
 # Select a prebuilt, tested Python runtime. Customer machines never run pip.
 $AppVersion = (Get-Content -LiteralPath (Join-Path $App "VERSION") -Raw).Trim()
-if ($AppVersion -notmatch "^\d+\.\d+\.\d+$") { throw "Application VERSION file is missing or invalid." }
+if ($AppVersion -notmatch "^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$") { throw "Application VERSION file is missing or invalid." }
 
 $PythonRuntimeName = "clippy-python-$TorchVariant-$AppVersion.zip"
 $PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
@@ -781,5 +808,5 @@ if ([string]::IsNullOrWhiteSpace($LocalRuntimeArchive) -and $RuntimeManifest) {
         Remove-Item -LiteralPath (Join-Path $Downloads ([string]$Part.name)) -Force -ErrorAction SilentlyContinue
     }
 }
-try { Remove-Item $ScratchRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+Remove-ClippyScratchRoot
 Write-Stage "Runtime setup completed successfully."

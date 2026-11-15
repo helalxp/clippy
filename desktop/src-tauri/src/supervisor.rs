@@ -220,9 +220,10 @@ impl RuntimePaths {
         let local = env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .ok_or_else(|| "Windows LOCALAPPDATA directory is unavailable".to_string())?;
-        let root = env::var_os("CLIPPY_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| local.join("Clippy"));
+        // All installer, runtime-check, and setup paths are anchored to
+        // %LOCALAPPDATA%\\Clippy. Do not let a stray CLIPPY_HOME environment
+        // variable make the supervisor launch from a different installation.
+        let root = local.join("Clippy");
         let app = root.join("app").join("current");
         let runtime = root.join("runtime");
         // These executable paths are owned by the installation. Do not let
@@ -274,6 +275,16 @@ fn managed_child_path(paths: &RuntimePaths) -> Result<std::ffi::OsString, String
 
     if let Some(python_root) = paths.python.parent() {
         directories.push(python_root.to_path_buf());
+
+        // The Windows PyTorch wheel stores its CUDA runtime DLLs directly in
+        // torch\\lib. Setup validates CUDA kernels with this directory on PATH,
+        // so the supervised backend must receive the same DLL search location.
+        let torch_lib = python_root.join("Lib").join("site-packages").join("torch").join("lib");
+        if torch_lib.is_dir() {
+            directories.push(torch_lib);
+        }
+
+        // Some CUDA dependencies are installed as separate NVIDIA wheels.
         let nvidia_root = python_root.join("Lib").join("site-packages").join("nvidia");
         for relative in ["cublas\\bin", "cudnn\\bin", "cuda_runtime\\bin"] {
             let dll_dir = nvidia_root.join(relative);
@@ -520,5 +531,44 @@ fn stop_child(child: &mut Option<Child>) {
     if let Some(mut process) = child.take() {
         let _ = process.kill();
         let _ = process.wait();
+    }
+}
+
+
+#[cfg(test)]
+mod managed_path_tests {
+    use super::{managed_child_path, RuntimePaths};
+    use std::{env, fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+
+    #[test]
+    fn includes_the_windows_pytorch_cuda_dll_directory() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = env::temp_dir().join(format!("clippy-managed-path-{}-{nonce}", std::process::id()));
+        let python_root = root.join("runtime").join("python");
+        let torch_lib = python_root.join("Lib").join("site-packages").join("torch").join("lib");
+        fs::create_dir_all(&torch_lib).unwrap();
+
+        let paths = RuntimePaths {
+            root: root.join("app").join("current"),
+            python: python_root.join("python.exe"),
+            node: root.join("runtime").join("node").join("node.exe"),
+            ffmpeg: root.join("runtime").join("ffmpeg").join("bin"),
+            bgutil_script: PathBuf::from("bgutil-provider/server/build/generate_once.js"),
+            browser_executable: PathBuf::from("browser/headless-shell/chrome-headless-shell.exe"),
+            output: root.join("data").join("output"),
+            uploads: root.join("data").join("uploads"),
+            models: root.join("data").join("models"),
+            settings_file: root.join("settings.json"),
+            logs: root.join("logs"),
+        };
+
+        let path = managed_child_path(&paths).unwrap();
+        let entries: Vec<PathBuf> = env::split_paths(&path).collect();
+        assert!(
+            entries.iter().any(|entry| entry == &torch_lib),
+            "supervised PATH must include the CUDA DLL directory: {entries:?}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }
