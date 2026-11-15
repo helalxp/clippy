@@ -121,6 +121,15 @@ jobs:
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
 
+      # Exercise setup-runtime.ps1 itself against the packaged app ZIP and the
+      # CPU runtime built in this same release run, using an isolated LOCALAPPDATA.
+      # This catches bootstrap/download/dependency integration failures before
+      # an installer can be published.
+      - name: Smoke-test clean first-run runtime setup
+        shell: pwsh
+        timeout-minutes: 30
+        run: ./desktop/smoke-test-runtime.ps1
+
       - name: Run Rust unit and installer contract tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
