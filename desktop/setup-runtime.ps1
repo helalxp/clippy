@@ -38,26 +38,26 @@ $ConflictingEnvironmentVariables = @(
     "NPM_CONFIG_USERCONFIG"
 )
 foreach ($Name in $ConflictingEnvironmentVariables) {
-    Remove-Item -LiteralPath ("Env:" + $Name) -ErrorAction SilentlyContinue
+    [System.Environment]::SetEnvironmentVariable($Name, $null, [System.EnvironmentVariableTarget]::Process)
 }
 $env:PYTHONNOUSERSITE = "1"
 $env:PYTHONUTF8 = "1"
 
-$Root = Join-Path $env:LOCALAPPDATA "Clippy"
-$App = Join-Path $Root "app\current"
-$Runtime = Join-Path $Root "runtime"
-$Downloads = Join-Path $Root "downloads"
-$PythonDir = Join-Path $Runtime "python"
-$NodeDir = Join-Path $Runtime "node"
-$FfmpegDir = Join-Path $Runtime "ffmpeg\bin"
-$ManifestPath = Join-Path $Root "runtime-manifest.json"
+$Root = [System.IO.Path]::Combine($env:LOCALAPPDATA, "Clippy")
+$App = [System.IO.Path]::Combine($Root, "app", "current")
+$Runtime = [System.IO.Path]::Combine($Root, "runtime")
+$Downloads = [System.IO.Path]::Combine($Root, "downloads")
+$PythonDir = [System.IO.Path]::Combine($Runtime, "python")
+$NodeDir = [System.IO.Path]::Combine($Runtime, "node")
+$FfmpegDir = [System.IO.Path]::Combine($Runtime, "ffmpeg", "bin")
+$ManifestPath = [System.IO.Path]::Combine($Root, "runtime-manifest.json")
 # Browser binaries are durable user data, not part of app\current. Updating the
 # application payload must not force a multi-hundred-MB browser download.
-$BrowserRoot = Join-Path $Root "browser"
-$BrowserDir = Join-Path $BrowserRoot "headless-shell"
-$BrowserExecutable = Join-Path $BrowserDir "chrome-headless-shell.exe"
-$BrowserVersionFile = Join-Path $BrowserRoot "remotion-version.txt"
-$LogDir = Join-Path $Root "logs"
+$BrowserRoot = [System.IO.Path]::Combine($Root, "browser")
+$BrowserDir = [System.IO.Path]::Combine($BrowserRoot, "headless-shell")
+$BrowserExecutable = [System.IO.Path]::Combine($BrowserDir, "chrome-headless-shell.exe")
+$BrowserVersionFile = [System.IO.Path]::Combine($BrowserRoot, "remotion-version.txt")
+$LogDir = [System.IO.Path]::Combine($Root, "logs")
 $SetupLogPath = Join-Path $LogDir "runtime-setup.log"
 $script:ScratchRoot = $null
 
@@ -72,8 +72,8 @@ if (-not $ForceCpuRuntime) {
 $NvidiaSmiPath = if ($Nvidia) { $Nvidia.Source } else { $null }
 if (-not $NvidiaSmiPath) {
     $NvidiaCandidates = @(
-        (Join-Path $env:ProgramFiles "NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
-        (Join-Path $env:SystemRoot "System32\nvidia-smi.exe")
+        [System.IO.Path]::Combine($env:ProgramFiles, "NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+        [System.IO.Path]::Combine($env:SystemRoot, "System32\nvidia-smi.exe")
     )
     foreach ($Candidate in $NvidiaCandidates) {
         if ([System.IO.File]::Exists($Candidate)) {
@@ -166,8 +166,8 @@ foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
 # launched from PowerShell 7 or another host with a restricted PSModulePath, and
 # -NoProfile deliberately prevents relying on a user's module-loading profile.
 foreach ($ModuleName in @("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security")) {
-    $ModuleManifest = Join-Path (Join-Path $WindowsPowerShellModulePath $ModuleName) ($ModuleName + ".psd1")
-    if (-not (Test-Path -LiteralPath $ModuleManifest -PathType Leaf)) {
+    $ModuleManifest = [System.IO.Path]::Combine($WindowsPowerShellModulePath, $ModuleName, ($ModuleName + ".psd1"))
+    if (-not [System.IO.File]::Exists($ModuleManifest)) {
         throw "Required Windows PowerShell module is missing: $ModuleManifest"
     }
     Import-Module -Name $ModuleManifest -Force -ErrorAction Stop
