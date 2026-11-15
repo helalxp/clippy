@@ -16,12 +16,50 @@ _STDIO_CONFIGURED = False
 DEFAULT_WHISPER_MODEL = "small"
 
 
-def get_whisper_config():
-    """Return faster-whisper config, honoring explicit env overrides first.
+def _whisper_gpu_enabled():
+    """Return the saved Whisper GPU preference (enabled by default).
 
-    The desktop model picker stores a selected size or validated local model
-    directory in the per-user settings file. WHISPER_MODEL remains supported
-    for existing Docker/server deployments and takes precedence when set.
+    CLIPPY_SETTINGS_PATH is the full settings-file path supplied by the
+    desktop supervisor. LOCALAPPDATA is a fallback for standalone launches.
+    """
+    settings_path = os.environ.get("CLIPPY_SETTINGS_PATH")
+    if not settings_path:
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            settings_path = os.path.join(local_app_data, "Clippy", "settings.json")
+    if not settings_path:
+        return True
+
+    try:
+        import json
+        with open(settings_path, "r", encoding="utf-8") as settings_file:
+            settings = json.load(settings_file)
+        whisper_settings = settings.get("whisper", {}) if isinstance(settings, dict) else {}
+        if isinstance(whisper_settings, dict) and "gpu_mode" in whisper_settings:
+            return bool(whisper_settings["gpu_mode"])
+    except (OSError, ValueError, TypeError):
+        # A missing or malformed preference must not disable GPU acceleration.
+        pass
+    return True
+
+
+def _whisper_cuda_available():
+    """Ask CTranslate2 whether its CUDA runtime can see an NVIDIA device."""
+    try:
+        import ctranslate2
+        return int(ctranslate2.get_cuda_device_count()) > 0
+    except Exception:
+        # CPU-only runtime, missing driver, or unusable CUDA runtime.
+        return False
+
+
+def get_whisper_config():
+    """Return faster-whisper config, honoring explicit environment overrides.
+
+    When WHISPER_DEVICE is unset (or set to "auto"), use CUDA only when the
+    saved GPU preference is enabled and CTranslate2 can see a CUDA device.
+    Otherwise use CPU. This keeps CPU-only installations safe while making
+    supported desktop NVIDIA installations use the GPU by default.
     """
     configured_model = os.environ.get("WHISPER_MODEL")
     if configured_model:
@@ -35,12 +73,24 @@ def get_whisper_config():
             # A missing user-selected local model must be surfaced, never
             # silently replaced with the default model.
             model_size = whisper_model_argument()
+
+    configured_device = (os.environ.get("WHISPER_DEVICE") or "").strip()
+    if configured_device and configured_device.lower() != "auto":
+        device = configured_device
+    else:
+        device = "cuda" if _whisper_gpu_enabled() and _whisper_cuda_available() else "cpu"
+
+    configured_compute = (os.environ.get("WHISPER_COMPUTE") or "").strip()
+    if configured_compute:
+        compute_type = configured_compute
+    else:
+        compute_type = "float16" if device.lower() == "cuda" else "int8"
+
     return {
         "model_size": model_size,
-        "device": os.environ.get("WHISPER_DEVICE", "cpu"),
-        "compute_type": os.environ.get("WHISPER_COMPUTE", "int8"),
+        "device": device,
+        "compute_type": compute_type,
     }
-
 
 # Decode params shared by both transcription paths. condition_on_previous_text
 # is off to avoid repetition/hallucination loops; vad_filter drops silence.
