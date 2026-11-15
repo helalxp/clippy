@@ -43,8 +43,31 @@ def _whisper_gpu_enabled():
     return True
 
 
+def _whisper_runtime_has_cuda():
+    """Return the installed desktop runtime's CUDA capability, if known."""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return None
+    manifest_path = os.path.join(local_app_data, "Clippy", "runtime-manifest.json")
+    try:
+        import json
+        with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+            manifest = json.load(manifest_file)
+        gpu_mode = manifest.get("gpuMode") if isinstance(manifest, dict) else None
+        if gpu_mode is None:
+            return None
+        return gpu_mode == "cuda128"
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def _whisper_cuda_available():
-    """Ask CTranslate2 whether its CUDA runtime can see an NVIDIA device."""
+    """Require both a CUDA-enabled installed runtime and a visible GPU."""
+    # The CPU runtime ships CPU-only PyTorch wheels. Do not let a generally
+    # GPU-capable CTranslate2 wheel try CUDA when Clippy deliberately installed
+    # the CPU runtime because the device/driver was unsupported.
+    if _whisper_runtime_has_cuda() is False:
+        return False
     try:
         import ctranslate2
         return int(ctranslate2.get_cuda_device_count()) > 0
