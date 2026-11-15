@@ -7,6 +7,12 @@ BeforeAll {
     $script:payloadZip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $payloadPath).Path)
 }
 
+function Get-PayloadZipEntry([string]$ExpectedPath) {
+    return $script:payloadZip.Entries |
+        Where-Object { (($_.FullName -replace '\\', '/') -replace '^(\./)+', '') -eq $ExpectedPath } |
+        Select-Object -First 1
+}
+
 AfterAll {
     if ($script:payloadZip) {
         $script:payloadZip.Dispose()
@@ -22,7 +28,7 @@ Describe "Assembled Clippy application payload contract" {
             "VERSION",
             "requirements.txt"
         )) {
-            $script:payloadZip.GetEntry($entry) | Should -Not -BeNullOrEmpty -Because "the first-run runtime setup requires $entry"
+            Get-PayloadZipEntry $entry | Should -Not -BeNullOrEmpty -Because "the first-run runtime setup requires $entry"
         }
     }
 
@@ -34,12 +40,12 @@ Describe "Assembled Clippy application payload contract" {
             "remotion/src/index.ts",
             "bgutil-provider/server/build/generate_once.js"
         )) {
-            $script:payloadZip.GetEntry($entry) | Should -Not -BeNullOrEmpty -Because "the installed desktop shell requires $entry"
+            Get-PayloadZipEntry $entry | Should -Not -BeNullOrEmpty -Because "the installed desktop shell requires $entry"
         }
     }
 
     It "packages the helper scripts next to setup-runtime.ps1" {
-        $setupEntry = $script:payloadZip.GetEntry("setup-runtime.ps1")
+        $setupEntry = Get-PayloadZipEntry "setup-runtime.ps1"
         $stream = $setupEntry.Open()
         try {
             $reader = [System.IO.StreamReader]::new($stream)
@@ -50,7 +56,7 @@ Describe "Assembled Clippy application payload contract" {
 
         foreach ($helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
             $setupSource | Should -Match ([regex]::Escape($helper))
-            $script:payloadZip.GetEntry($helper) | Should -Not -BeNullOrEmpty
+            Get-PayloadZipEntry $helper | Should -Not -BeNullOrEmpty
         }
     }
 }
