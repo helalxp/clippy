@@ -235,12 +235,23 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
         return Err("Bundled application payload digest is malformed.".to_string());
     }
 
+    let required_payload_files = [
+        "app.py",
+        "requirements.txt",
+        "VERSION",
+        "setup-runtime.ps1",
+        "runtime-archive.ps1",
+        "runtime-manifest-state.ps1",
+        "render-service/dist/server.js",
+        "render-service/node_modules/@remotion/renderer/package.json",
+        "remotion/src/index.ts",
+        "bgutil-provider/server/build/generate_once.js",
+    ];
+    let current_payload_is_complete = required_payload_files.iter()
+        .all(|relative| current.join(relative).is_file());
     if current.join(".clippy-payload-sha256").is_file()
         && fs::read_to_string(current.join(".clippy-payload-sha256")).ok().map(|v| v.trim().to_string()).as_deref() == Some(expected_hash.as_str())
-        && current.join("app.py").is_file()
-        && current.join("render-service").join("dist").join("server.js").is_file()
-        && current.join("remotion").join("src").join("index.ts").is_file()
-        && current.join("setup-runtime.ps1").is_file()
+        && current_payload_is_complete
     {
         return Ok(current.display().to_string());
     }
@@ -249,6 +260,14 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
     }
 
     fs::create_dir_all(&app_root).map_err(|e| format!("Cannot create application directory: {e}"))?;
+    // Recover an interrupted upgrade before starting another one. The old
+    // payload is code, not user data, but keeping it available avoids leaving
+    // the installation without a launchable app if the previous process died
+    // between the two directory renames.
+    if !current.exists() && backup.exists() {
+        fs::rename(&backup, &current)
+            .map_err(|e| format!("Cannot restore the previous application payload: {e}"))?;
+    }
     if staging.exists() {
         fs::remove_dir_all(&staging).map_err(|e| format!("Cannot clear incomplete setup directory: {e}"))?;
     }
@@ -271,12 +290,16 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
     let mut zip = zip::ZipArchive::new(archive).map_err(|e| format!("Application payload is invalid: {e}"))?;
     zip.extract(&staging).map_err(|e| format!("Cannot extract application payload: {e}"))?;
 
-    for relative in ["app.py", "render-service/dist/server.js", "remotion/src/index.ts", "setup-runtime.ps1"] {
+    for relative in required_payload_files {
         if !staging.join(relative).is_file() {
             let _ = fs::remove_dir_all(&staging);
             return Err(format!("Application payload is incomplete; missing {relative}"));
         }
     }
+    // Store the verified payload identity inside staging so it becomes active
+    // atomically with the files it describes.
+    fs::write(staging.join(".clippy-payload-sha256"), expected_hash.as_bytes())
+        .map_err(|e| format!("Cannot write staged application payload marker: {e}"))?;
 
     if backup.exists() {
         fs::remove_dir_all(&backup).map_err(|e| format!("Cannot remove previous application backup: {e}"))?;
@@ -295,8 +318,6 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
     }
-    fs::write(current.join(".clippy-payload-sha256"), expected_hash)
-        .map_err(|e| format!("Cannot write application payload marker: {e}"))?;
 
     Ok(current.display().to_string())
 }

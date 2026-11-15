@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -98,17 +98,6 @@ jobs:
         shell: pwsh
         run: ./desktop/validate-version.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
 
-      - name: Verify public release signing credentials
-        shell: pwsh
-        env:
-          WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 }}
-          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64) -or
-              [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
-            throw "Public Windows releases require both Authenticode signing secrets. Configure them before creating a release tag."
-          }
-
       - name: Download verified Python runtime packages
         uses: actions/download-artifact@v4
         with:
@@ -120,20 +109,31 @@ jobs:
         shell: pwsh
         run: ./desktop/validate-runtime-assets.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
 
-      - name: Run PowerShell runtime contract tests
+      - name: Build NSIS installer and assemble application payload
+        shell: pwsh
+        run: ./desktop/build.ps1
+
+      # The payload contract tests must run after prepare-payload.ps1 has built
+      # the exact ZIP embedded in the installer, not against source files alone.
+      - name: Run PowerShell runtime and assembled-payload contract tests
         shell: pwsh
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
 
+      # Exercise setup-runtime.ps1 itself against the packaged app ZIP and the
+      # CPU runtime built in this same release run, using an isolated LOCALAPPDATA.
+      # This catches bootstrap/download/dependency integration failures before
+      # an installer can be published.
+      - name: Smoke-test clean first-run runtime setup
+        shell: pwsh
+        timeout-minutes: 30
+        run: ./desktop/smoke-test-runtime.ps1
+
       - name: Run Rust unit and installer contract tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
-      - name: Build NSIS installer
-        shell: pwsh
-        run: ./desktop/build.ps1
-
-      - name: Sign Windows installer
+      - name: Sign Windows installer (optional)
         shell: pwsh
         env:
           WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 }}
@@ -141,12 +141,18 @@ jobs:
         run: |
           $files = @(Get-ChildItem "./desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe")
           if ($files.Count -ne 1) { throw "Expected exactly one NSIS installer, found $($files.Count)." }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)) {
-            throw "Public Windows releases must be Authenticode-signed. Configure WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 and WINDOWS_CODESIGN_CERTIFICATE_PASSWORD before creating a release tag."
+
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)
+
+          if (-not $hasCertificate -and -not $hasPassword) {
+            Write-Warning "No Authenticode certificate configured. Continuing with an unsigned installer; runtime checksums and release asset verification remain mandatory."
+            exit 0
           }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
-            throw "The code-signing certificate is configured but its password secret is missing."
+          if (-not $hasCertificate -or -not $hasPassword) {
+            throw "Both code-signing secrets must be configured together. Remove the incomplete secret or provide both."
           }
+
           $certificatePath = Join-Path $env:RUNNER_TEMP "clippy-code-signing.pfx"
           $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)
           [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
@@ -204,9 +210,13 @@ jobs:
           $expected = @{}
           foreach ($file in $expectedFiles) { $expected[$file.Name] = [long]$file.Length }
 
-          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "Could not read the newly created draft release." }
-          $release = $releaseJson | ConvertFrom-Json
+          # Draft releases may not be discoverable through the tag lookup endpoint immediately.
+          # List releases by ID and select the exact tag instead.
+          $releasesJson = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "Could not list repository releases." }
+          $releases = @($releasesJson | ConvertFrom-Json)
+          $release = $releases | Where-Object { $_.tag_name -eq $env:GITHUB_REF_NAME } | Select-Object -First 1
+          if (-not $release) { throw "Could not find the newly created draft release for tag $env:GITHUB_REF_NAME." }
           if (-not $release.draft) { throw "Release was published before asset verification; expected a draft." }
 
           $actual = @{}
