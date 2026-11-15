@@ -57,13 +57,20 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/runtime-manifest-state.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
-          Import-Module Pester -MinimumVersion 5.0 -Force
-          Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
         run: ./desktop/prepare-payload.ps1
+
+      # PayloadContract.Tests.ps1 opens the real ZIP produced above. Running the
+      # suite earlier would only test source files and miss packaging omissions.
+      - name: Run PowerShell runtime and assembled-payload contract tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0 -Force
+          Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Check backend Python syntax
         run: python -m compileall -q .
