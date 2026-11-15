@@ -548,3 +548,59 @@ class TestWhisperDeviceSelection:
         assert config["device"] == "cuda"
         assert config["compute_type"] == "int8_float16"
 
+    def test_cpu_installed_runtime_never_selects_cuda_even_if_a_device_is_visible(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        local_app_data = tmp_path / "local-app-data"
+        clippy_root = local_app_data / "Clippy"
+        clippy_root.mkdir(parents=True)
+        (clippy_root / "runtime-manifest.json").write_text(
+            json.dumps({"gpuMode": "cpu"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cpu"
+        assert config["compute_type"] == "int8"
+
+    def test_cuda_installed_runtime_selects_cuda_when_device_is_visible(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        local_app_data = tmp_path / "local-app-data"
+        clippy_root = local_app_data / "Clippy"
+        clippy_root.mkdir(parents=True)
+        (clippy_root / "runtime-manifest.json").write_text(
+            json.dumps({"gpuMode": "cuda128"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cuda"
+        assert config["compute_type"] == "float16"
+
