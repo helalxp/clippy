@@ -40,6 +40,11 @@ foreach ($variant in @("cpu", "cuda")) {
     }
     $reconstructed = Join-Path $RuntimeDirectory "clippy-python-$variant.ci-verified.zip"
     Join-ClippyRuntimeArchiveParts -Manifest $manifest -PartsDirectory $RuntimeDirectory -Destination $reconstructed | Out-Null
+    $expandedSize = Get-ClippyZipUncompressedSize -Path $reconstructed
+    if ($expandedSize -ne [long]$manifest.archive.uncompressedSize) {
+        Remove-Item -LiteralPath $reconstructed -Force -ErrorAction SilentlyContinue
+        throw "$variant runtime expanded size mismatch. Manifest declares $($manifest.archive.uncompressedSize), reconstructed archive contains $expandedSize bytes."
+    }
     Remove-Item -LiteralPath $reconstructed -Force
     Write-Host "$variant runtime manifest and $($manifest.partCount) asset(s) verified for v$ExpectedVersion."
 }

@@ -575,8 +575,8 @@ try {
 } catch {
     $VcRuntimeInstalled = $false
 }
+$VcRedist = Join-Path $Downloads "vc_redist.x64.exe"
 if (-not $VcRuntimeInstalled) {
-    $VcRedist = Join-Path $Downloads "vc_redist.x64.exe"
     Download-File $VcRedistUrl $VcRedist
     $VcSignature = Get-AuthenticodeSignature -FilePath $VcRedist
     if ($VcSignature.Status -ne "Valid" -or $VcSignature.SignerCertificate.Subject -notmatch "Microsoft") {
@@ -814,22 +814,22 @@ try {
     $PythonExe = Join-Path $PythonDir "python.exe"
     & $PythonExe -c "import torch, fastapi, faster_whisper; print(torch.__version__)"
     if ($LASTEXITCODE -ne 0) { throw "Activated Python runtime failed its health check." }
-    Complete-ClippyManagedDirectoryInstall -Backup $PythonBackup
 } catch {
     Rollback-ClippyManagedDirectoryInstall -Destination $PythonDir -Backup $PythonBackup
     throw
 }
+Complete-ClippyManagedDirectoryInstall -Backup $PythonBackup
 
 # Node's archive is checked against the SHA-256 value published alongside the
 # official Node.js release archive.
 $NodeExe = Join-Path $NodeDir "node.exe"
+$NodeZip = Join-Path $Downloads $NodeArchiveName
+$Checksums = Join-Path $Downloads "node-v$NodeVersion-SHASUMS256.txt"
 $NodeActivationPending = $false
 $ExistingNodeVersion = if (Test-Path -LiteralPath $NodeExe -PathType Leaf) { (& $NodeExe --version 2>&1 | Out-String).Trim() } else { "" }
 $ExistingNodeHealthy = ($LASTEXITCODE -eq 0 -and $ExistingNodeVersion.TrimStart([char]"v") -eq $NodeVersion)
 if (-not $ExistingNodeHealthy) {
     Write-Stage "Managed Node.js runtime is missing, corrupt, or the wrong version; staging a verified replacement."
-    $NodeZip = Join-Path $Downloads $NodeArchiveName
-    $Checksums = Join-Path $Downloads "node-v$NodeVersion-SHASUMS256.txt"
     Download-File $NodeArchiveUrl $NodeZip
     Download-File $NodeChecksumsUrl $Checksums
     $Line = Get-Content $Checksums -ErrorAction SilentlyContinue | Where-Object { $_ -match "\s$([regex]::Escape($NodeArchiveName))$" } | Select-Object -First 1
@@ -879,6 +879,8 @@ if ($NodeActivationPending) { Complete-ClippyManagedDirectoryInstall -Backup $No
 # the publisher's SHA-256 sidecar before extraction. Install to a sibling staging
 # directory so an interrupted repair never removes the previous working runtime.
 $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+$FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
+$FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
 $FfmpegActivationPending = $false
 $ExistingFfmpegHealthy = $false
 if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
@@ -887,8 +889,6 @@ if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
 }
 if (-not $ExistingFfmpegHealthy) {
     Write-Stage "Managed FFmpeg runtime is missing or unhealthy; staging a verified replacement."
-    $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
-    $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
     Download-File $FfmpegArchiveUrl $FfmpegZip
     Download-File $FfmpegChecksumUrl $FfmpegHashFile
     $HashText = Get-Content $FfmpegHashFile -Raw -ErrorAction SilentlyContinue
@@ -900,6 +900,7 @@ if (-not $ExistingFfmpegHealthy) {
         if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
     }
     $FfmpegExpectedHash = $Matches[1]
+    Write-Stage ("Verifying FFmpeg archive against publisher SHA-256 " + $FfmpegExpectedHash.ToLowerInvariant())
     try {
         Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
     } catch {
@@ -1100,9 +1101,9 @@ if ([string]::IsNullOrWhiteSpace($LocalRuntimeArchive) -and $RuntimeManifest) {
 }
 # Installation is now fully verified. Remove large component installers and
 # checksum sidecars; failed setups deliberately retain them for resume/repair.
-foreach ($CachePath in @($NodeZip, $Checksums, $FfmpegZip, $FfmpegHashFile, (Join-Path $Downloads "vc_redist.x64.exe"))) {
+foreach ($CachePath in @($NodeZip, $Checksums, $FfmpegZip, $FfmpegHashFile, $VcRedist)) {
     if (-not [string]::IsNullOrWhiteSpace([string]$CachePath)) {
-        Remove-Item -LiteralPath @($CachePath, "$CachePath.partial") -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath @($CachePath, ($CachePath + ".partial")) -Force -ErrorAction SilentlyContinue
     }
 }
 Remove-ClippyScratchRoot
