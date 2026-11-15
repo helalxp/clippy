@@ -67,7 +67,7 @@ Describe "Managed runtime directory transaction contract" {
         Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -ExpectedMarkerValue "version=2"
 
         (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "previous"
-        (Test-Path -LiteralPath $script:transactionDestination "partial.txt") | Should -BeFalse
+        (Test-Path -LiteralPath (Join-Path $script:transactionDestination "partial.txt")) | Should -BeFalse
         (Test-Path -LiteralPath $script:transactionStaging) | Should -BeFalse
         (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
     }

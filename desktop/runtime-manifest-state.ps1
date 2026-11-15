@@ -56,8 +56,8 @@ function Repair-ClippyManagedDirectoryInstall {
     $markerPath = Join-Path $destinationPath ".clippy-install-state"
     if (Test-Path -LiteralPath $backupPath -PathType Container) {
         $destinationCommitted = $false
-        if (Test-Path -LiteralPath $destinationPath -PathType Container -and
-            Test-Path -LiteralPath $markerPath -PathType Leaf) {
+        if ((Test-Path -LiteralPath $destinationPath -PathType Container) -and
+            (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
             $markerValue = (Get-Content -LiteralPath $markerPath -Raw).Trim()
             $destinationCommitted = [string]::Equals($markerValue, $ExpectedMarkerValue, [StringComparison]::Ordinal)
         }
