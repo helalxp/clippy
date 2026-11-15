@@ -53,6 +53,9 @@ $diagnosticsSuffix = if ($env:GITHUB_RUN_ID) {
 $diagnosticsRoot = Join-Path $tempBase "clippy-first-run-smoke-diagnostics-$diagnosticsSuffix"
 $diagnosticsLog = Join-Path $diagnosticsRoot "smoke-test-diagnostics.log"
 $childContextLog = Join-Path $smokeRoot "child-context.log"
+$httpServerStdout = Join-Path $smokeRoot "runtime-http.stdout.log"
+$httpServerStderr = Join-Path $smokeRoot "runtime-http.stderr.log"
+$script:httpServerProcess = $null
 $originalRuntimeSetupTestMode = $env:CLIPPY_RUNTIME_SETUP_TEST_MODE
 $originalRuntimeSetupManifestBaseUrl = $env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL
 $originalRuntimeSetupReleaseBaseUrl = $env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL
@@ -81,7 +84,9 @@ function Save-SmokeDiagnostics([string]$FailureMessage = "") {
         @{ Path = $script:childContextLog; Name = "child-context.log" },
         @{ Path = $script:setupLog; Name = "runtime-setup.log" },
         @{ Path = $script:setupStdout; Name = "setup.stdout.log" },
-        @{ Path = $script:setupStderr; Name = "setup.stderr.log" }
+        @{ Path = $script:setupStderr; Name = "setup.stderr.log" },
+        @{ Path = $script:httpServerStdout; Name = "runtime-http.stdout.log" },
+        @{ Path = $script:httpServerStderr; Name = "runtime-http.stderr.log" }
     )
     $lines = @("Child exit code: $(if ($script:setupProcess) { $script:setupProcess.ExitCode } else { 'not-started' })")
     if ($FailureMessage) { $lines += "SMOKE TEST FAILURE: $FailureMessage" }
@@ -152,13 +157,13 @@ try {
     $appVersionPath = Join-Path $repoRoot "VERSION"
     Assert-File $appVersionPath "application VERSION"
     $appVersion = (Get-Content -LiteralPath $appVersionPath -Raw).Trim()
-    if ([string]$runtimeManifest.applicationVersion -ne $appVersion -or [string]$runtimeManifest.runtimeVariant -ne "cpu") {
-        throw "CPU runtime manifest does not match application version $appVersion."
-    }
+    Assert-ClippyRuntimeArchiveManifest -Manifest $runtimeManifest -ExpectedApplicationVersion $appVersion -ExpectedVariant cpu | Out-Null
     $cpuArchiveInfo = Get-Item -LiteralPath $CpuRuntimeArchive
     $cpuArchiveHash = Get-ClippyFileSha256 -Path $CpuRuntimeArchive
+    $cpuArchiveExpandedSize = Get-ClippyZipUncompressedSize -Path $CpuRuntimeArchive
     if ([long]$runtimeManifest.archive.size -ne $cpuArchiveInfo.Length -or
-        ([string]$runtimeManifest.archive.sha256).ToLowerInvariant() -ne $cpuArchiveHash) {
+        ([string]$runtimeManifest.archive.sha256).ToLowerInvariant() -ne $cpuArchiveHash -or
+        [long]$runtimeManifest.archive.uncompressedSize -ne $cpuArchiveExpandedSize) {
         throw "CPU runtime ZIP does not match the release manifest that will be published."
     }
 
@@ -166,9 +171,47 @@ try {
     New-Item -ItemType Directory -Path $smokeLocalAppData -Force | Out-Null
     New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
 
+    $runtimeDist = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "runtime-dist"))
+    $httpPython = (Get-Command "python" -ErrorAction Stop).Source
+    $portListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $portListener.Start()
+    $httpPort = [int]$portListener.LocalEndpoint.Port
+    $portListener.Stop()
+    $runtimeTestBaseUrl = "http://127.0.0.1:$httpPort"
+
+    # Serve the exact runtime manifest and archive artifacts built by this run.
+    # The setup script still executes the customer-facing manifest/download code.
+    $script:httpServerProcess = Start-Process -FilePath $httpPython -ArgumentList @("-m", "http.server", [string]$httpPort, "--bind", "127.0.0.1") -WorkingDirectory $runtimeDist -PassThru -NoNewWindow -RedirectStandardOutput $httpServerStdout -RedirectStandardError $httpServerStderr
+    $httpReady = $false
+    for ($httpAttempt = 1; $httpAttempt -le 30; $httpAttempt++) {
+        if ($script:httpServerProcess.HasExited) {
+            throw "Local runtime asset server exited during startup with code $($script:httpServerProcess.ExitCode)."
+        }
+        try {
+            $request = [System.Net.HttpWebRequest]::Create("$runtimeTestBaseUrl/clippy-python-cpu.manifest.json")
+            $request.Method = "HEAD"
+            $request.Timeout = 2000
+            $response = $request.GetResponse()
+            try { $httpReady = ([int]$response.StatusCode -eq 200) } finally { $response.Close() }
+            if ($httpReady) { break }
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if (-not $httpReady) {
+        throw "Local runtime asset server did not serve the CPU release manifest: $runtimeTestBaseUrl"
+    }
+    Write-SmokeDiagnostic "Local runtime release assets are being served from $runtimeTestBaseUrl."
+
     $env:LOCALAPPDATA = $smokeLocalAppData
-    $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = [IO.Path]::GetFullPath($CpuRuntimeArchive)
-    $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = [IO.Path]::GetFullPath($CpuRuntimeChecksum)
+    # Deliberately remove the developer-only local archive override. This forces
+    # setup-runtime.ps1 to download and validate the published release manifest.
+    Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue
+    Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue
+    $env:CLIPPY_RUNTIME_SETUP_TEST_MODE = "1"
+    $env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL = $runtimeTestBaseUrl
+    $env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL = $runtimeTestBaseUrl
+    $env:CLIPPY_TEMP_DIR = $smokeRoot
     $env:CLIPPY_FORCE_CPU_RUNTIME = "1"
     $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH = $childContextLog
 
@@ -213,6 +256,11 @@ $context = @(
     "PSHOME=$PSHOME",
     "LOCALAPPDATA=$env:LOCALAPPDATA",
     "PSModulePath=$env:PSModulePath",
+    "RuntimeSetupTestMode=$env:CLIPPY_RUNTIME_SETUP_TEST_MODE",
+    "RuntimeManifestBaseUrl=$env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL",
+    "RuntimeAssetBaseUrl=$env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL",
+    "ScratchDirectory=$env:CLIPPY_TEMP_DIR",
+    "RuntimeArchiveOverride=$env:CLIPPY_PYTHON_RUNTIME_ARCHIVE",
     "SetupScript=__CLIPPY_SETUP_SCRIPT__"
 )
 [IO.File]::WriteAllLines($contextPath, $context, [Text.Encoding]::UTF8)
@@ -246,6 +294,9 @@ $PSModuleAutoLoadingPreference = 'None'
         if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
     }
     $script:setupProcess = $process
+    if ($null -ne $script:httpServerProcess -and -not $script:httpServerProcess.HasExited) {
+        Stop-Process -Id $script:httpServerProcess.Id -Force -ErrorAction SilentlyContinue
+    }
     $root = Join-Path $smokeLocalAppData "Clippy"
     $pythonExe = Join-Path $root "runtime\python\python.exe"
     $nodeExe = Join-Path $root "runtime\node\node.exe"
@@ -299,6 +350,9 @@ $PSModuleAutoLoadingPreference = 'None'
     }
     throw
 } finally {
+    if ($null -ne $script:httpServerProcess -and -not $script:httpServerProcess.HasExited) {
+        Stop-Process -Id $script:httpServerProcess.Id -Force -ErrorAction SilentlyContinue
+    }
     if ($null -eq $originalLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $originalLocalAppData }
     if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
     if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }
