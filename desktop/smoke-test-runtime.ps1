@@ -366,6 +366,19 @@ try {
 
     & $pythonExe -c "import app, torch, fastapi, faster_whisper; assert torch.version.cuda is None; print('Backend imports and CPU runtime OK:', torch.__version__)"
     if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
+
+    # Run outside the Clippy payload and checkout directories. With an embedded
+    # python312._pth file, this import must succeed because the managed app path
+    # is explicitly configured, not because the process happens to be in app\current.
+    $expectedAppRootLiteral = ConvertTo-Json -InputObject ([IO.Path]::GetFullPath($appDirectory)) -Compress
+    $appPathCheck = "import app, os; expected = os.path.normcase(os.path.join($expectedAppRootLiteral, 'app.py')); actual = os.path.normcase(os.path.abspath(app.__file__)); assert actual == expected, 'Imported app.py from an unexpected path: ' + actual; print('Clippy app import path OK:', actual)"
+    Push-Location $smokeRoot
+    try {
+        & $pythonExe -c $appPathCheck
+        if ($LASTEXITCODE -ne 0) { throw "Managed Python could not import app.py from the configured Clippy application path." }
+    } finally {
+        Pop-Location
+    }
     & $nodeExe --version
     if ($LASTEXITCODE -ne 0) { throw "Managed Node.js executable smoke test failed." }
     & $ffmpegExe -version *> $null

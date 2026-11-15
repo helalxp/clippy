@@ -364,7 +364,7 @@ impl Supervisor {
             .current_dir(&paths.root)
             // Do not allow a user's Python/Conda environment to influence the
             // interpreter or imports. The executable is always Clippy's private
-            // Python and the only application import path is the packaged app.
+            // Python. The python312._pth file explicitly whitelists the packaged app path.
             .env_remove("PYTHONHOME")
             .env_remove("PYTHONPATH")
             .env_remove("PYTHONUSERBASE")
@@ -374,7 +374,6 @@ impl Supervisor {
             .env_remove("CONDA_PREFIX")
             .env_remove("CONDA_DEFAULT_ENV")
             .env_remove("CONDA_EXE")
-            .env("PYTHONPATH", &paths.root)
             .env("PYTHONNOUSERSITE", "1")
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONUTF8", "1")

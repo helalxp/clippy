@@ -37,7 +37,19 @@ if ($ActualPythonHash -ne $PythonArchiveSha256) { throw "Official CPython archiv
 Expand-Archive -LiteralPath $PythonArchive -DestinationPath $RuntimeRoot
 $PythonPth = Join-Path $RuntimeRoot "python312._pth"
 if (-not (Test-Path $PythonPth)) { throw "Official CPython archive is missing python312._pth." }
-[System.IO.File]::WriteAllLines($PythonPth, @("python312.zip", ".", "Lib", "Lib\site-packages", "import site"), [System.Text.Encoding]::ASCII)
+# The managed Python runtime lives at Clippy\runtime\python. Its isolated
+# python312._pth file must explicitly whitelist the sibling application payload;
+# PYTHONPATH and the process working directory are intentionally ignored.
+$ApplicationRootRelativeToRuntime = "..\..\app\current"
+$PythonPathEntries = @(
+    "python312.zip",
+    ".",
+    "Lib",
+    "Lib\site-packages",
+    $ApplicationRootRelativeToRuntime,
+    "import site"
+)
+[System.IO.File]::WriteAllLines($PythonPth, $PythonPathEntries, [System.Text.Encoding]::ASCII)
 New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
 # CI's Python/pip installs wheels directly into the final runtime. The shipped
@@ -49,6 +61,12 @@ if ($LASTEXITCODE -ne 0) { throw "Could not install pinned $Variant Python depen
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
 $VersionCheck = (& $StagedPython --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") { throw "Packaged Python failed version check: $VersionCheck" }
+
+# Confirm CPython actually resolves the configured application path relative
+# to python312._pth, not from the current directory or PYTHONPATH.
+$AppSearchPathCheck = "import os, sys; expected = os.path.normcase(os.path.abspath(os.path.join(os.path.dirname(sys.executable), r'$ApplicationRootRelativeToRuntime'))); actual = [os.path.normcase(os.path.abspath(entry)) for entry in sys.path]; assert expected in actual, 'Clippy application path is missing from embedded Python sys.path'"
+& $StagedPython -c $AppSearchPathCheck
+if ($LASTEXITCODE -ne 0) { throw "Packaged Python does not expose Clippy's application payload through python312._pth." }
 $ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe; print('torch=' + torch.__version__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
 & $StagedPython -c $ImportCheck
 if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import validation." }
