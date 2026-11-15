@@ -823,6 +823,7 @@ try {
 # Node's archive is checked against the SHA-256 value published alongside the
 # official Node.js release archive.
 $NodeExe = Join-Path $NodeDir "node.exe"
+$NodeActivationPending = $false
 $ExistingNodeVersion = if (Test-Path -LiteralPath $NodeExe -PathType Leaf) { (& $NodeExe --version 2>&1 | Out-String).Trim() } else { "" }
 $ExistingNodeHealthy = ($LASTEXITCODE -eq 0 -and $ExistingNodeVersion.TrimStart([char]"v") -eq $NodeVersion)
 if (-not $ExistingNodeHealthy) {
@@ -862,21 +863,23 @@ if (-not $ExistingNodeHealthy) {
         throw "Staged Node.js runtime version check failed. Expected $NodeVersion, found $StagedNodeVersion."
     }
     Publish-ClippyManagedDirectoryInstall -Destination $NodeDir -Staging $NodeStage -Backup $NodeBackup -MarkerValue $NodeVersion
+    $NodeActivationPending = $true
     Remove-Item $Extract -Recurse -Force
 }
 $InstalledNodeVersion = (& $NodeExe --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $InstalledNodeVersion.TrimStart([char]"v") -ne $NodeVersion) {
-    if (Test-Path -LiteralPath $NodeBackup -PathType Container) {
+    if ($NodeActivationPending) {
         Rollback-ClippyManagedDirectoryInstall -Destination $NodeDir -Backup $NodeBackup
     }
     throw "Managed Node.js runtime version check failed. Expected $NodeVersion, found $InstalledNodeVersion."
 }
-Complete-ClippyManagedDirectoryInstall -Backup $NodeBackup
+if ($NodeActivationPending) { Complete-ClippyManagedDirectoryInstall -Backup $NodeBackup }
 
 # FFmpeg is downloaded from the Windows builds publisher and verified against
 # the publisher's SHA-256 sidecar before extraction. Install to a sibling staging
 # directory so an interrupted repair never removes the previous working runtime.
 $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+$FfmpegActivationPending = $false
 $ExistingFfmpegHealthy = $false
 if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
     & $FfmpegExe -version *> $null
@@ -886,7 +889,7 @@ if (-not $ExistingFfmpegHealthy) {
     Write-Stage "Managed FFmpeg runtime is missing or unhealthy; staging a verified replacement."
     $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
     $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
-    Download-File $FfmpegZipUrl $FfmpegZip
+    Download-File $FfmpegArchiveUrl $FfmpegZip
     Download-File $FfmpegChecksumUrl $FfmpegHashFile
     $HashText = Get-Content $FfmpegHashFile -Raw -ErrorAction SilentlyContinue
     if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") {
@@ -902,7 +905,7 @@ if (-not $ExistingFfmpegHealthy) {
     } catch {
         Write-Stage "Cached FFmpeg archive failed verification; downloading a fresh copy."
         Remove-Item $FfmpegZip -Force -ErrorAction SilentlyContinue
-        Download-File $FfmpegZipUrl $FfmpegZip
+        Download-File $FfmpegArchiveUrl $FfmpegZip
         Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
     }
     $Extract = Join-Path $ScratchRoot "ffmpeg-extract"
@@ -919,16 +922,17 @@ if (-not $ExistingFfmpegHealthy) {
     if ($LASTEXITCODE -ne 0) { throw "Staged FFmpeg runtime failed its version check." }
 
     Publish-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Staging $FfmpegStage -Backup $FfmpegBackup -MarkerValue "gyan-release-essentials"
+    $FfmpegActivationPending = $true
     Remove-Item $Extract -Recurse -Force
 }
 & $FfmpegExe -version *> $null
 if ($LASTEXITCODE -ne 0) {
-    if (Test-Path -LiteralPath $FfmpegBackup -PathType Container) {
+    if ($FfmpegActivationPending) {
         Rollback-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Backup $FfmpegBackup
     }
     throw "Managed FFmpeg runtime failed its version check."
 }
-Complete-ClippyManagedDirectoryInstall -Backup $FfmpegBackup
+if ($FfmpegActivationPending) { Complete-ClippyManagedDirectoryInstall -Backup $FfmpegBackup }
 
 if ($TorchVariant -eq "cuda") {
     # Windows PyTorch CUDA wheels place their CUDA DLLs in torch\lib.
@@ -1039,8 +1043,8 @@ try {
         Pop-Location
     }
 
-    [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
     Complete-ClippyManagedDirectoryInstall -Backup $BrowserBackup
+    [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
 } catch {
     if ($BrowserActivationPending) {
         Rollback-ClippyManagedDirectoryInstall -Destination $BrowserDir -Backup $BrowserBackup
