@@ -68,6 +68,68 @@ $BrowserExecutable = [System.IO.Path]::Combine($BrowserDir, "chrome-headless-she
 $BrowserVersionFile = [System.IO.Path]::Combine($BrowserRoot, "remotion-version.txt")
 $LogDir = [System.IO.Path]::Combine($Root, "logs")
 $SetupLogPath = [System.IO.Path]::Combine($LogDir, "runtime-setup.log")
+
+# Do not rely on implicit PowerShell module auto-loading. The desktop host uses
+# -NoProfile and may intentionally supply an empty PSModulePath during first-run
+# setup. Bootstrap diagnostics therefore use .NET only until required modules
+# have been imported explicitly.
+$PSModuleAutoLoadingPreference = "None"
+
+function Write-BootstrapDiagnostic([string]$Message) {
+    $Timestamp = [DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $Line = "[{0}] [Clippy setup bootstrap] {1}" -f $Timestamp, $Message
+    try { [Console]::Error.WriteLine($Line) } catch { }
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($SetupLogPath)) {
+            [System.IO.File]::AppendAllText(
+                $SetupLogPath,
+                $Line + [Environment]::NewLine,
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        }
+    } catch { }
+}
+
+# Capture the actual child host state before module imports or runtime work.
+$SmokeDiagnosticsPath = [string]$env:CLIPPY_SMOKE_DIAGNOSTICS_PATH
+if (-not [string]::IsNullOrWhiteSpace($SmokeDiagnosticsPath)) {
+    try {
+        $SmokeContext = @(
+            "ChildPID=$PID",
+            "PowerShellVersion=$($PSVersionTable.PSVersion)",
+            "PSHOME=$PSHOME",
+            "LOCALAPPDATA=$env:LOCALAPPDATA",
+            "PSModulePath=$env:PSModulePath",
+            "PSModuleAutoLoadingPreference=$PSModuleAutoLoadingPreference",
+            "RuntimeSetupTestMode=$env:CLIPPY_RUNTIME_SETUP_TEST_MODE",
+            "RuntimeManifestBaseUrl=$env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL",
+            "RuntimeAssetBaseUrl=$env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL",
+            "ScratchDirectory=$env:CLIPPY_TEMP_DIR",
+            "RuntimeArchiveOverride=$env:CLIPPY_PYTHON_RUNTIME_ARCHIVE",
+            "SetupScript=$PSCommandPath"
+        )
+        [System.IO.File]::WriteAllLines($SmokeDiagnosticsPath, $SmokeContext, [System.Text.UTF8Encoding]::new($false))
+    } catch {
+        Write-BootstrapDiagnostic ("Could not write smoke-test child context: " + $_.Exception.Message)
+    }
+}
+
+try {
+    [void][System.IO.Directory]::CreateDirectory($LogDir)
+    foreach ($ModuleName in @("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security")) {
+        $ModuleManifest = [System.IO.Path]::Combine($WindowsPowerShellModulePath, $ModuleName, ($ModuleName + ".psd1"))
+        if (-not [System.IO.File]::Exists($ModuleManifest)) {
+            throw "Required Windows PowerShell module is missing: $ModuleManifest"
+        }
+        Import-Module -Name $ModuleManifest -Force -ErrorAction Stop
+    }
+} catch {
+    $BootstrapFailure = $_
+    Write-BootstrapDiagnostic ("BOOTSTRAP FAILED: " + $BootstrapFailure.Exception.Message)
+    Write-BootstrapDiagnostic ("Failure location: " + $BootstrapFailure.InvocationInfo.PositionMessage)
+    exit 1
+}
+
 $script:ScratchRoot = $null
 
 $PythonVersion = "3.12.10"
@@ -126,7 +188,7 @@ $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 function Write-Stage([string]$Message) {
     $Timestamp = [DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
     $Line = "[{0}] [Clippy setup] {1}" -f $Timestamp, $Message
-    Write-Output $Line
+    [Console]::Out.WriteLine($Line)
     try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false)) } catch { }
 }
 
@@ -150,6 +212,7 @@ trap {
 }
 
 Write-Stage "Runtime setup engine started."
+Write-Stage ("PowerShell module auto-loading preference: " + $PSModuleAutoLoadingPreference)
 Write-Stage ("PowerShell host version: " + $PSVersionTable.PSVersion + "; PSHOME: " + $PSHOME)
 Write-Stage ("Process LOCALAPPDATA: " + $env:LOCALAPPDATA)
 Write-Stage ("Resolved Clippy root: " + $Root)
@@ -173,17 +236,7 @@ foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
         throw "Application payload is incomplete. Missing required runtime helper: $HelperPath"
     }
 }
-# Import built-in modules by absolute manifest path. The parent app may have been
-# launched from PowerShell 7 or another host with a restricted PSModulePath, and
-# -NoProfile deliberately prevents relying on a user's module-loading profile.
-foreach ($ModuleName in @("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security")) {
-    $ModuleManifest = [System.IO.Path]::Combine($WindowsPowerShellModulePath, $ModuleName, ($ModuleName + ".psd1"))
-    if (-not [System.IO.File]::Exists($ModuleManifest)) {
-        throw "Required Windows PowerShell module is missing: $ModuleManifest"
-    }
-    Import-Module -Name $ModuleManifest -Force -ErrorAction Stop
-}
-Write-Stage ("Loaded built-in PowerShell utility and security modules from " + $WindowsPowerShellModulePath)
+Write-Stage ("Windows PowerShell built-in modules were imported during bootstrap from " + $WindowsPowerShellModulePath)
 
 . (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
 . (Join-Path $PSScriptRoot "runtime-archive.ps1")

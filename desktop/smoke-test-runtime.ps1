@@ -71,6 +71,7 @@ $script:setupLog = $setupLog
 $script:setupStdout = $setupStdout
 $script:setupStderr = $setupStderr
 $script:setupProcess = $null
+$script:setupScript = $null
 $originalSmokeDiagnosticsPath = $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH
 New-Item -ItemType Directory -Path $diagnosticsRoot -Force | Out-Null
 
@@ -84,13 +85,15 @@ function Save-SmokeDiagnostics([string]$FailureMessage = "") {
     $root = Join-Path $script:smokeLocalAppData "Clippy"
     $paths = @(
         @{ Path = $script:childContextLog; Name = "child-context.log" },
-        @{ Path = (Join-Path $script:smokeRoot "invoke-runtime-setup.ps1"); Name = "invoke-runtime-setup.ps1" },
         @{ Path = $script:setupLog; Name = "runtime-setup.log" },
         @{ Path = $script:setupStdout; Name = "setup.stdout.log" },
         @{ Path = $script:setupStderr; Name = "setup.stderr.log" },
         @{ Path = $script:httpServerStdout; Name = "runtime-http.stdout.log" },
         @{ Path = $script:httpServerStderr; Name = "runtime-http.stderr.log" }
     )
+    if (-not [string]::IsNullOrWhiteSpace([string]$script:setupScript)) {
+        $paths += @{ Path = $script:setupScript; Name = "setup-runtime.ps1" }
+    }
     $lines = @()
     if (Test-Path -LiteralPath $script:diagnosticsLog -PathType Leaf) {
         $lines += "===== Smoke test startup context ====="
@@ -253,32 +256,27 @@ try {
     Write-Host "Using Windows PowerShell $powerShellVersion at $powershell."
 
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
-    $setupLauncherScript = Join-Path $smokeRoot "invoke-runtime-setup.ps1"
-    $escapedSetupScript = $setupScript.Replace("'", "''")
-    $escapedChildContextLog = $childContextLog.Replace("'", "''")
-    $launcherContent = @'
-$contextPath = '__CLIPPY_CHILD_CONTEXT_PATH__'
-$context = @(
-    "ChildPID=$PID",
-    "PowerShellVersion=$($PSVersionTable.PSVersion)",
-    "PSHOME=$PSHOME",
-    "LOCALAPPDATA=$env:LOCALAPPDATA",
-    "PSModulePath=$env:PSModulePath",
-    "RuntimeSetupTestMode=$env:CLIPPY_RUNTIME_SETUP_TEST_MODE",
-    "RuntimeManifestBaseUrl=$env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL",
-    "RuntimeAssetBaseUrl=$env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL",
-    "ScratchDirectory=$env:CLIPPY_TEMP_DIR",
-    "RuntimeArchiveOverride=$env:CLIPPY_PYTHON_RUNTIME_ARCHIVE",
-    "SetupScript=__CLIPPY_SETUP_SCRIPT__"
-)
-[IO.File]::WriteAllLines($contextPath, $context, [Text.Encoding]::UTF8)
-$PSModuleAutoLoadingPreference = 'None'
-& '__CLIPPY_SETUP_SCRIPT__'
-'@
-    $launcherContent = $launcherContent.Replace("__CLIPPY_SETUP_SCRIPT__", $escapedSetupScript)
-    $launcherContent = $launcherContent.Replace("__CLIPPY_CHILD_CONTEXT_PATH__", $escapedChildContextLog)
-    [IO.File]::WriteAllText($setupLauncherScript, $launcherContent, [Text.UTF8Encoding]::new($false))
-    $quotedSetupLauncherScript = '"' + $setupLauncherScript + '"'
+    $script:setupScript = $setupScript
+
+    # Verify that a script launched directly with -File returns its exit code
+    # to Start-Process. The actual setup script is launched the same way.
+    $exitProbeScript = Join-Path $smokeRoot "exit-code-probe.ps1"
+    [IO.File]::WriteAllText($exitProbeScript, "exit 37", [Text.UTF8Encoding]::new($false))
+    $exitProbeArguments = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ('"' + $exitProbeScript + '"')
+    )
+    $exitProbe = Start-Process -FilePath $powershell -ArgumentList $exitProbeArguments -Wait -PassThru -NoNewWindow
+    if ($exitProbe.ExitCode -ne 37) {
+        throw "Windows PowerShell direct -File invocation did not preserve child exit codes. Expected 37, got $($exitProbe.ExitCode)."
+    }
+    Write-SmokeDiagnostic "Direct Windows PowerShell -File invocation preserved the non-zero child exit code."
+
     $argumentList = @(
         "-NoLogo",
         "-NoProfile",
@@ -286,7 +284,7 @@ $PSModuleAutoLoadingPreference = 'None'
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        $quotedSetupLauncherScript
+        ('"' + $setupScript + '"')
     )
 
     Write-Host "Running the actual first-run runtime setup in an isolated LOCALAPPDATA root..."
@@ -316,6 +314,90 @@ $PSModuleAutoLoadingPreference = 'None'
 
     if ($process.ExitCode -ne 0) {
         throw "First-run runtime setup failed with exit code $($process.ExitCode). Full diagnostics were retained at $diagnosticsRoot."
+    }
+
+    if (-not (Test-Path -LiteralPath $childContextLog -PathType Leaf)) {
+        throw "Runtime setup did not write its early child-context diagnostic."
+    }
+    $childContext = Get-Content -LiteralPath $childContextLog -Raw
+    if ($childContext -notmatch '(?m)^PSModuleAutoLoadingPreference=None\s*    $setupLogText = if (Test-Path -LiteralPath $setupLog -PathType Leaf) { Get-Content -LiteralPath $setupLog -Raw } else { "" }
+    if ($setupLogText -notmatch 'PowerShell module auto-loading preference: None' -or
+        $setupLogText -notmatch 'Windows PowerShell built-in modules were imported during bootstrap') {
+        throw "Runtime setup log did not confirm explicit PowerShell module initialization."
+    }
+    $hasCompletionMarker =
+        $setupLogText.Contains("Runtime setup completed successfully.") -or
+        $setupLogText.Contains("Managed runtimes and application dependencies are healthy. No downloads needed.")
+    if (-not $hasCompletionMarker) {
+        throw "Runtime setup returned exit code 0 without writing a recognized completion marker. This is a false-success condition. Full diagnostics were retained at $diagnosticsRoot."
+    }
+
+    foreach ($component in @(
+        @{ path = $pythonExe; label = "managed Python" },
+        @{ path = $nodeExe; label = "managed Node.js" },
+        @{ path = $ffmpegExe; label = "managed FFmpeg" },
+        @{ path = $ffprobeExe; label = "managed FFprobe" },
+        @{ path = $browserExe; label = "persistent Remotion browser" },
+        @{ path = $manifestPath; label = "runtime manifest" }
+    )) {
+        Assert-File $component.path $component.label
+    }
+
+    $installedManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    foreach ($name in @("python", "node", "ffmpeg", "browser")) {
+        $component = $installedManifest.components.$name
+        if (-not $component -or -not $component.installed -or [string]::IsNullOrWhiteSpace([string]$component.version)) {
+            throw "Runtime manifest did not mark '$name' as installed."
+        }
+    }
+    if ([string]$installedManifest.gpuMode -ne "cpu") {
+        throw "First-run CPU smoke test installed unexpected GPU mode '$($installedManifest.gpuMode)'."
+    }
+
+    & $pythonExe -c "import app, torch, fastapi, faster_whisper; assert torch.version.cuda is None; print('Backend imports and CPU runtime OK:', torch.__version__)"
+    if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
+    & $nodeExe --version
+    if ($LASTEXITCODE -ne 0) { throw "Managed Node.js executable smoke test failed." }
+    & $ffmpegExe -version *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg executable smoke test failed." }
+    & $ffprobeExe -version *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Managed FFprobe executable smoke test failed." }
+    if ([string]$installedManifest.components.node.version -ne "22.23.5") {
+        throw "Clean first-run setup installed an unexpected Node.js version: $($installedManifest.components.node.version)"
+    }
+
+    Write-Host "Clean first-run runtime smoke test passed for Clippy $appVersion."
+} catch {
+    $failureMessage = $_.Exception.Message
+    try { Save-SmokeDiagnostics -FailureMessage $failureMessage } catch {
+        Write-Host "Could not write complete diagnostics: $($_.Exception.Message)"
+    }
+    throw
+} finally {
+    if ($null -ne $script:httpServerProcess -and -not $script:httpServerProcess.HasExited) {
+        Stop-Process -Id $script:httpServerProcess.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -eq $originalLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $originalLocalAppData }
+    if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
+    if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }
+    if ($null -eq $originalForceCpuRuntime) { Remove-Item Env:CLIPPY_FORCE_CPU_RUNTIME -ErrorAction SilentlyContinue } else { $env:CLIPPY_FORCE_CPU_RUNTIME = $originalForceCpuRuntime }
+    if ($null -eq $originalSmokeDiagnosticsPath) { Remove-Item Env:CLIPPY_SMOKE_DIAGNOSTICS_PATH -ErrorAction SilentlyContinue } else { $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH = $originalSmokeDiagnosticsPath }
+    if ($null -eq $originalRuntimeSetupTestMode) { Remove-Item Env:CLIPPY_RUNTIME_SETUP_TEST_MODE -ErrorAction SilentlyContinue } else { $env:CLIPPY_RUNTIME_SETUP_TEST_MODE = $originalRuntimeSetupTestMode }
+    if ($null -eq $originalRuntimeSetupManifestBaseUrl) { Remove-Item Env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL -ErrorAction SilentlyContinue } else { $env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL = $originalRuntimeSetupManifestBaseUrl }
+    if ($null -eq $originalRuntimeSetupReleaseBaseUrl) { Remove-Item Env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL -ErrorAction SilentlyContinue } else { $env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL = $originalRuntimeSetupReleaseBaseUrl }
+    if ($null -eq $originalClippyTempDir) { Remove-Item Env:CLIPPY_TEMP_DIR -ErrorAction SilentlyContinue } else { $env:CLIPPY_TEMP_DIR = $originalClippyTempDir }
+    if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
+    if (Test-Path -LiteralPath $smokeLocalAppData -PathType Container) {
+        Remove-Item -LiteralPath $smokeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $smokeRoot -PathType Container) {
+        Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "First-run diagnostics were retained at: $diagnosticsRoot"
+}
+ -or
+        $childContext -notmatch [regex]::Escape($isolatedModulePath)) {
+        throw "Runtime setup did not execute with module auto-loading disabled and the isolated module path."
     }
 
     $setupLogText = if (Test-Path -LiteralPath $setupLog -PathType Leaf) { Get-Content -LiteralPath $setupLog -Raw } else { "" }

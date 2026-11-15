@@ -61,4 +61,34 @@ Describe "Assembled Clippy application payload contract" {
             Get-PayloadZipEntry $helper | Should -Not -BeNullOrEmpty
         }
     }
+
+    It "imports Windows PowerShell modules before the first module-dependent setup command" {
+        $setupEntry = Get-PayloadZipEntry "setup-runtime.ps1"
+        $stream = $setupEntry.Open()
+        try {
+            $reader = [System.IO.StreamReader]::new($stream)
+            try { $setupSource = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        } finally {
+            $stream.Dispose()
+        }
+
+        $comparison = [System.StringComparison]::OrdinalIgnoreCase
+        $autoLoadingIndex = $setupSource.IndexOf('$PSModuleAutoLoadingPreference = "None"', $comparison)
+        $moduleImportIndex = $setupSource.IndexOf('Import-Module -Name $ModuleManifest -Force -ErrorAction Stop', $comparison)
+        $firstModuleCommandIndex = $setupSource.IndexOf('$Nvidia = Get-Command', $comparison)
+
+        ($autoLoadingIndex -ge 0) | Should -BeTrue
+        ($moduleImportIndex -gt $autoLoadingIndex) | Should -BeTrue
+        ($moduleImportIndex -lt $firstModuleCommandIndex) | Should -BeTrue
+        $setupSource | Should -Match '\[Console\]::Out\.WriteLine\(\$Line\)'
+        $setupSource | Should -Not -Match 'Write-Output \$Line'
+    }
+
+    It "runs runtime setup as the child PowerShell process and preserves failure exit codes" {
+        $smokeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot "../smoke-test-runtime.ps1") -Raw
+
+        $smokeSource | Should -Match 'Start-Process -FilePath \$powershell -ArgumentList \$argumentList -Wait -PassThru'
+        $smokeSource | Should -Match '\$exitProbe\.ExitCode -ne 37'
+        $smokeSource | Should -Not -Match 'setupLauncherScript|launcherContent|invoke-runtime-setup\.ps1'
+    }
 }
