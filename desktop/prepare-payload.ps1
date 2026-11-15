@@ -110,6 +110,27 @@ Get-ChildItem $stageRoot -Directory -Recurse -Force |
     Sort-Object FullName -Descending |
     ForEach-Object { if (Test-Path $_.FullName) { Remove-Item $_.FullName -Recurse -Force } }
 
+# Verify the complete runtime and service contract after all files have been
+# staged and development-only directories removed. These are the files that
+# the native shell and first-run setup will require on a customer machine.
+$requiredPayloadFiles = @(
+    "app.py",
+    "requirements.txt",
+    "VERSION",
+    "setup-runtime.ps1",
+    "runtime-archive.ps1",
+    "runtime-manifest-state.ps1",
+    "render-service\\dist\\server.js",
+    "render-service\\node_modules\\@remotion\\renderer\\package.json",
+    "remotion\\src\\index.ts",
+    "bgutil-provider\\server\\build\\generate_once.js"
+)
+foreach ($relativePath in $requiredPayloadFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $stageRoot $relativePath) -PathType Leaf)) {
+        throw "Application payload is incomplete. Required file is missing: $relativePath"
+    }
+}
+
 if (Test-Path $archive) { Remove-Item $archive -Force }
 $Tar = Get-Command "tar.exe" -ErrorAction SilentlyContinue
 if (-not $Tar) { throw "Windows tar.exe is required to package the application payload." }
