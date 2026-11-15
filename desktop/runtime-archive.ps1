@@ -21,6 +21,38 @@ function Get-ClippyFileSha256([string]$Path) {
     }
 }
 
+function Get-ClippyZipUncompressedSize([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.File]::Exists($Path)) {
+        throw "Cannot inspect ZIP contents because the archive does not exist: $Path"
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $zip = [System.IO.Compression.ZipFile]::OpenRead([IO.Path]::GetFullPath($Path))
+    try {
+        $totalBytes = 0L
+        foreach ($entry in $zip.Entries) {
+            $entryName = [string]$entry.FullName
+            if ([IO.Path]::IsPathRooted($entryName) -or
+                $entryName -match '^[a-zA-Z]:' -or
+                $entryName -match '(^|[/\\])\.\.([/\\]|$)') {
+                throw "Runtime ZIP contains an unsafe entry path: '$entryName'."
+            }
+
+            $entryLength = [long]$entry.Length
+            if ($entryLength -lt 0 -or $entryLength -gt ([long]::MaxValue - $totalBytes)) {
+                throw "Runtime ZIP contains an invalid or overflowing uncompressed size."
+            }
+            $totalBytes += $entryLength
+        }
+        if ($totalBytes -le 0) {
+            throw "Runtime ZIP contains no uncompressed file data."
+        }
+        return $totalBytes
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 function Assert-ClippyRuntimePartName([string]$Name) {
     if ([string]::IsNullOrWhiteSpace($Name) -or
         $Name -notmatch '^clippy-python-(cpu|cuda)(?:\.zip|\.part\d{3,})$' -or
@@ -51,6 +83,7 @@ function New-ClippyRuntimeArchiveManifest {
 
     $archiveName = "clippy-python-$Variant.zip"
     $archiveSize = (Get-Item -LiteralPath $ArchivePath).Length
+    $archiveExpandedSize = Get-ClippyZipUncompressedSize -Path $ArchivePath
     $archiveHash = Get-ClippyFileSha256 $ArchivePath
     $partFiles = New-Object System.Collections.Generic.List[object]
 
@@ -105,6 +138,7 @@ function New-ClippyRuntimeArchiveManifest {
         archive = [ordered]@{
             name = $archiveName
             size = [long]$archiveSize
+            uncompressedSize = [long]$archiveExpandedSize
             sha256 = $archiveHash
         }
         partCount = $partFiles.Count
@@ -156,8 +190,101 @@ function Assert-ClippyRuntimeArchiveManifest {
     }
     if ($Manifest.archive.name -ne "clippy-python-$ExpectedVariant.zip" -or
         [long]$Manifest.archive.size -le 0 -or
-        [string]$Manifest.archive.sha256 -notmatch '^[a-fA-F0-9]{64}$') {
-        throw "Runtime manifest archive metadata is invalid."
+        [long]$Manifest.archive.uncompressedSize -le 0 -or
+        [long]$Manifest.archive.uncompressedSize -gt 64GB -or
+        [string]$Manifest.archive.sha256 -notmatch '^[a-fA-F0-9]{64}
+    if ($null -eq $Manifest.parts -or @($Manifest.parts).Count -lt 1 -or
+        [int]$Manifest.partCount -ne @($Manifest.parts).Count) {
+        throw "Runtime manifest part count is invalid."
+    }
+    $totalBytes = 0L
+    $seen = @{}
+    foreach ($part in @($Manifest.parts)) {
+        Assert-ClippyRuntimePartName ([string]$part.name)
+        if (-not ([string]$part.name).StartsWith("clippy-python-$ExpectedVariant", [StringComparison]::Ordinal)) {
+            throw "Runtime part belongs to a different variant: $($part.name)"
+        }
+        if ($seen.ContainsKey([string]$part.name)) { throw "Runtime manifest contains duplicate part '$($part.name)'." }
+        $seen[[string]$part.name] = $true
+        $size = [long]$part.size
+        if ($size -le 0 -or $size -gt $MaximumPartBytes -or $size -ge 2GB) {
+            throw "Runtime part size is invalid or exceeds the safe release limit: $($part.name) ($size bytes)."
+        }
+        if ([string]$part.sha256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw "Runtime part SHA-256 is invalid: $($part.name)"
+        }
+        $totalBytes += $size
+    }
+    if ($totalBytes -ne [long]$Manifest.archive.size) {
+        throw "Runtime manifest part sizes total $totalBytes bytes, but archive size is $($Manifest.archive.size) bytes."
+    }
+    if (@($Manifest.parts).Count -eq 1 -and $Manifest.parts[0].name -ne $Manifest.archive.name) {
+        throw "A single-part runtime must use the canonical archive asset name."
+    }
+    if (@($Manifest.parts).Count -gt 1 -and @($Manifest.parts | Where-Object { $_.name -eq $Manifest.archive.name }).Count -gt 0) {
+        throw "A multipart runtime cannot also name the original archive as a downloadable part."
+    }
+    return $true
+}
+
+function Join-ClippyRuntimeArchiveParts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$PartsDirectory,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    $destinationPartial = "$Destination.partial"
+    if (Test-Path -LiteralPath $destinationPartial) { Remove-Item -LiteralPath $destinationPartial -Force }
+    $output = [IO.File]::Open($destinationPartial, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $buffer = New-Object byte[] (8 * 1024 * 1024)
+    $total = 0L
+    try {
+        foreach ($part in @($Manifest.parts)) {
+            Assert-ClippyRuntimePartName ([string]$part.name)
+            $partPath = Join-Path $PartsDirectory ([string]$part.name)
+            if (-not (Test-Path -LiteralPath $partPath -PathType Leaf)) {
+                throw "Runtime archive part is missing: $($part.name)"
+            }
+            $info = Get-Item -LiteralPath $partPath
+            if ($info.Length -ne [long]$part.size) {
+                throw "Runtime archive part has the wrong size: $($part.name). Expected $($part.size), got $($info.Length)."
+            }
+            $actualHash = Get-ClippyFileSha256 $partPath
+            if ($actualHash -ne ([string]$part.sha256).ToLowerInvariant()) {
+                throw "Runtime archive part SHA-256 verification failed: $($part.name)"
+            }
+            $input = [IO.File]::Open($partPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            try {
+                while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    $output.Write($buffer, 0, $read)
+                    $total += $read
+                }
+            } finally {
+                $input.Dispose()
+            }
+        }
+        $output.Flush()
+    } catch {
+        $output.Dispose()
+        Remove-Item -LiteralPath $destinationPartial -Force -ErrorAction SilentlyContinue
+        throw
+    }
+    $output.Dispose()
+    if ($total -ne [long]$Manifest.archive.size) {
+        Remove-Item -LiteralPath $destinationPartial -Force -ErrorAction SilentlyContinue
+        throw "Reconstructed runtime archive size mismatch. Expected $($Manifest.archive.size), got $total."
+    }
+    $archiveHash = Get-ClippyFileSha256 $destinationPartial
+    if ($archiveHash -ne ([string]$Manifest.archive.sha256).ToLowerInvariant()) {
+        Remove-Item -LiteralPath $destinationPartial -Force -ErrorAction SilentlyContinue
+        throw "Reconstructed runtime archive SHA-256 verification failed."
+    }
+    Move-Item -LiteralPath $destinationPartial -Destination $Destination -Force
+    return $Destination
+}
+) {
+        throw "Runtime manifest archive metadata is invalid or declares an unsafe uncompressed size."
     }
     if ($null -eq $Manifest.parts -or @($Manifest.parts).Count -lt 1 -or
         [int]$Manifest.partCount -ne @($Manifest.parts).Count) {

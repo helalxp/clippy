@@ -1,4 +1,5 @@
 BeforeAll {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
     . (Join-Path $PSScriptRoot "../runtime-archive.ps1")
 }
 
@@ -24,10 +25,18 @@ Describe "Runtime release archive manifest contract" {
         $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("clippy-runtime-test-" + [guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
         $source = Join-Path $testRoot "clippy-python-cuda.zip"
-        $bytes = New-Object byte[] (2MB + 12345)
+        $script:sourceUncompressedBytes = 2MB + 12345
+        $bytes = New-Object byte[] $script:sourceUncompressedBytes
         $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
         try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-        [IO.File]::WriteAllBytes($source, $bytes)
+        $zip = [System.IO.Compression.ZipFile]::Open($source, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $entry = $zip.CreateEntry("runtime.bin", [System.IO.Compression.CompressionLevel]::NoCompression)
+            $entryStream = $entry.Open()
+            try { $entryStream.Write($bytes, 0, $bytes.Length) } finally { $entryStream.Dispose() }
+        } finally {
+            $zip.Dispose()
+        }
     }
 
     AfterEach {
@@ -48,11 +57,30 @@ Describe "Runtime release archive manifest contract" {
 
     It "keeps a small CPU runtime as one canonical ZIP asset" {
         $cpuArchive = Join-Path $testRoot "clippy-python-cpu.zip"
-        [IO.File]::WriteAllBytes($cpuArchive, (New-Object byte[] 4096))
-        $manifest = New-ClippyRuntimeArchiveManifest -ArchivePath $cpuArchive -OutputDirectory $testRoot -Variant cpu -ApplicationVersion "0.2.2" -MaximumPartBytes 1MB
+        Copy-Item -LiteralPath $source -Destination $cpuArchive
+        $manifest = New-ClippyRuntimeArchiveManifest -ArchivePath $cpuArchive -OutputDirectory $testRoot -Variant cpu -ApplicationVersion "0.2.2" -MaximumPartBytes 10MB
         $manifest.partCount | Should -Be 1
         $manifest.parts[0].name | Should -Be "clippy-python-cpu.zip"
+        $manifest.archive.uncompressedSize | Should -Be $script:sourceUncompressedBytes
         (Test-Path -LiteralPath $cpuArchive) | Should -BeTrue
+    }
+
+    It "records the true uncompressed runtime size for disk-space preflight" {
+        $manifest = New-ClippyRuntimeArchiveManifest -ArchivePath $source -OutputDirectory $testRoot -Variant cuda -ApplicationVersion "0.2.2" -MaximumPartBytes 1MB
+        $manifest.archive.uncompressedSize | Should -Be $script:sourceUncompressedBytes
+        Get-ClippyZipUncompressedSize -Path $source | Should -Be $script:sourceUncompressedBytes
+    }
+
+    It "rejects missing or unsafe uncompressed-size metadata" {
+        $manifest = New-ClippyRuntimeArchiveManifest -ArchivePath $source -OutputDirectory $testRoot -Variant cuda -ApplicationVersion "0.2.2" -MaximumPartBytes 1MB
+        $manifest.archive.uncompressedSize = 0
+        { Assert-ClippyRuntimeArchiveManifest -Manifest $manifest -ExpectedApplicationVersion "0.2.2" -ExpectedVariant cuda } | Should -Throw
+    }
+
+    It "rejects a corrupt ZIP before publishing its expanded-size metadata" {
+        $invalidArchive = Join-Path $testRoot "invalid.zip"
+        [IO.File]::WriteAllBytes($invalidArchive, [Text.Encoding]::UTF8.GetBytes("not a zip"))
+        { Get-ClippyZipUncompressedSize -Path $invalidArchive } | Should -Throw
     }
 
     It "rejects a manifest for a different application version or runtime variant" {
