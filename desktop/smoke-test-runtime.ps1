@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+. (Join-Path $PSScriptRoot "runtime-archive.ps1")
 
 function Assert-File([string]$Path, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -22,7 +23,7 @@ function Assert-Sha256([string]$Path, [string]$ChecksumPath, [string]$Label) {
         throw "$Label SHA-256 file does not contain a valid digest: $ChecksumPath"
     }
     $expected = $Matches[1].ToLowerInvariant()
-    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = Get-ClippyFileSha256 -Path $Path
     if ($actual -ne $expected) {
         throw "$Label SHA-256 mismatch. Expected $expected, got $actual."
     }
@@ -32,6 +33,7 @@ $originalLocalAppData = $env:LOCALAPPDATA
 $originalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $originalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 $originalForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME
+$originalModulePath = $env:PSModulePath
 if ([string]::IsNullOrWhiteSpace($originalLocalAppData)) {
     throw "The first-run smoke test requires the Windows LOCALAPPDATA environment variable."
 }
@@ -59,7 +61,7 @@ try {
         throw "CPU runtime manifest does not match application version $appVersion."
     }
     $cpuArchiveInfo = Get-Item -LiteralPath $CpuRuntimeArchive
-    $cpuArchiveHash = (Get-FileHash -LiteralPath $CpuRuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $cpuArchiveHash = Get-ClippyFileSha256 -Path $CpuRuntimeArchive
     if ([long]$runtimeManifest.archive.size -ne $cpuArchiveInfo.Length -or
         ([string]$runtimeManifest.archive.sha256).ToLowerInvariant() -ne $cpuArchiveHash) {
         throw "CPU runtime ZIP does not match the release manifest that will be published."
@@ -93,7 +95,16 @@ try {
         Assert-File (Join-Path $appDirectory $required) "extracted payload file $required"
     }
 
-    $powershell = (Get-Command "powershell.exe" -ErrorAction Stop).Source
+    # Use the known Windows PowerShell 5.1 executable, not whichever
+    # powershell.exe happens to appear first on the hosted runner's PATH.
+    $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    Assert-File $powershell "Windows PowerShell 5.1 executable"
+    $powerShellVersion = (& $powershell -NoLogo -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()' | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $powerShellVersion -notmatch '^5\.1\.') {
+        throw "First-run smoke test requires Windows PowerShell 5.1; found '$powerShellVersion' at $powershell."
+    }
+    Write-Host "Using Windows PowerShell $powerShellVersion at $powershell."
+
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
     $quotedSetupScript = '"' + $setupScript + '"'
     $argumentList = @(
@@ -107,7 +118,17 @@ try {
     )
 
     Write-Host "Running the actual first-run runtime setup in an isolated LOCALAPPDATA root..."
-    $process = Start-Process -FilePath $powershell -ArgumentList $argumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $setupStdout -RedirectStandardError $setupStderr
+    # Deliberately remove inherited module search paths for this child. The
+    # setup engine must import Windows PowerShell's built-in modules by the
+    # absolute paths under its own PSHOME, not depend on the parent host.
+    $isolatedModulePath = Join-Path $smokeRoot "empty-module-path"
+    New-Item -ItemType Directory -Path $isolatedModulePath -Force | Out-Null
+    try {
+        $env:PSModulePath = $isolatedModulePath
+        $process = Start-Process -FilePath $powershell -ArgumentList $argumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $setupStdout -RedirectStandardError $setupStderr
+    } finally {
+        if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
+    }
     if ($process.ExitCode -ne 0) {
         $details = @()
         foreach ($logPath in @($setupLog, $setupStdout, $setupStderr)) {
@@ -157,6 +178,7 @@ try {
     if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
     if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }
     if ($null -eq $originalForceCpuRuntime) { Remove-Item Env:CLIPPY_FORCE_CPU_RUNTIME -ErrorAction SilentlyContinue } else { $env:CLIPPY_FORCE_CPU_RUNTIME = $originalForceCpuRuntime }
+    if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
     if (Test-Path -LiteralPath $smokeLocalAppData -PathType Container) {
         Remove-Item -LiteralPath $smokeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
     }
