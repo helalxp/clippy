@@ -55,6 +55,7 @@ jobs:
         run: |
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/smoke-test-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-manifest-state.ps1 -Raw)) | Out-Null
