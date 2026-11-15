@@ -55,6 +55,8 @@ $diagnosticsLog = Join-Path $diagnosticsRoot "smoke-test-diagnostics.log"
 $childContextLog = Join-Path $smokeRoot "child-context.log"
 $httpServerStdout = Join-Path $smokeRoot "runtime-http.stdout.log"
 $httpServerStderr = Join-Path $smokeRoot "runtime-http.stderr.log"
+$script:httpServerStdout = $httpServerStdout
+$script:httpServerStderr = $httpServerStderr
 $script:httpServerProcess = $null
 $originalRuntimeSetupTestMode = $env:CLIPPY_RUNTIME_SETUP_TEST_MODE
 $originalRuntimeSetupManifestBaseUrl = $env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL
@@ -90,7 +92,12 @@ function Save-SmokeDiagnostics([string]$FailureMessage = "") {
         @{ Path = $script:httpServerStdout; Name = "runtime-http.stdout.log" },
         @{ Path = $script:httpServerStderr; Name = "runtime-http.stderr.log" }
     )
-    $lines = @("Child exit code: $(if ($script:setupProcess) { $script:setupProcess.ExitCode } else { 'not-started' })")
+    $lines = @()
+    if (Test-Path -LiteralPath $script:diagnosticsLog -PathType Leaf) {
+        $lines += "===== Smoke test startup context ====="
+        $lines += Get-Content -LiteralPath $script:diagnosticsLog -Tail 100
+    }
+    $lines += "Child exit code: $(if ($script:setupProcess) { $script:setupProcess.ExitCode } else { 'not-started' })"
     if ($FailureMessage) { $lines += "SMOKE TEST FAILURE: $FailureMessage" }
     foreach ($source in $paths) {
         $sourcePath = [string]$source.Path
@@ -350,6 +357,9 @@ $PSModuleAutoLoadingPreference = 'None'
     Write-Host "Clean first-run runtime smoke test passed for Clippy $appVersion."
 } catch {
     $failureMessage = $_.Exception.Message
+    if ($null -ne $script:httpServerProcess -and -not $script:httpServerProcess.HasExited) {
+        Stop-Process -Id $script:httpServerProcess.Id -Force -ErrorAction SilentlyContinue
+    }
     try { Save-SmokeDiagnostics -FailureMessage $failureMessage } catch {
         Write-Host "Could not write complete diagnostics: $($_.Exception.Message)"
     }
