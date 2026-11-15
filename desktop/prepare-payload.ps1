@@ -8,6 +8,7 @@ $archive = Join-Path $resourceRoot "app-payload.zip"
 $renderDir = Join-Path $repoRoot "render-service"
 $remotionDir = Join-Path $repoRoot "remotion"
 $bgutilVersion = "1.3.2"
+$bgutilCommit = "7511309af023b09788dc8f2efc96cc3671291e6c"
 $bgutilSource = Join-Path $env:TEMP "clippy-bgutil-provider-$bgutilVersion"
 
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$WorkingDirectory) {
@@ -50,6 +51,11 @@ if (Test-Path $bgutilSource) { Remove-Item $bgutilSource -Recurse -Force }
 Write-Host "Preparing pinned bgutil YouTube proof-of-origin token provider $bgutilVersion..."
 & git clone --depth 1 --branch $bgutilVersion https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git $bgutilSource
 if ($LASTEXITCODE -ne 0) { throw "Could not clone bgutil provider $bgutilVersion." }
+$actualBgutilCommit = (& git -C $bgutilSource rev-parse HEAD | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $actualBgutilCommit -ne $bgutilCommit) {
+    throw "bgutil provider tag $bgutilVersion resolved to unexpected commit '$actualBgutilCommit'. Expected $bgutilCommit."
+}
+Write-Host "Verified bgutil provider commit $actualBgutilCommit."
 $bgutilServer = Join-Path $bgutilSource "server"
 Push-Location $bgutilServer
 try {

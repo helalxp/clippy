@@ -355,28 +355,81 @@ function Assert-Sha256([string]$Path, [string]$Expected) {
     }
 }
 
+function Get-ClippyAvailableFreeBytes([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Cannot inspect free disk space without a path."
+    }
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $volumeRoot = [IO.Path]::GetPathRoot($fullPath)
+    if ([string]::IsNullOrWhiteSpace($volumeRoot)) {
+        throw "Cannot determine the storage volume for $fullPath."
+    }
+    $drive = New-Object System.IO.DriveInfo($volumeRoot)
+    if (-not $drive.IsReady) {
+        throw "Storage volume $volumeRoot is not ready."
+    }
+    return [long]$drive.AvailableFreeSpace
+}
+
 New-Item -ItemType Directory -Path $Runtime, $Downloads -Force | Out-Null
 
-# Put temporary extraction and package-install files on the roomiest fixed drive.
-# The managed runtime remains under LOCALAPPDATA; only scratch data is redirected.
-$ScratchDrive = [System.IO.DriveInfo]::GetDrives() |
-    Where-Object { $_.IsReady -and $_.DriveType -eq [System.IO.DriveType]::Fixed } |
-    Sort-Object AvailableFreeSpace -Descending |
-    Select-Object -First 1
-if (-not $ScratchDrive) { throw "No writable fixed drive is available for setup temporary files." }
+# Use a user-writable temporary parent, never the root of a volume. Prefer
+# CLIPPY_TEMP_DIR (an explicit administrator choice), then TEMP/TMP, then the
+# platform temp and LOCALAPPDATA. Probe each candidate with a real write before
+# selecting it, and prefer the candidate with the most free space.
 $ScratchPrefix = "ClippySetupTemp-" + $env:USERNAME + "-"
-# Each setup process gets an isolated scratch directory. Remove only abandoned
-# directories older than 24 hours so concurrent launches cannot delete each
-# other's extraction or package-install files.
-Get-ChildItem -LiteralPath $ScratchDrive.RootDirectory.FullName -Directory -Filter "$ScratchPrefix*" -ErrorAction SilentlyContinue |
+$ScratchCandidates = New-Object System.Collections.Generic.List[object]
+$SeenScratchParents = @{}
+$ScratchProbeErrors = New-Object System.Collections.Generic.List[string]
+foreach ($CandidatePath in @($env:CLIPPY_TEMP_DIR, $env:TEMP, $env:TMP, [IO.Path]::GetTempPath(), $env:LOCALAPPDATA)) {
+    if ([string]::IsNullOrWhiteSpace([string]$CandidatePath)) { continue }
+    try {
+        $CandidateFullPath = [IO.Path]::GetFullPath([string]$CandidatePath)
+        $CandidateVolumeRoot = [IO.Path]::GetPathRoot($CandidateFullPath)
+        if ([string]::IsNullOrWhiteSpace($CandidateVolumeRoot) -or
+            [string]::Equals($CandidateFullPath.TrimEnd([char[]]@('\', '/')), $CandidateVolumeRoot.TrimEnd([char[]]@('\', '/')), [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        if ($SeenScratchParents.ContainsKey($CandidateFullPath)) { continue }
+        $SeenScratchParents[$CandidateFullPath] = $true
+        [System.IO.Directory]::CreateDirectory($CandidateFullPath) | Out-Null
+        $ProbeDirectory = Join-Path $CandidateFullPath (".clippy-write-probe-" + $PID + "-" + [guid]::NewGuid().ToString("N"))
+        [System.IO.Directory]::CreateDirectory($ProbeDirectory) | Out-Null
+        $ProbeFile = Join-Path $ProbeDirectory "probe.txt"
+        [System.IO.File]::WriteAllText($ProbeFile, "Clippy temporary storage probe")
+        [System.IO.File]::Delete($ProbeFile)
+        [System.IO.Directory]::Delete($ProbeDirectory)
+        $CandidateDrive = New-Object System.IO.DriveInfo($CandidateVolumeRoot)
+        if ($CandidateDrive.IsReady -and $CandidateDrive.DriveType -eq [System.IO.DriveType]::Fixed) {
+            $ScratchCandidates.Add([pscustomobject]@{
+                Path = $CandidateFullPath
+                Drive = $CandidateDrive
+                FreeBytes = [long]$CandidateDrive.AvailableFreeSpace
+            })
+        } else {
+            $ScratchProbeErrors.Add("$CandidateFullPath is not on a ready local fixed drive.")
+        }
+    } catch {
+        $ScratchProbeErrors.Add("$CandidatePath is not writable: $($_.Exception.Message)")
+    }
+}
+$ScratchCandidate = $ScratchCandidates | Sort-Object -Property FreeBytes -Descending | Select-Object -First 1
+if (-not $ScratchCandidate) {
+    throw ("No writable temporary directory on a local fixed drive was found. Set TEMP/TMP or CLIPPY_TEMP_DIR to a writable location. " + ($ScratchProbeErrors -join " | "))
+}
+$ScratchParent = [string]$ScratchCandidate.Path
+$ScratchDrive = $ScratchCandidate.Drive
+# Remove only abandoned Clippy scratch folders inside the verified user-writable
+# parent. Never enumerate or create installation temp folders at a drive root.
+Get-ChildItem -LiteralPath $ScratchParent -Directory -Filter "$ScratchPrefix*" -ErrorAction SilentlyContinue |
     Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-24) } |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-$script:ScratchRoot = Join-Path $ScratchDrive.RootDirectory.FullName ($ScratchPrefix + $PID + "-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
-$env:TEMP = $ScratchRoot
-$env:TMP = $ScratchRoot
-$env:PIP_CACHE_DIR = Join-Path $ScratchRoot "pip-cache"
-Write-Stage ("Using " + $ScratchRoot + " for temporary setup files; managed runtimes remain in " + $Root)
+$script:ScratchRoot = Join-Path $ScratchParent ($ScratchPrefix + $PID + "-" + [guid]::NewGuid().ToString("N"))
+[System.IO.Directory]::CreateDirectory($script:ScratchRoot) | Out-Null
+$env:TEMP = $script:ScratchRoot
+$env:TMP = $script:ScratchRoot
+$env:PIP_CACHE_DIR = Join-Path $script:ScratchRoot "pip-cache"
+Write-Stage ("Using writable temporary directory " + $script:ScratchRoot + " (" + $ScratchDrive.Name + ", " + [math]::Round($ScratchDrive.AvailableFreeSpace / 1GB, 1) + " GB free); managed runtimes remain in " + $Root)
 foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "runtime-manifest-state.ps1", "VERSION", "bgutil-provider\server\build\generate_once.js")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
@@ -484,25 +537,10 @@ if (Test-Path $ManifestPath) {
     }
 }
 
-$DriveLetter = [IO.Path]::GetPathRoot($Root).Substring(0, 1)
-$RuntimeFreeBytes = (Get-PSDrive -Name $DriveLetter).Free
-$ScratchFreeBytes = $ScratchDrive.AvailableFreeSpace
-$MinimumRuntimeFreeBytes = 10GB
-$MinimumScratchFreeBytes = 12GB
-$ScratchDriveLetter = $ScratchDrive.Name.Substring(0, 1)
-if ($ScratchDriveLetter -eq $DriveLetter) {
-    $CombinedMinimumBytes = $MinimumRuntimeFreeBytes + $MinimumScratchFreeBytes
-    if ($RuntimeFreeBytes -lt $CombinedMinimumBytes) {
-        throw "Clippy needs at least 22 GB free on drive $DriveLetter when runtime and temporary files share a drive. Available: $([math]::Round($RuntimeFreeBytes / 1GB, 1)) GB."
-    }
-} else {
-    if ($RuntimeFreeBytes -lt $MinimumRuntimeFreeBytes) {
-        throw "Clippy needs at least 10 GB free on the runtime drive ($DriveLetter) for installed components. Available: $([math]::Round($RuntimeFreeBytes / 1GB, 1)) GB."
-    }
-    if ($ScratchFreeBytes -lt $MinimumScratchFreeBytes) {
-        throw "Clippy needs at least 12 GB free on scratch drive $($ScratchDrive.Name) for temporary CUDA/Python installation files. Available: $([math]::Round($ScratchFreeBytes / 1GB, 1)) GB."
-    }
-}
+# Runtime storage requirements are calculated after the release manifest is
+# validated, because compressed and uncompressed archive sizes vary by variant.
+# Scratch storage is checked again at that point against the actual temp volume.
+
 
 # Python and native wheels require the Microsoft Visual C++ runtime.
 # Install the signed Microsoft redistributable only when the x64 runtime is absent.
@@ -535,11 +573,42 @@ $PythonRuntimeArchive = Join-Path $Downloads $PythonRuntimeName
 $PythonRuntimeManifestName = "clippy-python-$TorchVariant.manifest.json"
 $PythonRuntimeManifestUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion/$PythonRuntimeManifestName"
 $PythonRuntimeReleaseBaseUrl = "https://github.com/helalxp/clippy/releases/download/v$AppVersion"
+$RuntimeSetupTestMode = $env:CLIPPY_RUNTIME_SETUP_TEST_MODE -eq "1"
+if ($RuntimeSetupTestMode) {
+    $TestManifestBaseUrl = [string]$env:CLIPPY_RUNTIME_SETUP_TEST_MANIFEST_BASE_URL
+    $TestReleaseBaseUrl = [string]$env:CLIPPY_RUNTIME_SETUP_TEST_RELEASE_BASE_URL
+    foreach ($TestUrl in @(
+        @{ Value = $TestManifestBaseUrl; Label = "manifest base URL" },
+        @{ Value = $TestReleaseBaseUrl; Label = "release asset base URL" }
+    )) {
+        $ParsedTestUrl = $null
+        if (-not [Uri]::TryCreate($TestUrl.Value, [UriKind]::Absolute, [ref]$ParsedTestUrl) -or
+            $ParsedTestUrl.Scheme -ne "http" -or
+            -not $ParsedTestUrl.IsLoopback -or
+            -not [string]::IsNullOrEmpty($ParsedTestUrl.UserInfo) -or
+            -not [string]::IsNullOrEmpty($ParsedTestUrl.Query) -or
+            -not [string]::IsNullOrEmpty($ParsedTestUrl.Fragment)) {
+            throw "Runtime setup test mode only accepts plain HTTP loopback URLs for the $($TestUrl.Label)."
+        }
+    }
+    $PythonRuntimeManifestUrl = $TestManifestBaseUrl.TrimEnd('/') + "/" + $PythonRuntimeManifestName
+    $PythonRuntimeReleaseBaseUrl = $TestReleaseBaseUrl.TrimEnd('/')
+    Write-Stage ("Using loopback-only runtime test manifest URL: " + $PythonRuntimeManifestUrl)
+    Write-Stage ("Using loopback-only runtime test asset base URL: " + $PythonRuntimeReleaseBaseUrl)
+}
 $LocalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $LocalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 
-# Local archive overrides remain available for developer diagnostics. Customer
-# installs use only the manifest and assets from the exact matching release.
+# Local archive overrides remain available for developer diagnostics.
+# Customer installs use only the verified manifest and assets from the exact app release.
+$RuntimeManifest = $null
+$VerifiedRuntimeParts = @{}
+$MissingRuntimeParts = New-Object System.Collections.Generic.List[object]
+$RuntimePartDownloadBytes = 0L
+$RuntimeReconstructionBytes = 0L
+$PythonRuntimeExpandedBytes = 0L
+$PythonRuntimeVerified = $false
+
 if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
     $PythonRuntimeArchive = [System.IO.Path]::GetFullPath($LocalRuntimeArchive)
     if (-not (Test-Path -LiteralPath $PythonRuntimeArchive -PathType Leaf)) {
@@ -559,31 +628,46 @@ if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
         throw "Local Python runtime checksum file is invalid: $PythonRuntimeChecksum"
     }
     Assert-Sha256 $PythonRuntimeArchive $Matches[1]
+    $PythonRuntimeExpandedBytes = Get-ClippyZipUncompressedSize -Path $PythonRuntimeArchive
     $PythonRuntimeVerified = $true
 } else {
     $PythonRuntimeManifestPath = Join-Path $Downloads "$AppVersion-$PythonRuntimeManifestName"
-    Download-File $PythonRuntimeManifestUrl $PythonRuntimeManifestPath
     $ManifestParsed = $false
     for ($ManifestAttempt = 1; $ManifestAttempt -le 2; $ManifestAttempt++) {
         try {
+            Download-File $PythonRuntimeManifestUrl $PythonRuntimeManifestPath
             $RuntimeManifest = Get-Content -LiteralPath $PythonRuntimeManifestPath -Raw | ConvertFrom-Json
+            Assert-ClippyRuntimeArchiveManifest -Manifest $RuntimeManifest -ExpectedApplicationVersion $AppVersion -ExpectedVariant $TorchVariant | Out-Null
             $ManifestParsed = $true
             break
         } catch {
+            $ManifestError = $_.Exception.Message
             Remove-Item -LiteralPath $PythonRuntimeManifestPath -Force -ErrorAction SilentlyContinue
             if ($ManifestAttempt -eq 2) {
-                throw "The runtime manifest downloaded from release v$AppVersion is not valid JSON: $PythonRuntimeManifestUrl"
+                throw "The runtime manifest for release v$AppVersion could not be downloaded or validated from $PythonRuntimeManifestUrl. $ManifestError"
             }
-            Write-Stage "Cached runtime manifest was invalid; downloading it again."
-            Download-File $PythonRuntimeManifestUrl $PythonRuntimeManifestPath
+            Write-Stage ("Cached/downloaded runtime manifest failed validation; downloading it again. " + $ManifestError)
         }
     }
-    if (-not $ManifestParsed) { throw "Could not read the runtime manifest for release v$AppVersion." }
-    Assert-ClippyRuntimeArchiveManifest -Manifest $RuntimeManifest -ExpectedApplicationVersion $AppVersion -ExpectedVariant $TorchVariant | Out-Null
+    if (-not $ManifestParsed) { throw "Could not read a valid runtime manifest for release v$AppVersion." }
+
+    $PythonRuntimeExpandedBytes = [long]$RuntimeManifest.archive.uncompressedSize
+    if ([int]$RuntimeManifest.partCount -eq 1) {
+        # The single-part canonical asset is already the complete archive. Use
+        # it directly rather than writing a second copy during reconstruction.
+        $PythonRuntimeArchive = Join-Path $Downloads ([string]$RuntimeManifest.archive.name)
+    } else {
+        $PythonRuntimeArchive = Join-Path $Downloads "$AppVersion-$PythonRuntimeName"
+        # Reconstruct-ClippyRuntimeArchiveParts writes a new archive. Remove an
+        # abandoned previous output now so its bytes are not double-counted.
+        if (Test-Path -LiteralPath $PythonRuntimeArchive -PathType Leaf) {
+            Remove-Item -LiteralPath $PythonRuntimeArchive -Force
+        }
+        $RuntimeReconstructionBytes = [long]$RuntimeManifest.archive.size
+    }
 
     foreach ($Part in @($RuntimeManifest.parts)) {
         $PartName = [string]$Part.name
-        $PartUrl = "$PythonRuntimeReleaseBaseUrl/$PartName"
         $PartPath = Join-Path $Downloads $PartName
         $PartHealthy = $false
         if (Test-Path -LiteralPath $PartPath -PathType Leaf) {
@@ -591,25 +675,91 @@ if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
             if ($PartInfo.Length -eq [long]$Part.size -and
                 (Get-ClippyFileSha256 $PartPath) -eq ([string]$Part.sha256).ToLowerInvariant()) {
                 $PartHealthy = $true
+                $VerifiedRuntimeParts[$PartName] = $true
                 Write-Stage "Reusing verified runtime part $PartName."
             } else {
-                Write-Stage "Cached runtime part $PartName failed verification; downloading it again."
+                Write-Stage "Cached runtime part $PartName failed verification; removing it before download."
                 Remove-Item -LiteralPath $PartPath -Force
             }
         }
         if (-not $PartHealthy) {
-            Download-File $PartUrl $PartPath
-            $PartInfo = Get-Item -LiteralPath $PartPath
-            if ($PartInfo.Length -ne [long]$Part.size -or
-                (Get-ClippyFileSha256 $PartPath) -ne ([string]$Part.sha256).ToLowerInvariant()) {
-                Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
-                throw "Downloaded runtime part failed size or SHA-256 verification: $PartName"
-            }
+            $MissingRuntimeParts.Add($Part)
+            $RuntimePartDownloadBytes += [long]$Part.size
         }
     }
+}
 
-    Write-Stage "Reconstructing the verified $TorchVariant Python runtime archive from $($RuntimeManifest.partCount) release asset(s)..."
-    Join-ClippyRuntimeArchiveParts -Manifest $RuntimeManifest -PartsDirectory $Downloads -Destination $PythonRuntimeArchive | Out-Null
+# Preflight the actual peak disk footprint before downloading or extracting the
+# Python runtime. For multipart archives, both all downloaded parts and the
+# reconstructed ZIP coexist until installation succeeds.
+$RuntimeReserveBytes = 2GB
+$ScratchReserveBytes = 3GB
+$RuntimeStorageRequiredBytes = [long]$RuntimePartDownloadBytes + [long]$RuntimeReconstructionBytes + [long]$PythonRuntimeExpandedBytes + [long]$RuntimeReserveBytes
+$ScratchStorageRequiredBytes = [long]$ScratchReserveBytes
+$RuntimeFreeBytes = Get-ClippyAvailableFreeBytes -Path $Runtime
+$ScratchFreeBytes = Get-ClippyAvailableFreeBytes -Path $script:ScratchRoot
+$RuntimeVolumeRoot = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Runtime))
+$ScratchVolumeRoot = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($script:ScratchRoot))
+$SameStorageVolume = [string]::Equals($RuntimeVolumeRoot, $ScratchVolumeRoot, [System.StringComparison]::OrdinalIgnoreCase)
+if ($SameStorageVolume) {
+    $CombinedRequiredBytes = $RuntimeStorageRequiredBytes + $ScratchStorageRequiredBytes
+    if ($RuntimeFreeBytes -lt $CombinedRequiredBytes) {
+        throw ("Clippy needs {0:N1} GB free on {1} for this {2} Python runtime ({3:N1} GB download/reconstruction, {4:N1} GB extraction, {5:N1} GB temporary setup reserve). Available: {6:N1} GB." -f
+            ($CombinedRequiredBytes / 1GB), $RuntimeVolumeRoot, $TorchVariant,
+            (($RuntimePartDownloadBytes + $RuntimeReconstructionBytes) / 1GB),
+            ($PythonRuntimeExpandedBytes / 1GB), ($RuntimeReserveBytes / 1GB + $ScratchReserveBytes / 1GB),
+            ($RuntimeFreeBytes / 1GB))
+    }
+} else {
+    if ($RuntimeFreeBytes -lt $RuntimeStorageRequiredBytes) {
+        throw ("Clippy needs {0:N1} GB free on the runtime volume {1} for this {2} Python runtime. Available: {3:N1} GB." -f
+            ($RuntimeStorageRequiredBytes / 1GB), $RuntimeVolumeRoot, $TorchVariant, ($RuntimeFreeBytes / 1GB))
+    }
+    if ($ScratchFreeBytes -lt $ScratchStorageRequiredBytes) {
+        throw ("Clippy needs {0:N1} GB free in the selected temporary storage volume {1}. Available: {2:N1} GB. Set TEMP/TMP or CLIPPY_TEMP_DIR to a writable volume with more space." -f
+            ($ScratchStorageRequiredBytes / 1GB), $ScratchVolumeRoot, ($ScratchFreeBytes / 1GB))
+    }
+}
+Write-Stage ("Disk preflight passed. Runtime volume required: " + [math]::Round($RuntimeStorageRequiredBytes / 1GB, 1) + " GB; available: " + [math]::Round($RuntimeFreeBytes / 1GB, 1) + " GB. Temporary volume required: " + [math]::Round($ScratchStorageRequiredBytes / 1GB, 1) + " GB; available: " + [math]::Round($ScratchFreeBytes / 1GB, 1) + " GB.")
+
+if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
+    $ActualExpandedBytes = Get-ClippyZipUncompressedSize -Path $PythonRuntimeArchive
+    if ($ActualExpandedBytes -ne $PythonRuntimeExpandedBytes) {
+        throw "Locally supplied Python runtime ZIP expanded size changed during validation."
+    }
+} else {
+    foreach ($Part in @($RuntimeManifest.parts)) {
+        $PartName = [string]$Part.name
+        if ($VerifiedRuntimeParts.ContainsKey($PartName)) { continue }
+        $PartUrl = "$PythonRuntimeReleaseBaseUrl/$PartName"
+        $PartPath = Join-Path $Downloads $PartName
+        Download-File $PartUrl $PartPath
+        $PartInfo = Get-Item -LiteralPath $PartPath
+        if ($PartInfo.Length -ne [long]$Part.size -or
+            (Get-ClippyFileSha256 $PartPath) -ne ([string]$Part.sha256).ToLowerInvariant()) {
+            Remove-Item -LiteralPath $PartPath -Force -ErrorAction SilentlyContinue
+            throw "Downloaded runtime part failed size or SHA-256 verification: $PartName"
+        }
+        $VerifiedRuntimeParts[$PartName] = $true
+    }
+
+    if ([int]$RuntimeManifest.partCount -gt 1) {
+        Write-Stage "Reconstructing the verified $TorchVariant Python runtime archive from $($RuntimeManifest.partCount) release asset(s)..."
+        Join-ClippyRuntimeArchiveParts -Manifest $RuntimeManifest -PartsDirectory $Downloads -Destination $PythonRuntimeArchive | Out-Null
+    } else {
+        Write-Stage "Using the verified single-part $TorchVariant Python runtime archive."
+    }
+
+    $PythonArchiveInfo = Get-Item -LiteralPath $PythonRuntimeArchive
+    $PythonArchiveHash = Get-ClippyFileSha256 -Path $PythonRuntimeArchive
+    if ($PythonArchiveInfo.Length -ne [long]$RuntimeManifest.archive.size -or
+        $PythonArchiveHash -ne ([string]$RuntimeManifest.archive.sha256).ToLowerInvariant()) {
+        throw "Verified Python runtime archive does not match its release manifest."
+    }
+    $ActualExpandedBytes = Get-ClippyZipUncompressedSize -Path $PythonRuntimeArchive
+    if ($ActualExpandedBytes -ne $PythonRuntimeExpandedBytes) {
+        throw "Python runtime archive uncompressed size does not match its release manifest. Expected $PythonRuntimeExpandedBytes, got $ActualExpandedBytes."
+    }
     $PythonRuntimeVerified = $true
 }
 if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python runtime." }
