@@ -220,9 +220,10 @@ impl RuntimePaths {
         let local = env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .ok_or_else(|| "Windows LOCALAPPDATA directory is unavailable".to_string())?;
-        let root = env::var_os("CLIPPY_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| local.join("Clippy"));
+        // All installer, runtime-check, and setup paths are anchored to
+        // %LOCALAPPDATA%\\Clippy. Do not let a stray CLIPPY_HOME environment
+        // variable make the supervisor launch from a different installation.
+        let root = local.join("Clippy");
         let app = root.join("app").join("current");
         let runtime = root.join("runtime");
         // These executable paths are owned by the installation. Do not let
