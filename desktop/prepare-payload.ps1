@@ -79,6 +79,21 @@ Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-archive.ps1") -Destination $stageRoot
+Copy-Item (Join-Path $PSScriptRoot "runtime-manifest-state.ps1") -Destination $stageRoot
+
+# The runtime bootstrap dot-sources these files before it can inspect or repair
+# any installed component. Fail the build here rather than shipping a payload
+# that cannot execute its first-run setup.
+$requiredRuntimeFiles = @(
+    "setup-runtime.ps1",
+    "runtime-archive.ps1",
+    "runtime-manifest-state.ps1"
+)
+foreach ($relativePath in $requiredRuntimeFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $stageRoot $relativePath) -PathType Leaf)) {
+        throw "Application payload is missing required runtime setup file: $relativePath"
+    }
+}
 
 $directories = @("assets", "fonts", "reference_templates", "render-service", "remotion", "bin")
 foreach ($name in $directories) {
