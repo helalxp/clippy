@@ -106,7 +106,14 @@ try {
     Write-Host "Using Windows PowerShell $powerShellVersion at $powershell."
 
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
-    $quotedSetupScript = '"' + $setupScript + '"'
+    $setupLauncherScript = Join-Path $smokeRoot "invoke-runtime-setup.ps1"
+    $escapedSetupScript = $setupScript.Replace("'", "''")
+    $launcherContent = @"
+$PSModuleAutoLoadingPreference = 'None'
+& '$escapedSetupScript'
+"@
+    [IO.File]::WriteAllText($setupLauncherScript, $launcherContent, [Text.UTF8Encoding]::new($false))
+    $quotedSetupLauncherScript = '"' + $setupLauncherScript + '"'
     $argumentList = @(
         "-NoLogo",
         "-NoProfile",
@@ -114,7 +121,7 @@ try {
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        $quotedSetupScript
+        $quotedSetupLauncherScript
     )
 
     Write-Host "Running the actual first-run runtime setup in an isolated LOCALAPPDATA root..."
