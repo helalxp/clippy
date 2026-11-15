@@ -37,8 +37,7 @@ function Repair-ClippyManagedDirectoryInstall {
     param(
         [Parameter(Mandatory = $true)][string]$Destination,
         [Parameter(Mandatory = $true)][string]$Staging,
-        [Parameter(Mandatory = $true)][string]$Backup,
-        [Parameter(Mandatory = $true)][string]$ExpectedMarkerValue
+        [Parameter(Mandatory = $true)][string]$Backup
     )
 
     $destinationPath = [IO.Path]::GetFullPath($Destination)
@@ -59,7 +58,7 @@ function Repair-ClippyManagedDirectoryInstall {
         if ((Test-Path -LiteralPath $destinationPath -PathType Container) -and
             (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
             $markerValue = (Get-Content -LiteralPath $markerPath -Raw).Trim()
-            $destinationCommitted = [string]::Equals($markerValue, $ExpectedMarkerValue, [StringComparison]::Ordinal)
+            $destinationCommitted = -not [string]::IsNullOrWhiteSpace($markerValue)
         }
 
         if ($destinationCommitted) {

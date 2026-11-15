@@ -84,13 +84,19 @@ function Save-SmokeDiagnostics([string]$FailureMessage = "") {
     $root = Join-Path $script:smokeLocalAppData "Clippy"
     $paths = @(
         @{ Path = $script:childContextLog; Name = "child-context.log" },
+        @{ Path = (Join-Path $script:smokeRoot "invoke-runtime-setup.ps1"); Name = "invoke-runtime-setup.ps1" },
         @{ Path = $script:setupLog; Name = "runtime-setup.log" },
         @{ Path = $script:setupStdout; Name = "setup.stdout.log" },
         @{ Path = $script:setupStderr; Name = "setup.stderr.log" },
         @{ Path = $script:httpServerStdout; Name = "runtime-http.stdout.log" },
         @{ Path = $script:httpServerStderr; Name = "runtime-http.stderr.log" }
     )
-    $lines = @("Child exit code: $(if ($script:setupProcess) { $script:setupProcess.ExitCode } else { 'not-started' })")
+    $lines = @()
+    if (Test-Path -LiteralPath $script:diagnosticsLog -PathType Leaf) {
+        $lines += "===== Smoke test startup context ====="
+        $lines += Get-Content -LiteralPath $script:diagnosticsLog -Tail 100
+    }
+    $lines += "Child exit code: $(if ($script:setupProcess) { $script:setupProcess.ExitCode } else { 'not-started' })"
     if ($FailureMessage) { $lines += "SMOKE TEST FAILURE: $FailureMessage" }
     foreach ($source in $paths) {
         $sourcePath = [string]$source.Path

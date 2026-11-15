@@ -456,10 +456,10 @@ $ExpectedState = New-ClippyRuntimeState -PythonVersion $PythonVersion -PythonVar
 
 # Recover an interrupted managed-directory replacement before checking the
 # runtime manifest. Each activation is a same-volume sibling-directory rename.
-Repair-ClippyManagedDirectoryInstall -Destination $PythonDir -Staging $PythonStage -Backup $PythonBackup -ExpectedMarkerValue $ExpectedState
-Repair-ClippyManagedDirectoryInstall -Destination $NodeDir -Staging $NodeStage -Backup $NodeBackup -ExpectedMarkerValue $NodeVersion
-Repair-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Staging $FfmpegStage -Backup $FfmpegBackup -ExpectedMarkerValue "gyan-release-essentials"
-Repair-ClippyManagedDirectoryInstall -Destination $BrowserDir -Staging $BrowserStage -Backup $BrowserBackup -ExpectedMarkerValue $RemotionVersion
+Repair-ClippyManagedDirectoryInstall -Destination $PythonDir -Staging $PythonStage -Backup $PythonBackup
+Repair-ClippyManagedDirectoryInstall -Destination $NodeDir -Staging $NodeStage -Backup $NodeBackup
+Repair-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Staging $FfmpegStage -Backup $FfmpegBackup
+Repair-ClippyManagedDirectoryInstall -Destination $BrowserDir -Staging $BrowserStage -Backup $BrowserBackup
 $BrowserInstallMarker = Join-Path $BrowserDir ".clippy-install-state"
 if (Test-Path -LiteralPath $BrowserInstallMarker -PathType Leaf) {
     $RecoveredBrowserVersion = (Get-Content -LiteralPath $BrowserInstallMarker -Raw).Trim()
@@ -1044,6 +1044,7 @@ try {
     }
 
     Complete-ClippyManagedDirectoryInstall -Backup $BrowserBackup
+    $BrowserActivationPending = $false
     [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
 } catch {
     if ($BrowserActivationPending) {
@@ -1095,6 +1096,13 @@ if ([string]::IsNullOrWhiteSpace($LocalRuntimeArchive) -and $RuntimeManifest) {
     Remove-Item -LiteralPath $PythonRuntimeArchive, $PythonRuntimeManifestPath -Force -ErrorAction SilentlyContinue
     foreach ($Part in @($RuntimeManifest.parts)) {
         Remove-Item -LiteralPath (Join-Path $Downloads ([string]$Part.name)) -Force -ErrorAction SilentlyContinue
+    }
+}
+# Installation is now fully verified. Remove large component installers and
+# checksum sidecars; failed setups deliberately retain them for resume/repair.
+foreach ($CachePath in @($NodeZip, $Checksums, $FfmpegZip, $FfmpegHashFile, (Join-Path $Downloads "vc_redist.x64.exe"))) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$CachePath)) {
+        Remove-Item -LiteralPath @($CachePath, "$CachePath.partial") -Force -ErrorAction SilentlyContinue
     }
 }
 Remove-ClippyScratchRoot

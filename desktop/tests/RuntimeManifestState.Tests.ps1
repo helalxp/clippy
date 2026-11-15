@@ -64,7 +64,7 @@ Describe "Managed runtime directory transaction contract" {
         Set-Content -LiteralPath (Join-Path $script:transactionDestination "partial.txt") -Value "incomplete"
         New-Item -ItemType Directory -Path $script:transactionStaging -Force | Out-Null
 
-        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -ExpectedMarkerValue "version=2"
+        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup
 
         (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "previous"
         (Test-Path -LiteralPath (Join-Path $script:transactionDestination "partial.txt")) | Should -BeFalse
@@ -79,9 +79,22 @@ Describe "Managed runtime directory transaction contract" {
         New-Item -ItemType Directory -Path $script:transactionBackup -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:transactionBackup "version.txt") -Value "old"
 
-        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -ExpectedMarkerValue "version=2"
+        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup
 
         (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "new"
+        (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
+    }
+
+    It "keeps a committed directory from an older version so normal health checks can upgrade it" {
+        New-Item -ItemType Directory -Path $script:transactionDestination -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination ".clippy-install-state") -Value "version=1"
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Value "previously-validated"
+        New-Item -ItemType Directory -Path $script:transactionBackup -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionBackup "version.txt") -Value "older-backup"
+
+        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup
+
+        (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "previously-validated"
         (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
     }
 
