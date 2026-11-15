@@ -65,6 +65,8 @@ $script:smokeLocalAppData = $smokeLocalAppData
 $script:diagnosticsRoot = $diagnosticsRoot
 $script:diagnosticsLog = $diagnosticsLog
 $script:childContextLog = $childContextLog
+$script:httpServerStdout = $httpServerStdout
+$script:httpServerStderr = $httpServerStderr
 $script:setupLog = $setupLog
 $script:setupStdout = $setupStdout
 $script:setupStderr = $setupStderr
@@ -333,6 +335,9 @@ $PSModuleAutoLoadingPreference = 'None'
         if (-not $component -or -not $component.installed -or [string]::IsNullOrWhiteSpace([string]$component.version)) {
             throw "Runtime manifest did not mark '$name' as installed."
         }
+    }
+    if ([string]$installedManifest.gpuMode -ne "cpu") {
+        throw "First-run CPU smoke test installed unexpected GPU mode '$($installedManifest.gpuMode)'."
     }
 
     & $pythonExe -c "import app, torch, fastapi, faster_whisper; assert torch.version.cuda is None; print('Backend imports and CPU runtime OK:', torch.__version__)"
