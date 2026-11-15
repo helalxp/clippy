@@ -398,6 +398,12 @@ mod manifest_state_tests {
         assert_eq!(issues.len(), 3, "all broken executables must be collected: {issues:?}");
         assert!(issues.iter().all(|issue| issue.contains("must be repaired")));
 
+        // The public status path must return a repair-needed status instead of
+        // propagating the executable-launch error to Tauri as a failed command.
+        let status = bootstrap.get_status().unwrap();
+        assert!(status.error.is_some());
+        assert!(status.message.contains("Runtime validation needs attention"));
+
         fs::remove_dir_all(root).unwrap();
     }
 }
