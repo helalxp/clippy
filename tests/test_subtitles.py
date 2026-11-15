@@ -453,6 +453,18 @@ class TestWhisperDeviceSelection:
         monkeypatch.delenv("WHISPER_DEVICE", raising=False)
         monkeypatch.delenv("WHISPER_COMPUTE", raising=False)
 
+    @staticmethod
+    def _set_runtime_manifest(monkeypatch, tmp_path, gpu_mode):
+        import json
+        local_app_data = tmp_path / ("local-app-data-" + gpu_mode)
+        clippy_root = local_app_data / "Clippy"
+        clippy_root.mkdir(parents=True)
+        (clippy_root / "runtime-manifest.json").write_text(
+            json.dumps({"gpuMode": gpu_mode}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+
     def test_defaults_to_cuda_when_saved_preference_and_ctranslate2_allow_it(
         self, monkeypatch, tmp_path
     ):
@@ -461,6 +473,7 @@ class TestWhisperDeviceSelection:
         from subtitles import get_whisper_config
 
         self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        self._set_runtime_manifest(monkeypatch, tmp_path, "cuda128")
         monkeypatch.setitem(
             sys.modules,
             "ctranslate2",
@@ -538,6 +551,7 @@ class TestWhisperDeviceSelection:
         from subtitles import get_whisper_config
 
         self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        self._set_runtime_manifest(monkeypatch, tmp_path, "cuda128")
         monkeypatch.setenv("WHISPER_COMPUTE", "int8_float16")
         monkeypatch.setitem(
             sys.modules,
@@ -549,6 +563,26 @@ class TestWhisperDeviceSelection:
 
         assert config["device"] == "cuda"
         assert config["compute_type"] == "int8_float16"
+
+    def test_non_desktop_without_runtime_manifest_keeps_cpu_default(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cpu"
+        assert config["compute_type"] == "int8"
 
     def test_cpu_installed_runtime_never_selects_cuda_even_if_a_device_is_visible(
         self, monkeypatch, tmp_path
