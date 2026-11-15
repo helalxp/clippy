@@ -243,7 +243,9 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
         "runtime-archive.ps1",
         "runtime-manifest-state.ps1",
         "render-service/dist/server.js",
+        "render-service/node_modules/@remotion/renderer/package.json",
         "remotion/src/index.ts",
+        "bgutil-provider/server/build/generate_once.js",
     ];
     let current_payload_is_complete = required_payload_files.iter()
         .all(|relative| current.join(relative).is_file());
