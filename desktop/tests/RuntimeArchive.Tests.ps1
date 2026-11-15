@@ -3,6 +3,23 @@ BeforeAll {
 }
 
 Describe "Runtime release archive manifest contract" {
+    It "calculates a standard SHA-256 digest with the platform crypto API" {
+        $testFile = Join-Path ([IO.Path]::GetTempPath()) ("clippy-sha256-" + [guid]::NewGuid().ToString("N"))
+        $bytes = [Text.Encoding]::UTF8.GetBytes("Clippy runtime archive hash contract")
+        [IO.File]::WriteAllBytes($testFile, $bytes)
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            $expected = ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $algorithm.Dispose()
+        }
+        try {
+            (Get-ClippyFileSha256 $testFile) | Should -Be $expected
+        } finally {
+            Remove-Item -LiteralPath $testFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     BeforeEach {
         $testRoot = Join-Path ([IO.Path]::GetTempPath()) ("clippy-runtime-test-" + [guid]::NewGuid().ToString("N"))
         New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
