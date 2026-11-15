@@ -108,10 +108,11 @@ try {
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
     $setupLauncherScript = Join-Path $smokeRoot "invoke-runtime-setup.ps1"
     $escapedSetupScript = $setupScript.Replace("'", "''")
-    $launcherContent = @"
+    $launcherContent = @'
 $PSModuleAutoLoadingPreference = 'None'
-& '$escapedSetupScript'
-"@
+& '__CLIPPY_SETUP_SCRIPT__'
+'@
+    $launcherContent = $launcherContent.Replace("__CLIPPY_SETUP_SCRIPT__", $escapedSetupScript)
     [IO.File]::WriteAllText($setupLauncherScript, $launcherContent, [Text.UTF8Encoding]::new($false))
     $quotedSetupLauncherScript = '"' + $setupLauncherScript + '"'
     $argumentList = @(
