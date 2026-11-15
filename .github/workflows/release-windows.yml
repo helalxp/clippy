@@ -115,12 +115,12 @@ jobs:
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
 
-      - name: Run Rust unit and installer contract tests
-        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
-
       - name: Build NSIS installer
         shell: pwsh
         run: ./desktop/build.ps1
+
+      - name: Run Rust unit and installer contract tests
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
 
       - name: Sign Windows installer (optional)
         shell: pwsh
