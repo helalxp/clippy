@@ -109,15 +109,17 @@ jobs:
         shell: pwsh
         run: ./desktop/validate-runtime-assets.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
 
-      - name: Run PowerShell runtime contract tests
+      - name: Build NSIS installer and assemble application payload
+        shell: pwsh
+        run: ./desktop/build.ps1
+
+      # The payload contract tests must run after prepare-payload.ps1 has built
+      # the exact ZIP embedded in the installer, not against source files alone.
+      - name: Run PowerShell runtime and assembled-payload contract tests
         shell: pwsh
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
-
-      - name: Build NSIS installer
-        shell: pwsh
-        run: ./desktop/build.ps1
 
       - name: Run Rust unit and installer contract tests
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
