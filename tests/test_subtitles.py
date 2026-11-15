@@ -434,3 +434,117 @@ class TestBurnWithMark:
         cmd = captured["cmd"]
         assert cmd[:5] == ["ffmpeg", "-y", "-i", "in.mp4", "-vf"]
         assert cmd[5:8] == [cmd[5], "-c:a", "copy"] and cmd[-1] == "out.mp4"
+
+class TestWhisperDeviceSelection:
+    """Desktop Whisper should use CUDA when it is installed and enabled."""
+
+    @staticmethod
+    def _set_settings(monkeypatch, tmp_path, gpu_mode=True):
+        import json
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(
+            json.dumps({"whisper": {"gpu_mode": gpu_mode}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings_path))
+        monkeypatch.setenv("WHISPER_MODEL", "small")
+        monkeypatch.delenv("WHISPER_DEVICE", raising=False)
+        monkeypatch.delenv("WHISPER_COMPUTE", raising=False)
+
+    def test_defaults_to_cuda_when_saved_preference_and_ctranslate2_allow_it(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cuda"
+        assert config["compute_type"] == "float16"
+
+    def test_saved_cpu_preference_wins_even_when_cuda_is_available(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=False)
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cpu"
+        assert config["compute_type"] == "int8"
+
+    def test_cpu_runtime_or_missing_cuda_driver_uses_cpu_safely(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 0),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cpu"
+        assert config["compute_type"] == "int8"
+
+    def test_explicit_environment_device_overrides_automatic_selection(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        monkeypatch.setenv("WHISPER_DEVICE", "cpu")
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cpu"
+        assert config["compute_type"] == "int8"
+
+    def test_explicit_compute_type_is_preserved(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from subtitles import get_whisper_config
+
+        self._set_settings(monkeypatch, tmp_path, gpu_mode=True)
+        monkeypatch.setenv("WHISPER_COMPUTE", "int8_float16")
+        monkeypatch.setitem(
+            sys.modules,
+            "ctranslate2",
+            types.SimpleNamespace(get_cuda_device_count=lambda: 1),
+        )
+
+        config = get_whisper_config()
+
+        assert config["device"] == "cuda"
+        assert config["compute_type"] == "int8_float16"
+
