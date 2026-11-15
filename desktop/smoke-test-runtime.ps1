@@ -246,6 +246,12 @@ $PSModuleAutoLoadingPreference = 'None'
         if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
     }
     $script:setupProcess = $process
+    $root = Join-Path $smokeLocalAppData "Clippy"
+    $pythonExe = Join-Path $root "runtime\python\python.exe"
+    $nodeExe = Join-Path $root "runtime\node\node.exe"
+    $ffmpegExe = Join-Path $root "runtime\ffmpeg\bin\ffmpeg.exe"
+    $browserExe = Join-Path $root "browser\headless-shell\chrome-headless-shell.exe"
+    $manifestPath = Join-Path $root "runtime-manifest.json"
     Save-SmokeDiagnostics
 
     if ($process.ExitCode -ne 0) {

@@ -188,22 +188,34 @@ function Assert-ClippyRuntimeArchiveManifest {
     if ([string]$Manifest.runtimeVariant -ne $ExpectedVariant) {
         throw "Runtime manifest variant mismatch. Expected $ExpectedVariant; manifest declares '$($Manifest.runtimeVariant)'."
     }
+
+    $archiveSize = [long]$Manifest.archive.size
+    $expandedSize = [long]$Manifest.archive.uncompressedSize
+    $archiveHash = [string]$Manifest.archive.sha256
     if ($Manifest.archive.name -ne "clippy-python-$ExpectedVariant.zip" -or
-        [long]$Manifest.archive.size -le 0 -or
-        [long]$Manifest.archive.uncompressedSize -le 0 -or
-        [long]$Manifest.archive.uncompressedSize -gt 64GB -or
-        [string]$Manifest.archive.sha256 -notmatch '^[a-fA-F0-9]{64} -or @($Manifest.parts).Count -lt 1 -or
-        [int]$Manifest.partCount -ne @($Manifest.parts).Count) {
+        $archiveSize -le 0 -or
+        $expandedSize -le 0 -or
+        $expandedSize -gt 64GB -or
+        $archiveHash -notmatch '^[a-fA-F0-9]{64}$') {
+        throw "Runtime manifest archive metadata is invalid or declares an unsafe uncompressed size."
+    }
+
+    $parts = @($Manifest.parts)
+    if ($parts.Count -lt 1 -or $parts.Count -gt 100 -or
+        [int]$Manifest.partCount -ne $parts.Count) {
         throw "Runtime manifest part count is invalid."
     }
+
     $totalBytes = 0L
     $seen = @{}
-    foreach ($part in @($Manifest.parts)) {
+    foreach ($part in $parts) {
         Assert-ClippyRuntimePartName ([string]$part.name)
         if (-not ([string]$part.name).StartsWith("clippy-python-$ExpectedVariant", [StringComparison]::Ordinal)) {
             throw "Runtime part belongs to a different variant: $($part.name)"
         }
-        if ($seen.ContainsKey([string]$part.name)) { throw "Runtime manifest contains duplicate part '$($part.name)'." }
+        if ($seen.ContainsKey([string]$part.name)) {
+            throw "Runtime manifest contains duplicate part '$($part.name)'."
+        }
         $seen[[string]$part.name] = $true
         $size = [long]$part.size
         if ($size -le 0 -or $size -gt $MaximumPartBytes -or $size -ge 2GB) {
@@ -212,15 +224,19 @@ function Assert-ClippyRuntimeArchiveManifest {
         if ([string]$part.sha256 -notmatch '^[a-fA-F0-9]{64}$') {
             throw "Runtime part SHA-256 is invalid: $($part.name)"
         }
+        if ($size -gt ([long]::MaxValue - $totalBytes)) {
+            throw "Runtime manifest part sizes overflow the supported file-size range."
+        }
         $totalBytes += $size
     }
-    if ($totalBytes -ne [long]$Manifest.archive.size) {
-        throw "Runtime manifest part sizes total $totalBytes bytes, but archive size is $($Manifest.archive.size) bytes."
+
+    if ($totalBytes -ne $archiveSize) {
+        throw "Runtime manifest part sizes total $totalBytes bytes, but archive size is $archiveSize bytes."
     }
-    if (@($Manifest.parts).Count -eq 1 -and $Manifest.parts[0].name -ne $Manifest.archive.name) {
+    if ($parts.Count -eq 1 -and [string]$parts[0].name -ne [string]$Manifest.archive.name) {
         throw "A single-part runtime must use the canonical archive asset name."
     }
-    if (@($Manifest.parts).Count -gt 1 -and @($Manifest.parts | Where-Object { $_.name -eq $Manifest.archive.name }).Count -gt 0) {
+    if ($parts.Count -gt 1 -and @($parts | Where-Object { $_.name -eq $Manifest.archive.name }).Count -gt 0) {
         throw "A multipart runtime cannot also name the original archive as a downloadable part."
     }
     return $true

@@ -364,7 +364,7 @@ function Get-ClippyAvailableFreeBytes([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($volumeRoot)) {
         throw "Cannot determine the storage volume for $fullPath."
     }
-    $drive = New-Object System.IO.DriveInfo($volumeRoot)
+    $drive = [System.IO.DriveInfo]::new($volumeRoot)
     if (-not $drive.IsReady) {
         throw "Storage volume $volumeRoot is not ready."
     }
@@ -399,7 +399,7 @@ foreach ($CandidatePath in @($env:CLIPPY_TEMP_DIR, $env:TEMP, $env:TMP, [IO.Path
         [System.IO.File]::WriteAllText($ProbeFile, "Clippy temporary storage probe")
         [System.IO.File]::Delete($ProbeFile)
         [System.IO.Directory]::Delete($ProbeDirectory)
-        $CandidateDrive = New-Object System.IO.DriveInfo($CandidateVolumeRoot)
+        $CandidateDrive = [System.IO.DriveInfo]::new($CandidateVolumeRoot)
         if ($CandidateDrive.IsReady -and $CandidateDrive.DriveType -eq [System.IO.DriveType]::Fixed) {
             $ScratchCandidates.Add([pscustomobject]@{
                 Path = $CandidateFullPath
