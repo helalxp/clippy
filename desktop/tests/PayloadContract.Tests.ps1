@@ -10,7 +10,7 @@ BeforeAll {
     # BeforeAll so each It block can resolve it while inspecting the shared ZIP.
     function Get-PayloadZipEntry([string]$ExpectedPath) {
         return $script:payloadZip.Entries |
-            Where-Object { (($_.FullName -replace '\\', '/') -replace '^(./)+', '') -eq $ExpectedPath } |
+            Where-Object { (($_.FullName -replace '\\', '/') -replace '^(\./)+', '') -eq $ExpectedPath } |
             Select-Object -First 1
     }
 }
