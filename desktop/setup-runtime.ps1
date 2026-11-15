@@ -48,13 +48,22 @@ $App = [System.IO.Path]::Combine($Root, "app", "current")
 $Runtime = [System.IO.Path]::Combine($Root, "runtime")
 $Downloads = [System.IO.Path]::Combine($Root, "downloads")
 $PythonDir = [System.IO.Path]::Combine($Runtime, "python")
+$PythonStage = [System.IO.Path]::Combine($Runtime, "python.installing")
+$PythonBackup = [System.IO.Path]::Combine($Runtime, "python.previous")
 $NodeDir = [System.IO.Path]::Combine($Runtime, "node")
-$FfmpegDir = [System.IO.Path]::Combine($Runtime, "ffmpeg", "bin")
+$NodeStage = [System.IO.Path]::Combine($Runtime, "node.installing")
+$NodeBackup = [System.IO.Path]::Combine($Runtime, "node.previous")
+$FfmpegRoot = [System.IO.Path]::Combine($Runtime, "ffmpeg")
+$FfmpegDir = [System.IO.Path]::Combine($FfmpegRoot, "bin")
+$FfmpegStage = [System.IO.Path]::Combine($Runtime, "ffmpeg.installing")
+$FfmpegBackup = [System.IO.Path]::Combine($Runtime, "ffmpeg.previous")
 $ManifestPath = [System.IO.Path]::Combine($Root, "runtime-manifest.json")
 # Browser binaries are durable user data, not part of app\current. Updating the
 # application payload must not force a multi-hundred-MB browser download.
 $BrowserRoot = [System.IO.Path]::Combine($Root, "browser")
 $BrowserDir = [System.IO.Path]::Combine($BrowserRoot, "headless-shell")
+$BrowserStage = [System.IO.Path]::Combine($BrowserRoot, "headless-shell.installing")
+$BrowserBackup = [System.IO.Path]::Combine($BrowserRoot, "headless-shell.previous")
 $BrowserExecutable = [System.IO.Path]::Combine($BrowserDir, "chrome-headless-shell.exe")
 $BrowserVersionFile = [System.IO.Path]::Combine($BrowserRoot, "remotion-version.txt")
 $LogDir = [System.IO.Path]::Combine($Root, "logs")
@@ -444,6 +453,21 @@ if (-not (Test-Path -LiteralPath $RemotionPackagePath -PathType Leaf)) {
 $RemotionVersion = (Get-Content -LiteralPath $RemotionPackagePath -Raw | ConvertFrom-Json).version
 if ([string]::IsNullOrWhiteSpace($RemotionVersion)) { throw "Could not determine the bundled Remotion renderer version." }
 $ExpectedState = New-ClippyRuntimeState -PythonVersion $PythonVersion -PythonVariant $TorchVariant -NodeVersion $NodeVersion -FfmpegVersion "gyan-release-essentials" -BrowserVersion $RemotionVersion -RequirementsSha256 $RequirementsHash
+
+# Recover an interrupted managed-directory replacement before checking the
+# runtime manifest. Each activation is a same-volume sibling-directory rename.
+Repair-ClippyManagedDirectoryInstall -Destination $PythonDir -Staging $PythonStage -Backup $PythonBackup -ExpectedMarkerValue $ExpectedState
+Repair-ClippyManagedDirectoryInstall -Destination $NodeDir -Staging $NodeStage -Backup $NodeBackup -ExpectedMarkerValue $NodeVersion
+Repair-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Staging $FfmpegStage -Backup $FfmpegBackup -ExpectedMarkerValue "gyan-release-essentials"
+Repair-ClippyManagedDirectoryInstall -Destination $BrowserDir -Staging $BrowserStage -Backup $BrowserBackup -ExpectedMarkerValue $RemotionVersion
+$BrowserInstallMarker = Join-Path $BrowserDir ".clippy-install-state"
+if (Test-Path -LiteralPath $BrowserInstallMarker -PathType Leaf) {
+    $RecoveredBrowserVersion = (Get-Content -LiteralPath $BrowserInstallMarker -Raw).Trim()
+    if ($RecoveredBrowserVersion -eq $RemotionVersion) {
+        [System.IO.File]::WriteAllText($BrowserVersionFile, $RecoveredBrowserVersion, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
 if (Test-Path $ManifestPath) {
     try {
         $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
@@ -764,8 +788,6 @@ if (-not [string]::IsNullOrWhiteSpace($LocalRuntimeArchive)) {
 }
 if (-not $PythonRuntimeVerified) { throw "Could not verify the downloaded Python runtime." }
 
-$PythonStage = Join-Path $Runtime "python.installing"
-$PythonBackup = Join-Path $Runtime "python.previous"
 if (Test-Path $PythonStage) { Remove-Item $PythonStage -Recurse -Force }
 Write-Stage "Extracting the verified $TorchVariant Python runtime..."
 Expand-ArchiveFast $PythonRuntimeArchive $PythonStage
@@ -787,19 +809,14 @@ if ($TorchVariant -eq "cuda") {
 }
 
 # Activate only after archive hash, Python version, and critical imports pass.
-if (Test-Path $PythonDir) {
-    if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
-    Move-Item -LiteralPath $PythonDir -Destination $PythonBackup
-}
+Publish-ClippyManagedDirectoryInstall -Destination $PythonDir -Staging $PythonStage -Backup $PythonBackup -MarkerValue $ExpectedState
 try {
-    Move-Item -LiteralPath $PythonStage -Destination $PythonDir
     $PythonExe = Join-Path $PythonDir "python.exe"
     & $PythonExe -c "import torch, fastapi, faster_whisper; print(torch.__version__)"
     if ($LASTEXITCODE -ne 0) { throw "Activated Python runtime failed its health check." }
-    if (Test-Path $PythonBackup) { Remove-Item $PythonBackup -Recurse -Force }
+    Complete-ClippyManagedDirectoryInstall -Backup $PythonBackup
 } catch {
-    if (Test-Path $PythonDir) { Remove-Item $PythonDir -Recurse -Force }
-    if (Test-Path $PythonBackup) { Move-Item -LiteralPath $PythonBackup -Destination $PythonDir }
+    Rollback-ClippyManagedDirectoryInstall -Destination $PythonDir -Backup $PythonBackup
     throw
 }
 
@@ -809,10 +826,7 @@ $NodeExe = Join-Path $NodeDir "node.exe"
 $ExistingNodeVersion = if (Test-Path -LiteralPath $NodeExe -PathType Leaf) { (& $NodeExe --version 2>&1 | Out-String).Trim() } else { "" }
 $ExistingNodeHealthy = ($LASTEXITCODE -eq 0 -and $ExistingNodeVersion.TrimStart([char]"v") -eq $NodeVersion)
 if (-not $ExistingNodeHealthy) {
-    if (Test-Path -LiteralPath $NodeDir) {
-        Write-Stage "Managed Node.js runtime is missing, corrupt, or the wrong version; replacing it."
-        Remove-Item -LiteralPath $NodeDir -Recurse -Force
-    }
+    Write-Stage "Managed Node.js runtime is missing, corrupt, or the wrong version; staging a verified replacement."
     $NodeZip = Join-Path $Downloads $NodeArchiveName
     $Checksums = Join-Path $Downloads "node-v$NodeVersion-SHASUMS256.txt"
     Download-File $NodeArchiveUrl $NodeZip
@@ -839,17 +853,29 @@ if (-not $ExistingNodeHealthy) {
     Expand-ArchiveFast $NodeZip $Extract
     $ExtractedRoot = Join-Path $Extract "node-v$NodeVersion-win-x64"
     if (-not (Test-Path (Join-Path $ExtractedRoot "node.exe"))) { throw "Node.js archive layout was unexpected." }
-    New-Item -ItemType Directory -Path $NodeDir -Force | Out-Null
-    Get-ChildItem $ExtractedRoot -Force | Move-Item -Destination $NodeDir
+    if (Test-Path -LiteralPath $NodeStage) { Remove-Item -LiteralPath $NodeStage -Recurse -Force }
+    New-Item -ItemType Directory -Path $NodeStage -Force | Out-Null
+    Get-ChildItem -LiteralPath $ExtractedRoot -Force | Copy-Item -Destination $NodeStage -Recurse -Force
+    $StagedNodeExe = Join-Path $NodeStage "node.exe"
+    $StagedNodeVersion = (& $StagedNodeExe --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $StagedNodeVersion.TrimStart([char]"v") -ne $NodeVersion) {
+        throw "Staged Node.js runtime version check failed. Expected $NodeVersion, found $StagedNodeVersion."
+    }
+    Publish-ClippyManagedDirectoryInstall -Destination $NodeDir -Staging $NodeStage -Backup $NodeBackup -MarkerValue $NodeVersion
     Remove-Item $Extract -Recurse -Force
 }
 $InstalledNodeVersion = (& $NodeExe --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $InstalledNodeVersion.TrimStart([char]"v") -ne $NodeVersion) {
+    if (Test-Path -LiteralPath $NodeBackup -PathType Container) {
+        Rollback-ClippyManagedDirectoryInstall -Destination $NodeDir -Backup $NodeBackup
+    }
     throw "Managed Node.js runtime version check failed. Expected $NodeVersion, found $InstalledNodeVersion."
 }
+Complete-ClippyManagedDirectoryInstall -Backup $NodeBackup
 
 # FFmpeg is downloaded from the Windows builds publisher and verified against
-# the publisher's SHA-256 sidecar before extraction.
+# the publisher's SHA-256 sidecar before extraction. Install to a sibling staging
+# directory so an interrupted repair never removes the previous working runtime.
 $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
 $ExistingFfmpegHealthy = $false
 if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
@@ -857,13 +883,10 @@ if (Test-Path -LiteralPath $FfmpegExe -PathType Leaf) {
     $ExistingFfmpegHealthy = ($LASTEXITCODE -eq 0)
 }
 if (-not $ExistingFfmpegHealthy) {
-    if (Test-Path -LiteralPath $FfmpegDir) {
-        Write-Stage "Managed FFmpeg runtime is missing or unhealthy; replacing it."
-        Remove-Item -LiteralPath $FfmpegDir -Recurse -Force
-    }
+    Write-Stage "Managed FFmpeg runtime is missing or unhealthy; staging a verified replacement."
     $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
     $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
-    Download-File $FfmpegArchiveUrl $FfmpegZip
+    Download-File $FfmpegZipUrl $FfmpegZip
     Download-File $FfmpegChecksumUrl $FfmpegHashFile
     $HashText = Get-Content $FfmpegHashFile -Raw -ErrorAction SilentlyContinue
     if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") {
@@ -879,7 +902,7 @@ if (-not $ExistingFfmpegHealthy) {
     } catch {
         Write-Stage "Cached FFmpeg archive failed verification; downloading a fresh copy."
         Remove-Item $FfmpegZip -Force -ErrorAction SilentlyContinue
-        Download-File $FfmpegArchiveUrl $FfmpegZip
+        Download-File $FfmpegZipUrl $FfmpegZip
         Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
     }
     $Extract = Join-Path $ScratchRoot "ffmpeg-extract"
@@ -887,13 +910,25 @@ if (-not $ExistingFfmpegHealthy) {
     Expand-ArchiveFast $FfmpegZip $Extract
     $FfmpegBinary = Get-ChildItem $Extract -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
     if (-not $FfmpegBinary) { throw "FFmpeg archive did not contain ffmpeg.exe." }
-    $SourceBin = $FfmpegBinary.Directory.FullName
-    New-Item -ItemType Directory -Path $FfmpegDir -Force | Out-Null
-    Copy-Item (Join-Path $SourceBin "*") -Destination $FfmpegDir -Recurse -Force
+    if (Test-Path -LiteralPath $FfmpegStage) { Remove-Item -LiteralPath $FfmpegStage -Recurse -Force }
+    $StagedFfmpegDir = Join-Path $FfmpegStage "bin"
+    New-Item -ItemType Directory -Path $StagedFfmpegDir -Force | Out-Null
+    Copy-Item (Join-Path $FfmpegBinary.Directory.FullName "*") -Destination $StagedFfmpegDir -Recurse -Force
+    $StagedFfmpegExe = Join-Path $StagedFfmpegDir "ffmpeg.exe"
+    & $StagedFfmpegExe -version *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Staged FFmpeg runtime failed its version check." }
+
+    Publish-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Staging $FfmpegStage -Backup $FfmpegBackup -MarkerValue "gyan-release-essentials"
     Remove-Item $Extract -Recurse -Force
 }
-& $FfmpegExe -version
-if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg runtime failed its version check." }
+& $FfmpegExe -version *> $null
+if ($LASTEXITCODE -ne 0) {
+    if (Test-Path -LiteralPath $FfmpegBackup -PathType Container) {
+        Rollback-ClippyManagedDirectoryInstall -Destination $FfmpegRoot -Backup $FfmpegBackup
+    }
+    throw "Managed FFmpeg runtime failed its version check."
+}
+Complete-ClippyManagedDirectoryInstall -Backup $FfmpegBackup
 
 if ($TorchVariant -eq "cuda") {
     # Windows PyTorch CUDA wheels place their CUDA DLLs in torch\lib.
@@ -939,6 +974,7 @@ if (-not $BrowserNeedsInstall) {
     $ExistingBrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
     $BrowserNeedsInstall = ($ExistingBrowserSignature.Status -ne "Valid" -or $ExistingBrowserSignature.SignerCertificate.Subject -notmatch "Google")
 }
+$BrowserActivationPending = $false
 if ($BrowserNeedsInstall) {
     Write-Stage "Installing or repairing the Remotion browser for renderer version $RemotionVersion..."
     $BrowserCheck = "import('@remotion/renderer').then(async m => { const b = await m.ensureBrowser(); console.log('CLIPPY_BROWSER_PATH=' + b.path); }).catch(e => { console.error(e); process.exit(1); });"
@@ -957,31 +993,59 @@ if ($BrowserNeedsInstall) {
         throw "Remotion reported a browser executable that does not exist: $DownloadedBrowserExe"
     }
     $DownloadedBrowserDir = Split-Path -Parent $DownloadedBrowserExe
-    if (Test-Path -LiteralPath $BrowserDir) { Remove-Item -LiteralPath $BrowserDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $BrowserDir -Force | Out-Null
-    Copy-Item -Path (Join-Path $DownloadedBrowserDir "*") -Destination $BrowserDir -Recurse -Force
+    if (Test-Path -LiteralPath $BrowserStage) { Remove-Item -LiteralPath $BrowserStage -Recurse -Force }
+    New-Item -ItemType Directory -Path $BrowserStage -Force | Out-Null
+    Copy-Item -Path (Join-Path $DownloadedBrowserDir "*") -Destination $BrowserStage -Recurse -Force
+    $StagedBrowserExecutable = Join-Path $BrowserStage (Split-Path -Leaf $DownloadedBrowserExe)
+    if (-not (Test-Path -LiteralPath $StagedBrowserExecutable -PathType Leaf)) {
+        throw "Staged Remotion browser executable is missing: $StagedBrowserExecutable"
+    }
+    $StagedBrowserSignature = Get-AuthenticodeSignature -FilePath $StagedBrowserExecutable
+    if ($StagedBrowserSignature.Status -ne "Valid" -or $StagedBrowserSignature.SignerCertificate.Subject -notmatch "Google") {
+        throw "Staged Remotion browser signature is invalid or not issued to Google."
+    }
+    $env:REMOTION_BROWSER_EXECUTABLE = $StagedBrowserExecutable
+    $StagedBrowserValidation = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); console.log('Staged Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
+    Push-Location (Join-Path $App "render-service")
+    try {
+        & $NodeExe -e $StagedBrowserValidation
+        if ($LASTEXITCODE -ne 0) { throw "Staged Remotion browser validation failed." }
+    } finally {
+        Pop-Location
+    }
+    Publish-ClippyManagedDirectoryInstall -Destination $BrowserDir -Staging $BrowserStage -Backup $BrowserBackup -MarkerValue $RemotionVersion
+    $BrowserActivationPending = $true
     $BrowserExecutable = Join-Path $BrowserDir (Split-Path -Leaf $DownloadedBrowserExe)
-    [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
 } else {
     Write-Stage "Reusing the browser already installed for Remotion $RemotionVersion."
 }
 
-if (-not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf)) {
-    throw "Persistent Remotion browser executable is missing: $BrowserExecutable"
-}
-$BrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
-if ($BrowserSignature.Status -ne "Valid" -or $BrowserSignature.SignerCertificate.Subject -notmatch "Google") {
-    throw "Remotion browser signature is invalid or not issued to Google. The downloaded browser will not be trusted."
-}
-$BrowserSha256 = Get-ClippyFileSha256 -Path $BrowserExecutable
-$env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
-$BrowserValidation = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); console.log('Persistent Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
-Push-Location (Join-Path $App "render-service")
 try {
-    & $NodeExe -e $BrowserValidation
-    if ($LASTEXITCODE -ne 0) { throw "Persistent Remotion browser validation failed." }
-} finally {
-    Pop-Location
+    if (-not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf)) {
+        throw "Persistent Remotion browser executable is missing: $BrowserExecutable"
+    }
+    $BrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
+    if ($BrowserSignature.Status -ne "Valid" -or $BrowserSignature.SignerCertificate.Subject -notmatch "Google") {
+        throw "Remotion browser signature is invalid or not issued to Google. The downloaded browser will not be trusted."
+    }
+    $BrowserSha256 = Get-ClippyFileSha256 -Path $BrowserExecutable
+    $env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
+    $BrowserValidation = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); console.log('Persistent Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
+    Push-Location (Join-Path $App "render-service")
+    try {
+        & $NodeExe -e $BrowserValidation
+        if ($LASTEXITCODE -ne 0) { throw "Persistent Remotion browser validation failed." }
+    } finally {
+        Pop-Location
+    }
+
+    [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
+    Complete-ClippyManagedDirectoryInstall -Backup $BrowserBackup
+} catch {
+    if ($BrowserActivationPending) {
+        Rollback-ClippyManagedDirectoryInstall -Destination $BrowserDir -Backup $BrowserBackup
+    }
+    throw
 }
 
 New-Item -ItemType Directory -Path (Split-Path $ManifestPath -Parent) -Force | Out-Null
