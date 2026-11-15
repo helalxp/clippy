@@ -66,9 +66,14 @@ Describe "Runtime release archive manifest contract" {
     }
 
     It "records the true uncompressed runtime size for disk-space preflight" {
+        # Multipart manifest creation intentionally deletes the original ZIP
+        # after verified parts have been written. Measure the source before
+        # creation, then assert the signed-off manifest retained that value.
+        $actualExpandedSize = Get-ClippyZipUncompressedSize -Path $source
         $manifest = New-ClippyRuntimeArchiveManifest -ArchivePath $source -OutputDirectory $testRoot -Variant cuda -ApplicationVersion "0.2.2" -MaximumPartBytes 1MB
-        $manifest.archive.uncompressedSize | Should -Be $script:sourceUncompressedBytes
-        Get-ClippyZipUncompressedSize -Path $source | Should -Be $script:sourceUncompressedBytes
+        $actualExpandedSize | Should -Be $script:sourceUncompressedBytes
+        $manifest.archive.uncompressedSize | Should -Be $actualExpandedSize
+        (Test-Path -LiteralPath $source) | Should -BeFalse
     }
 
     It "rejects missing or unsafe uncompressed-size metadata" {
