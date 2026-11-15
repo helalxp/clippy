@@ -58,7 +58,7 @@ $BrowserDir = [System.IO.Path]::Combine($BrowserRoot, "headless-shell")
 $BrowserExecutable = [System.IO.Path]::Combine($BrowserDir, "chrome-headless-shell.exe")
 $BrowserVersionFile = [System.IO.Path]::Combine($BrowserRoot, "remotion-version.txt")
 $LogDir = [System.IO.Path]::Combine($Root, "logs")
-$SetupLogPath = Join-Path $LogDir "runtime-setup.log"
+$SetupLogPath = [System.IO.Path]::Combine($LogDir, "runtime-setup.log")
 $script:ScratchRoot = $null
 
 $PythonVersion = "3.12.10"
@@ -157,7 +157,7 @@ if ($ForceCpuRuntime) {
 # This turns missing packaged helpers into a useful diagnostic instead of an
 # early PowerShell dot-source failure with no Clippy setup context.
 foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
-    $HelperPath = Join-Path $PSScriptRoot $Helper
+    $HelperPath = [System.IO.Path]::Combine($PSScriptRoot, $Helper)
     if (-not [System.IO.File]::Exists($HelperPath)) {
         throw "Application payload is incomplete. Missing required runtime helper: $HelperPath"
     }
