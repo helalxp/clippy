@@ -447,6 +447,8 @@ class TestWhisperDeviceSelection:
             encoding="utf-8",
         )
         monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings_path))
+        # Isolate these tests from any real Clippy install on the test machine.
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "empty-local-app-data"))
         monkeypatch.setenv("WHISPER_MODEL", "small")
         monkeypatch.delenv("WHISPER_DEVICE", raising=False)
         monkeypatch.delenv("WHISPER_COMPUTE", raising=False)
