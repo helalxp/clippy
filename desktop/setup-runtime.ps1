@@ -155,6 +155,18 @@ foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
         throw "Application payload is incomplete. Missing required runtime helper: $HelperPath"
     }
 }
+# Import built-in modules by absolute manifest path. The parent app may have been
+# launched from PowerShell 7 or another host with a restricted PSModulePath, and
+# -NoProfile deliberately prevents relying on a user's module-loading profile.
+foreach ($ModuleName in @("Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security")) {
+    $ModuleManifest = Join-Path (Join-Path $WindowsPowerShellModulePath $ModuleName) ($ModuleName + ".psd1")
+    if (-not (Test-Path -LiteralPath $ModuleManifest -PathType Leaf)) {
+        throw "Required Windows PowerShell module is missing: $ModuleManifest"
+    }
+    Import-Module -Name $ModuleManifest -Force -ErrorAction Stop
+}
+Write-Stage ("Loaded built-in PowerShell utility and security modules from " + $WindowsPowerShellModulePath)
+
 . (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
 . (Join-Path $PSScriptRoot "runtime-archive.ps1")
 if ($NvidiaGpuName) {
@@ -315,11 +327,13 @@ function Expand-ArchiveFast([string]$Archive, [string]$Destination) {
         Remove-Item -LiteralPath $Destination -Recurse -Force
         New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     }
-    Expand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force
+    # Keep ZIP extraction independent from the optional PowerShell Archive module.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory([IO.Path]::GetFullPath($Archive), [IO.Path]::GetFullPath($Destination))
 }
 
 function Assert-Sha256([string]$Path, [string]$Expected) {
-    $Actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Actual = Get-ClippyFileSha256 -Path $Path
     if ($Actual -ne $Expected.ToLowerInvariant()) {
         throw "SHA-256 verification failed for $Path. Expected $Expected, got $Actual"
     }
@@ -353,7 +367,7 @@ foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runt
     }
 }
 
-$RequirementsHash = (Get-FileHash (Join-Path $App "requirements.txt") -Algorithm SHA256).Hash.ToLowerInvariant()
+$RequirementsHash = Get-ClippyFileSha256 -Path (Join-Path $App "requirements.txt")
 $RemotionPackagePath = Join-Path $App "render-service\node_modules\@remotion\renderer\package.json"
 if (-not (Test-Path -LiteralPath $RemotionPackagePath -PathType Leaf)) {
     throw "Remotion renderer package is missing from the application payload: $RemotionPackagePath"
@@ -388,7 +402,7 @@ if (Test-Path $ManifestPath) {
             ($Existing.components.browser.version -eq $RemotionVersion) -and
             ($Existing.requirementsSha256 -eq $RequirementsHash) -and
             ($Existing.browserSha256 -match "^[a-fA-F0-9]{64}$") -and
-            ($Existing.browserSha256 -eq (Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant())
+            ($Existing.browserSha256 -eq (Get-ClippyFileSha256 -Path $BrowserExecutable))
         if ($Existing.state -eq $ExpectedState -and $RuntimeFilesPresent -and $ManifestComponentsHealthy) {
             Write-Stage "Verifying installed Python, Node.js, FFmpeg, backend, and Remotion dependencies..."
             $PythonVersionOutput = (& $PythonExe --version 2>&1 | Out-String).Trim()
@@ -793,7 +807,7 @@ $BrowserSignature = Get-AuthenticodeSignature -FilePath $BrowserExecutable
 if ($BrowserSignature.Status -ne "Valid" -or $BrowserSignature.SignerCertificate.Subject -notmatch "Google") {
     throw "Remotion browser signature is invalid or not issued to Google. The downloaded browser will not be trusted."
 }
-$BrowserSha256 = (Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+$BrowserSha256 = Get-ClippyFileSha256 -Path $BrowserExecutable
 $env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
 $BrowserValidation = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); console.log('Persistent Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
 Push-Location (Join-Path $App "render-service")
