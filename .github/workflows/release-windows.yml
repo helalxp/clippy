@@ -199,9 +199,13 @@ jobs:
           $expected = @{}
           foreach ($file in $expectedFiles) { $expected[$file.Name] = [long]$file.Length }
 
-          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "Could not read the newly created draft release." }
-          $release = $releaseJson | ConvertFrom-Json
+          # Draft releases may not be discoverable through the tag lookup endpoint immediately.
+          # List releases by ID and select the exact tag instead.
+          $releasesJson = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "Could not list repository releases." }
+          $releases = @($releasesJson | ConvertFrom-Json)
+          $release = $releases | Where-Object { $_.tag_name -eq $env:GITHUB_REF_NAME } | Select-Object -First 1
+          if (-not $release) { throw "Could not find the newly created draft release for tag $env:GITHUB_REF_NAME." }
           if (-not $release.draft) { throw "Release was published before asset verification; expected a draft." }
 
           $actual = @{}
