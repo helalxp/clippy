@@ -98,17 +98,6 @@ jobs:
         shell: pwsh
         run: ./desktop/validate-version.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
 
-      - name: Verify public release signing credentials
-        shell: pwsh
-        env:
-          WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 }}
-          WINDOWS_CODESIGN_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64) -or
-              [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
-            throw "Public Windows releases require both Authenticode signing secrets. Configure them before creating a release tag."
-          }
-
       - name: Download verified Python runtime packages
         uses: actions/download-artifact@v4
         with:
@@ -133,7 +122,7 @@ jobs:
         shell: pwsh
         run: ./desktop/build.ps1
 
-      - name: Sign Windows installer
+      - name: Sign Windows installer (optional)
         shell: pwsh
         env:
           WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 }}
@@ -141,12 +130,18 @@ jobs:
         run: |
           $files = @(Get-ChildItem "./desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe")
           if ($files.Count -ne 1) { throw "Expected exactly one NSIS installer, found $($files.Count)." }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)) {
-            throw "Public Windows releases must be Authenticode-signed. Configure WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64 and WINDOWS_CODESIGN_CERTIFICATE_PASSWORD before creating a release tag."
+
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)
+
+          if (-not $hasCertificate -and -not $hasPassword) {
+            Write-Warning "No Authenticode certificate configured. Continuing with an unsigned installer; runtime checksums and release asset verification remain mandatory."
+            exit 0
           }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_CERTIFICATE_PASSWORD)) {
-            throw "The code-signing certificate is configured but its password secret is missing."
+          if (-not $hasCertificate -or -not $hasPassword) {
+            throw "Both code-signing secrets must be configured together. Remove the incomplete secret or provide both."
           }
+
           $certificatePath = Join-Path $env:RUNNER_TEMP "clippy-code-signing.pfx"
           $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)
           [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
