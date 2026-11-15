@@ -5,12 +5,14 @@ BeforeAll {
         throw "The assembled application payload is missing. Build the installer payload before running PayloadContract.Tests.ps1."
     }
     $script:payloadZip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $payloadPath).Path)
-}
 
-function Get-PayloadZipEntry([string]$ExpectedPath) {
-    return $script:payloadZip.Entries |
-        Where-Object { (($_.FullName -replace '\\', '/') -replace '^(\./)+', '') -eq $ExpectedPath } |
-        Select-Object -First 1
+    # Pester 5 executes test blocks in its own scope. Define this helper in
+    # BeforeAll so each It block can resolve it while inspecting the shared ZIP.
+    function Get-PayloadZipEntry([string]$ExpectedPath) {
+        return $script:payloadZip.Entries |
+            Where-Object { (($_.FullName -replace '\\', '/') -replace '^(./)+', '') -eq $ExpectedPath } |
+            Select-Object -First 1
+    }
 }
 
 AfterAll {
