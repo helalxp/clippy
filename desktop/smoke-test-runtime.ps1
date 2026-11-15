@@ -31,6 +31,7 @@ function Assert-Sha256([string]$Path, [string]$ChecksumPath, [string]$Label) {
 $originalLocalAppData = $env:LOCALAPPDATA
 $originalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $originalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
+$originalForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME
 if ([string]::IsNullOrWhiteSpace($originalLocalAppData)) {
     throw "The first-run smoke test requires the Windows LOCALAPPDATA environment variable."
 }
@@ -71,6 +72,7 @@ try {
     $env:LOCALAPPDATA = $smokeLocalAppData
     $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = [IO.Path]::GetFullPath($CpuRuntimeArchive)
     $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = [IO.Path]::GetFullPath($CpuRuntimeChecksum)
+    $env:CLIPPY_FORCE_CPU_RUNTIME = "1"
 
     $appDirectory = Join-Path $smokeLocalAppData "Clippy\app\current"
     New-Item -ItemType Directory -Path $appDirectory -Force | Out-Null
@@ -154,6 +156,7 @@ try {
     if ($null -eq $originalLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $originalLocalAppData }
     if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
     if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }
+    if ($null -eq $originalForceCpuRuntime) { Remove-Item Env:CLIPPY_FORCE_CPU_RUNTIME -ErrorAction SilentlyContinue } else { $env:CLIPPY_FORCE_CPU_RUNTIME = $originalForceCpuRuntime }
     if (Test-Path -LiteralPath $smokeLocalAppData -PathType Container) {
         Remove-Item -LiteralPath $smokeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
     }
