@@ -41,7 +41,9 @@ $TorchVariant = "cpu"
 $NvidiaDriverVersion = $null
 $NvidiaGpuName = $null
 $NvidiaComputeCapability = $null
-$Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+$ForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME -eq "1"
+if (-not $ForceCpuRuntime) {
+    $Nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $NvidiaSmiPath = if ($Nvidia) { $Nvidia.Source } else { $null }
 if (-not $NvidiaSmiPath) {
     $NvidiaCandidates = @(
@@ -73,6 +75,7 @@ if ($NvidiaSmiPath) {
             }
         }
     }
+}
 }
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
@@ -114,6 +117,9 @@ trap {
 
 Write-Stage "Runtime setup engine started."
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
+if ($ForceCpuRuntime) {
+    Write-Stage "CPU runtime selection was explicitly forced by CLIPPY_FORCE_CPU_RUNTIME=1."
+}
 
 # Load script dependencies only after logging and the failure trap are active.
 # This turns missing packaged helpers into a useful diagnostic instead of an
