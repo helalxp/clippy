@@ -24,3 +24,87 @@ Describe "PowerShell runtime manifest contract" {
         { Assert-ClippyPythonRuntimeVersion -Actual "Python 3.12.10" -Expected "3.12.10" } | Should -Not -Throw
     }
 }
+
+
+Describe "Managed runtime directory transaction contract" {
+    BeforeEach {
+        $script:transactionRoot = Join-Path ([IO.Path]::GetTempPath()) ("clippy-install-transaction-" + [guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $script:transactionRoot -Force | Out-Null
+        $script:transactionDestination = Join-Path $script:transactionRoot "runtime"
+        $script:transactionStaging = Join-Path $script:transactionRoot "runtime.installing"
+        $script:transactionBackup = Join-Path $script:transactionRoot "runtime.previous"
+    }
+
+    AfterEach {
+        if (Test-Path -LiteralPath $script:transactionRoot) {
+            Remove-Item -LiteralPath $script:transactionRoot -Recurse -Force
+        }
+    }
+
+    It "activates a validated staged directory and retains the previous directory until commit" {
+        New-Item -ItemType Directory -Path $script:transactionDestination -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Value "old"
+        New-Item -ItemType Directory -Path $script:transactionStaging -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionStaging "version.txt") -Value "new"
+
+        Publish-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -MarkerValue "version=2"
+
+        (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "new"
+        (Test-Path -LiteralPath (Join-Path $script:transactionDestination ".clippy-install-state")) | Should -BeTrue
+        (Get-Content -LiteralPath (Join-Path $script:transactionBackup "version.txt") -Raw).Trim() | Should -Be "old"
+
+        Complete-ClippyManagedDirectoryInstall -Backup $script:transactionBackup
+        (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
+    }
+
+    It "restores the previous directory when activation was interrupted before the marker move" {
+        New-Item -ItemType Directory -Path $script:transactionBackup -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionBackup "version.txt") -Value "previous"
+        New-Item -ItemType Directory -Path $script:transactionDestination -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination "partial.txt") -Value "incomplete"
+        New-Item -ItemType Directory -Path $script:transactionStaging -Force | Out-Null
+
+        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -ExpectedMarkerValue "version=2"
+
+        (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "previous"
+        (Test-Path -LiteralPath $script:transactionDestination "partial.txt") | Should -BeFalse
+        (Test-Path -LiteralPath $script:transactionStaging) | Should -BeFalse
+        (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
+    }
+
+    It "keeps a committed new directory and removes a stale backup after a restart" {
+        New-Item -ItemType Directory -Path $script:transactionDestination -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination ".clippy-install-state") -Value "version=2"
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Value "new"
+        New-Item -ItemType Directory -Path $script:transactionBackup -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionBackup "version.txt") -Value "old"
+
+        Repair-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -ExpectedMarkerValue "version=2"
+
+        (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "new"
+        (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
+    }
+
+    It "rolls back a failed post-activation health check" {
+        New-Item -ItemType Directory -Path $script:transactionDestination -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Value "old"
+        New-Item -ItemType Directory -Path $script:transactionStaging -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:transactionStaging "version.txt") -Value "new"
+
+        Publish-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $script:transactionStaging -Backup $script:transactionBackup -MarkerValue "version=2"
+        Rollback-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Backup $script:transactionBackup
+
+        (Get-Content -LiteralPath (Join-Path $script:transactionDestination "version.txt") -Raw).Trim() | Should -Be "old"
+        (Test-Path -LiteralPath $script:transactionBackup) | Should -BeFalse
+    }
+
+    It "rejects staging and destination paths that are not sibling directories" {
+        $outsideStage = Join-Path ([IO.Path]::GetTempPath()) ("clippy-outside-stage-" + [guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $script:transactionStaging -Force | Out-Null
+        try {
+            { Publish-ClippyManagedDirectoryInstall -Destination $script:transactionDestination -Staging $outsideStage -Backup $script:transactionBackup -MarkerValue "version=2" } | Should -Throw
+        } finally {
+            if (Test-Path $outsideStage) { Remove-Item $outsideStage -Recurse -Force }
+        }
+    }
+}
