@@ -99,7 +99,7 @@ def get_user_model_size() -> str:
 def get_user_gpu_mode() -> bool:
     if _USER_GPU_MODE is not None:
         return _USER_GPU_MODE
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if settings_path.exists():
         try:
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -2924,7 +2924,7 @@ async def select_local_whisper_model(request: Request):
             selection = save_whisper_selection(model_size=payload.get("model_size"))
         # Also update first-run state if not complete
         if is_first_run():
-            mark_first_run_complete(selection.get("model_size", "base"), selection.get("source") == "local" and selection.get("model_path") is None)
+            mark_first_run_complete(selection.get("model_size", "base"), get_user_gpu_mode())
         return {"ok": True, "selection": selection}
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
