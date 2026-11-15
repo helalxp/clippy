@@ -57,6 +57,12 @@ try {
     if ([string]$runtimeManifest.applicationVersion -ne $appVersion -or [string]$runtimeManifest.runtimeVariant -ne "cpu") {
         throw "CPU runtime manifest does not match application version $appVersion."
     }
+    $cpuArchiveInfo = Get-Item -LiteralPath $CpuRuntimeArchive
+    $cpuArchiveHash = (Get-FileHash -LiteralPath $CpuRuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([long]$runtimeManifest.archive.size -ne $cpuArchiveInfo.Length -or
+        ([string]$runtimeManifest.archive.sha256).ToLowerInvariant() -ne $cpuArchiveHash) {
+        throw "CPU runtime ZIP does not match the release manifest that will be published."
+    }
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     New-Item -ItemType Directory -Path $smokeLocalAppData -Force | Out-Null
