@@ -85,6 +85,15 @@ jobs:
         timeout-minutes: 30
         run: ./desktop/smoke-test-runtime.ps1
 
+      - name: Retain first-run runtime setup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-first-run-runtime-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clippy-first-run-smoke-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Check backend Python syntax
         run: python -m compileall -q .
 

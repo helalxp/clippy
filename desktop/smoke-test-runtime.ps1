@@ -45,6 +45,28 @@ $smokeLocalAppData = Join-Path $originalLocalAppData ("ClippySmoke-" + [guid]::N
 $setupStdout = Join-Path $smokeRoot "setup.stdout.log"
 $setupStderr = Join-Path $smokeRoot "setup.stderr.log"
 $setupLog = Join-Path $smokeLocalAppData "Clippy\logs\runtime-setup.log"
+$diagnosticsSuffix = if ($env:GITHUB_RUN_ID) {
+    "$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+} else {
+    [guid]::NewGuid().ToString("N")
+}
+$diagnosticsRoot = Join-Path $tempBase "clippy-first-run-smoke-diagnostics-$diagnosticsSuffix"
+$diagnosticsLog = Join-Path $diagnosticsRoot "smoke-test-diagnostics.log"
+$childContextLog = Join-Path $diagnosticsRoot "child-context.log"
+$originalSmokeDiagnosticsPath = $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH
+New-Item -ItemType Directory -Path $diagnosticsRoot -Force | Out-Null
+
+function Write-SmokeDiagnostic([string]$Message) {
+    $line = "[{0}] {1}" -f ([DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss")), $Message
+    [IO.File]::AppendAllText($diagnosticsLog, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    Write-Host $line
+}
+
+Write-SmokeDiagnostic "Clean first-run smoke test started."
+Write-SmokeDiagnostic "PowerShell host: $($PSVersionTable.PSVersion); PSHOME: $PSHOME"
+Write-SmokeDiagnostic "Original LOCALAPPDATA: $originalLocalAppData"
+Write-SmokeDiagnostic "Isolated LOCALAPPDATA: $smokeLocalAppData"
+Write-SmokeDiagnostic "Diagnostic artifact directory: $diagnosticsRoot"
 
 try {
     Assert-Sha256 $PayloadArchive $PayloadChecksum "embedded application payload"
@@ -75,6 +97,7 @@ try {
     $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = [IO.Path]::GetFullPath($CpuRuntimeArchive)
     $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = [IO.Path]::GetFullPath($CpuRuntimeChecksum)
     $env:CLIPPY_FORCE_CPU_RUNTIME = "1"
+    $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH = $childContextLog
 
     $appDirectory = Join-Path $smokeLocalAppData "Clippy\app\current"
     New-Item -ItemType Directory -Path $appDirectory -Force | Out-Null
@@ -108,11 +131,23 @@ try {
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
     $setupLauncherScript = Join-Path $smokeRoot "invoke-runtime-setup.ps1"
     $escapedSetupScript = $setupScript.Replace("'", "''")
+    $escapedChildContextLog = $childContextLog.Replace("'", "''")
     $launcherContent = @'
+$contextPath = '__CLIPPY_CHILD_CONTEXT_PATH__'
+$context = @(
+    "ChildPID=$PID",
+    "PowerShellVersion=$($PSVersionTable.PSVersion)",
+    "PSHOME=$PSHOME",
+    "LOCALAPPDATA=$env:LOCALAPPDATA",
+    "PSModulePath=$env:PSModulePath",
+    "SetupScript=__CLIPPY_SETUP_SCRIPT__"
+)
+[IO.File]::WriteAllLines($contextPath, $context, [Text.Encoding]::UTF8)
 $PSModuleAutoLoadingPreference = 'None'
 & '__CLIPPY_SETUP_SCRIPT__'
 '@
     $launcherContent = $launcherContent.Replace("__CLIPPY_SETUP_SCRIPT__", $escapedSetupScript)
+    $launcherContent = $launcherContent.Replace("__CLIPPY_CHILD_CONTEXT_PATH__", $escapedChildContextLog)
     [IO.File]::WriteAllText($setupLauncherScript, $launcherContent, [Text.UTF8Encoding]::new($false))
     $quotedSetupLauncherScript = '"' + $setupLauncherScript + '"'
     $argumentList = @(
@@ -137,23 +172,68 @@ $PSModuleAutoLoadingPreference = 'None'
     } finally {
         if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
     }
-    if ($process.ExitCode -ne 0) {
-        $details = @()
-        foreach ($logPath in @($setupLog, $setupStdout, $setupStderr)) {
-            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
-                $details += "===== $logPath ====="
-                $details += Get-Content -LiteralPath $logPath -Tail 60
-            }
-        }
-        throw ("First-run runtime setup failed with exit code $($process.ExitCode)." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
-    }
-
     $root = Join-Path $smokeLocalAppData "Clippy"
     $pythonExe = Join-Path $root "runtime\python\python.exe"
     $nodeExe = Join-Path $root "runtime\node\node.exe"
     $ffmpegExe = Join-Path $root "runtime\ffmpeg\bin\ffmpeg.exe"
     $browserExe = Join-Path $root "browser\headless-shell\chrome-headless-shell.exe"
     $manifestPath = Join-Path $root "runtime-manifest.json"
+
+    # Capture every child diagnostic before validating outputs or cleaning the
+    # isolated test root. A zero exit code is not evidence that setup completed.
+    $diagnosticLines = @(
+        "Child process exit code: $($process.ExitCode)",
+        "Expected Clippy root: $root",
+        "Expected setup log: $setupLog",
+        "Expected managed Python: $pythonExe",
+        "Expected managed Node.js: $nodeExe",
+        "Expected managed FFmpeg: $ffmpegExe",
+        "Expected browser: $browserExe",
+        "Expected runtime manifest: $manifestPath"
+    )
+    foreach ($path in @($root, $pythonExe, $nodeExe, $ffmpegExe, $browserExe, $manifestPath, $setupLog)) {
+        $diagnosticLines += ("EXISTS [{0}]: {1}" -f (Test-Path -LiteralPath $path), $path)
+    }
+    foreach ($logPath in @($childContextLog, $setupLog, $setupStdout, $setupStderr)) {
+        if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+            $diagnosticLines += ""
+            $diagnosticLines += "===== $logPath ====="
+            Copy-Item -LiteralPath $logPath -Destination (Join-Path $diagnosticsRoot (Split-Path -Leaf $logPath)) -Force
+            $diagnosticLines += Get-Content -LiteralPath $logPath -Tail 250
+        } else {
+            $diagnosticLines += "MISSING LOG: $logPath"
+        }
+    }
+    if (Test-Path -LiteralPath $root -PathType Container) {
+        $diagnosticLines += ""
+        $diagnosticLines += "===== Files created under the isolated Clippy root (first 300) ====="
+        $diagnosticLines += Get-ChildItem -LiteralPath $root -Force -Recurse -File -ErrorAction SilentlyContinue |
+            Select-Object -First 300 |
+            ForEach-Object { "{0} ({1:N0} bytes)" -f $_.FullName, $_.Length }
+    }
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $diagnosticLines += ""
+        $diagnosticLines += "===== Installed runtime manifest ====="
+        $diagnosticLines += Get-Content -LiteralPath $manifestPath -Raw
+    }
+    [IO.File]::WriteAllLines($diagnosticsLog, $diagnosticLines, [Text.UTF8Encoding]::new($false))
+    Write-Host ""
+    Write-Host "========== FIRST-RUN SETUP DIAGNOSTICS =========="
+    Get-Content -LiteralPath $diagnosticsLog
+    Write-Host "========== END FIRST-RUN SETUP DIAGNOSTICS ======"
+    Write-Host "Diagnostics retained at: $diagnosticsRoot"
+
+    if ($process.ExitCode -ne 0) {
+        throw "First-run runtime setup failed with exit code $($process.ExitCode). Full diagnostics were retained at $diagnosticsRoot."
+    }
+
+    $setupLogText = if (Test-Path -LiteralPath $setupLog -PathType Leaf) { Get-Content -LiteralPath $setupLog -Raw } else { "" }
+    $hasCompletionMarker =
+        $setupLogText.Contains("Runtime setup completed successfully.") -or
+        $setupLogText.Contains("Managed runtimes and application dependencies are healthy. No downloads needed.")
+    if (-not $hasCompletionMarker) {
+        throw "Runtime setup returned exit code 0 without writing a recognized completion marker. This is a false-success condition. Full diagnostics were retained at $diagnosticsRoot."
+    }
 
     foreach ($component in @(
         @{ path = $pythonExe; label = "managed Python" },
@@ -186,6 +266,7 @@ $PSModuleAutoLoadingPreference = 'None'
     if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
     if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }
     if ($null -eq $originalForceCpuRuntime) { Remove-Item Env:CLIPPY_FORCE_CPU_RUNTIME -ErrorAction SilentlyContinue } else { $env:CLIPPY_FORCE_CPU_RUNTIME = $originalForceCpuRuntime }
+    if ($null -eq $originalSmokeDiagnosticsPath) { Remove-Item Env:CLIPPY_SMOKE_DIAGNOSTICS_PATH -ErrorAction SilentlyContinue } else { $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH = $originalSmokeDiagnosticsPath }
     if ($null -eq $originalModulePath) { Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue } else { $env:PSModulePath = $originalModulePath }
     if (Test-Path -LiteralPath $smokeLocalAppData -PathType Container) {
         Remove-Item -LiteralPath $smokeLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
@@ -193,4 +274,5 @@ $PSModuleAutoLoadingPreference = 'None'
     if (Test-Path -LiteralPath $smokeRoot -PathType Container) {
         Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
+    Write-Host "First-run diagnostics were retained at: $diagnosticsRoot"
 }

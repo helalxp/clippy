@@ -148,6 +148,15 @@ trap {
 
 Write-Stage "Runtime setup engine started."
 Write-Stage ("PowerShell host version: " + $PSVersionTable.PSVersion + "; PSHOME: " + $PSHOME)
+Write-Stage ("Process LOCALAPPDATA: " + $env:LOCALAPPDATA)
+Write-Stage ("Resolved Clippy root: " + $Root)
+Write-Stage ("Resolved application payload: " + $App)
+Write-Stage ("Resolved runtime directory: " + $Runtime)
+Write-Stage ("Resolved Python executable: " + (Join-Path $PythonDir "python.exe"))
+Write-Stage ("Resolved setup log: " + $SetupLogPath)
+if (-not [string]::IsNullOrWhiteSpace($env:CLIPPY_SMOKE_DIAGNOSTICS_PATH)) {
+    Write-Stage ("Smoke-test child context log: " + $env:CLIPPY_SMOKE_DIAGNOSTICS_PATH)
+}
 Write-Stage ("Selected prebuilt Python runtime variant: " + $TorchVariant)
 if ($ForceCpuRuntime) {
     Write-Stage "CPU runtime selection was explicitly forced by CLIPPY_FORCE_CPU_RUNTIME=1."
@@ -845,6 +854,22 @@ $ManifestJson = $Manifest | ConvertTo-Json -Depth 5
 # Windows PowerShell 5.1 writes a UTF-8 BOM with Set-Content -Encoding UTF8.
 # serde_json expects plain JSON, so write UTF-8 explicitly without a BOM.
 [System.IO.File]::WriteAllText($ManifestPath, $ManifestJson, [System.Text.UTF8Encoding]::new($false))
+
+# Do not emit a successful completion marker unless every managed executable
+# and the installed manifest are present at their contractual locations.
+foreach ($RequiredInstalledFile in @(
+    (Join-Path $PythonDir "python.exe"),
+    (Join-Path $NodeDir "node.exe"),
+    (Join-Path $FfmpegDir "ffmpeg.exe"),
+    $BrowserExecutable,
+    $ManifestPath
+)) {
+    if (-not (Test-Path -LiteralPath $RequiredInstalledFile -PathType Leaf)) {
+        throw "Runtime setup reached finalization but a required installed file is missing: $RequiredInstalledFile"
+    }
+}
+Write-Stage ("Final runtime file validation passed for " + $Root)
+
 # Remove the multi-gigabyte Python archive and release parts only after the
 # complete runtime setup has succeeded. If setup fails earlier, verified parts
 # remain available for a retry without downloading them again.
