@@ -120,10 +120,10 @@ $requiredPayloadFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-manifest-state.ps1",
-    "render-service\\dist\\server.js",
-    "render-service\\node_modules\\@remotion\\renderer\\package.json",
-    "remotion\\src\\index.ts",
-    "bgutil-provider\\server\\build\\generate_once.js"
+    "render-service\dist\server.js",
+    "render-service\node_modules\@remotion\renderer\package.json",
+    "remotion\src\index.ts",
+    "bgutil-provider\server\build\generate_once.js"
 )
 foreach ($relativePath in $requiredPayloadFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $stageRoot $relativePath) -PathType Leaf)) {
