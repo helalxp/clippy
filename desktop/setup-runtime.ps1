@@ -75,12 +75,17 @@ if (-not $NvidiaSmiPath) {
         (Join-Path $env:ProgramFiles "NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
         (Join-Path $env:SystemRoot "System32\nvidia-smi.exe")
     )
-    $NvidiaSmiPath = $NvidiaCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    foreach ($Candidate in $NvidiaCandidates) {
+        if ([System.IO.File]::Exists($Candidate)) {
+            $NvidiaSmiPath = $Candidate
+            break
+        }
+    }
 }
 if ($NvidiaSmiPath) {
     $NvidiaInfo = & $NvidiaSmiPath --query-gpu=name,driver_version,compute_cap --format=csv,noheader 2>$null
     if ($LASTEXITCODE -eq 0 -and $NvidiaInfo) {
-        $NvidiaLine = @($NvidiaInfo) | Select-Object -First 1
+        $NvidiaLine = [string](@($NvidiaInfo)[0])
         $NvidiaFields = ([string]$NvidiaLine).Split(',')
         if ($NvidiaFields.Count -ge 3) {
             $NvidiaGpuName = $NvidiaFields[0].Trim()
@@ -114,9 +119,10 @@ $FfmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$FfmpegArchiveName"
 $FfmpegChecksumUrl = "$FfmpegArchiveUrl.sha256"
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
-$null = New-Item -ItemType Directory -Path $LogDir -Force
+[System.IO.Directory]::CreateDirectory($LogDir) | Out-Null
 function Write-Stage([string]$Message) {
-    $Line = "[{0}] [Clippy setup] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
+    $Timestamp = [DateTime]::Now.ToString("yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+    $Line = "[{0}] [Clippy setup] {1}" -f $Timestamp, $Message
     Write-Output $Line
     try { [System.IO.File]::AppendAllText($SetupLogPath, $Line + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false)) } catch { }
 }
@@ -152,7 +158,7 @@ if ($ForceCpuRuntime) {
 # early PowerShell dot-source failure with no Clippy setup context.
 foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
     $HelperPath = Join-Path $PSScriptRoot $Helper
-    if (-not (Test-Path -LiteralPath $HelperPath -PathType Leaf)) {
+    if (-not [System.IO.File]::Exists($HelperPath)) {
         throw "Application payload is incomplete. Missing required runtime helper: $HelperPath"
     }
 }
