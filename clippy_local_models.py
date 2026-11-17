@@ -286,7 +286,7 @@ def queue_whisper_download(task_id: str, model_size: str) -> int:
         settings = _read_settings()
         revision = _selection_revision(settings.get("whisper"))
         with _download_lock:
-            if any(task.get("status") in {"queued", "downloading", "verifying"}
+            if any(task.get("status") in {"queued", "downloading", "validating"}
                    for task in _download_tasks.values()):
                 raise RuntimeError("A Whisper model download is already running.")
             now = time.time()
@@ -352,7 +352,7 @@ def start_whisper_download(
         )
 
         _update_download_task(
-            task_id, status="verifying", message="Download complete. Verifying model files…"
+            task_id, status="validating", message="Download complete. Checking model files…"
         )
         model_dir = validate_whisper_model_path(str(destination))
         activated = _activate_download_if_selection_is_unchanged(
