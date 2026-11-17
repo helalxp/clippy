@@ -417,12 +417,14 @@ def test_archive_preserves_user_rename_and_caption_edits_during_copy(tmp_path, m
     (output / "video_clip_1.mp4").write_bytes(b"new-rendered-clip")
     original_copy = module._copy_verified
     edited = False
+    mutation_timestamp = None
     def mutate_during_copy(source, destination):
-        nonlocal edited
+        nonlocal edited, mutation_timestamp
         if destination.name == "video.mp4" and not edited:
             edited = True
             library.rename_project(JOB_ID, "Renamed during archive")
             library.update_captions(JOB_ID, clip_id, {"instagram": {"caption": "Concurrent edit", "hashtags": ["#saved"]}})
+            mutation_timestamp = library.get_project(JOB_ID)["updated_at"]
         return original_copy(source, destination)
     monkeypatch.setattr(module, "_copy_verified", mutate_during_copy)
     updated = library.archive_job(JOB_ID, output, {}, result)
@@ -430,6 +432,7 @@ def test_archive_preserves_user_rename_and_caption_edits_during_copy(tmp_path, m
     caption_data = json.loads(caption_file.read_text(encoding="utf-8"))
     assert edited and updated["title"] == "Renamed during archive"
     assert caption_data["platforms"]["instagram"]["caption"] == "Concurrent edit"
+    assert updated["updated_at"] == mutation_timestamp
     assert library.clip_path(JOB_ID, clip_id).read_bytes() == b"new-rendered-clip"
 
 
@@ -453,3 +456,26 @@ def test_clip_deleted_during_archive_is_not_restored(tmp_path, monkeypatch):
     assert clip_id in updated["deleted_clip_ids"]
     with pytest.raises(FileNotFoundError):
         library.clip_path(JOB_ID, clip_id)
+
+
+
+def test_metadata_writes_do_not_persist_presentation_fields(tmp_path, monkeypatch):
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+
+    def fake_thumbnail(source, destination):
+        destination.write_bytes(b"jpeg-preview")
+        return True
+
+    monkeypatch.setattr(library, "_create_thumbnail", fake_thumbnail)
+    project = library.archive_job(JOB_ID, output, {}, result)
+    clip_id = project["clips"][0]["clip_id"]
+    library.rename_project(JOB_ID, "Clean metadata project")
+    library.update_captions(JOB_ID, clip_id, {
+        "instagram": {"caption": "Edited caption", "hashtags": ["#saved"]},
+    })
+
+    stored = json.loads((library._project_dir(JOB_ID) / "project.json").read_text(encoding="utf-8"))
+    assert "storage_path" not in stored
+    assert "thumbnail_url" not in stored
+    assert all("thumbnail_url" not in clip for clip in stored["clips"])
