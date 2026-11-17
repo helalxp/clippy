@@ -159,6 +159,35 @@ def get_whisper_selection() -> dict[str, Any]:
     return inspect_whisper_model()
 
 
+def update_whisper_preferences(**changes: Any) -> dict[str, Any]:
+    """Update non-picker Whisper preferences through the same atomic settings store."""
+    with _settings_lock:
+        settings = _read_settings()
+        previous = settings.get("whisper", {})
+        if not isinstance(previous, dict):
+            previous = {}
+
+        updated = dict(previous)
+        model_size_changed = (
+            "model_size" in changes
+            and changes["model_size"] != previous.get("model_size")
+        )
+        if model_size_changed and "model_path" not in changes:
+            # A legacy first-run model-size change must not keep an unrelated
+            # custom local path active.
+            updated["model_path"] = None
+        updated.update(changes)
+        if model_size_changed:
+            updated["selection_revision"] = _selection_revision(previous) + 1
+        else:
+            updated["selection_revision"] = _selection_revision(previous)
+
+        settings["whisper"] = updated
+        _write_settings(settings)
+
+    return inspect_whisper_model()
+
+
 def save_whisper_selection(*, model_size: str | None = None,
                            model_path: str | None = None) -> dict[str, Any]:
     with _settings_lock:
