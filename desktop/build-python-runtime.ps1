@@ -51,9 +51,37 @@ if ($LASTEXITCODE -ne 0) { throw "Could not install pinned $Variant Python depen
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
 $VersionCheck = (& $StagedPython --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") { throw "Packaged Python failed version check: $VersionCheck" }
-$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe; print('torch=' + torch.__version__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
+$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; print('torch=' + torch.__version__); print('av=' + av.__version__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
 & $StagedPython -c $ImportCheck
-if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import validation." }
+if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import or PyAV compatibility validation." }
+
+# Exercise the exact faster-whisper audio decoder call that previously failed
+# when pip resolved PyAV 19. This catches API drift before the runtime ships.
+$WhisperDecodeCheck = @'
+import os, tempfile, wave
+import av
+from faster_whisper.audio import decode_audio
+
+assert av.__version__ == "18.1.0", f"Unexpected PyAV version: {av.__version__}"
+fd, path = tempfile.mkstemp(suffix=".wav")
+os.close(fd)
+try:
+    with wave.open(path, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\\x00\\x00" * 16000)
+    audio = decode_audio(path)
+    assert len(audio) == 16000, f"Unexpected decoded sample count: {len(audio)}"
+    print(f"faster-whisper audio decoder OK with PyAV {av.__version__}")
+finally:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+'@
+& $StagedPython -c $WhisperDecodeCheck
+if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed the faster-whisper/PyAV audio decoder smoke test." }
 if ($Variant -eq "cuda") {
     & $StagedPython -c "import torch; assert torch.version.cuda is not None and torch.version.cuda.startswith('12.8'), 'CUDA 12.8 PyTorch wheel was not selected'"
     if ($LASTEXITCODE -ne 0) { throw "CUDA package does not contain the required CUDA 12.8 PyTorch build." }
@@ -105,8 +133,10 @@ Join-ClippyRuntimeArchiveParts -Manifest $RuntimeManifest -PartsDirectory $Outpu
 $ArchiveTestRoot = Join-Path $WorkRoot "archive-test"
 Expand-Archive -LiteralPath $ValidationArchive -DestinationPath $ArchiveTestRoot -Force
 $ArchiveTestPython = Join-Path $ArchiveTestRoot "python.exe"
-& $ArchiveTestPython -c "import torch, torchvision, fastapi, faster_whisper; print(torch.__version__)"
-if ($LASTEXITCODE -ne 0) { throw "Reconstructed runtime archive failed its extraction/import test." }
+& $ArchiveTestPython -c $ImportCheck
+if ($LASTEXITCODE -ne 0) { throw "Reconstructed runtime archive failed dependency import or PyAV compatibility validation." }
+& $ArchiveTestPython -c $WhisperDecodeCheck
+if ($LASTEXITCODE -ne 0) { throw "Reconstructed runtime archive failed the faster-whisper/PyAV audio decoder smoke test." }
 Remove-Item -LiteralPath $ValidationArchive -Force
 
 Write-Host "Runtime archive: $ArchiveName"
