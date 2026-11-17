@@ -172,6 +172,146 @@ fn cancel_clip_download(path: String) -> Result<(), String> {
     Ok(())
 }
 
+
+
+fn library_root() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("CLIPPY_LIBRARY_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    let local = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| "Windows local application data directory is unavailable".to_string())?;
+    Ok(local.join("Clippy").join("data").join("library"))
+}
+
+fn resolve_library_path(raw: &str) -> Result<PathBuf, String> {
+    let root = library_root()?.canonicalize()
+        .map_err(|error| format!("Library folder is unavailable: {error}"))?;
+    let target = PathBuf::from(raw).canonicalize()
+        .map_err(|error| format!("Library item is unavailable: {error}"))?;
+    if !target.starts_with(&root) {
+        return Err("The requested path is outside the Clippy Library.".to_string());
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+fn reveal_library_path(path: String) -> Result<(), String> {
+    let target = resolve_library_path(&path)?;
+    let mut command = Command::new("explorer.exe");
+    if target.is_file() {
+        command.arg(format!("/select,{}", target.display()));
+    } else {
+        command.arg(&target);
+    }
+    command.spawn().map(|_| ())
+        .map_err(|error| format!("Cannot open the Library location in File Explorer: {error}"))
+}
+
+fn resolve_any_download_path(raw: &str) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(raw);
+    let name = requested.file_name()
+        .ok_or_else(|| "Download file path is invalid".to_string())?;
+    let parent = requested.parent()
+        .ok_or_else(|| "Download folder is invalid".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Download folder is unavailable: {error}"))?;
+    if parent != clip_download_root()? {
+        return Err("Downloads can only be written inside the Clippy download folder.".to_string());
+    }
+    let extension = requested.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(extension.as_str(), "mp4" | "zip") {
+        return Err("Only MP4 and ZIP downloads are supported.".to_string());
+    }
+    let target = parent.join(name);
+    if fs::symlink_metadata(&target).map(|metadata| metadata.file_type().is_symlink()).unwrap_or(false) {
+        return Err("The requested download target is not a regular file.".to_string());
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+fn begin_file_download(filename: String) -> Result<ClipDownloadTarget, String> {
+    let root = clip_download_root()?;
+    let requested = Path::new(&filename);
+    let extension = requested.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(extension.as_str(), "mp4" | "zip") {
+        return Err("Only MP4 and ZIP downloads are supported.".to_string());
+    }
+    let requested_stem = requested.file_stem().and_then(|value| value.to_str()).unwrap_or("clippy-export");
+    let mut stem: String = requested_stem.chars()
+        .filter(|character| character.is_alphanumeric() || *character == '-' || *character == '_' || *character == ' ')
+        .take(100)
+        .collect();
+    stem = stem.trim().trim_matches('.').to_string();
+    if stem.is_empty() {
+        stem = "clippy-export".to_string();
+    }
+    let upper = stem.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit()
+            && upper.as_bytes()[3] != b'0')
+    {
+        stem = format!("Clippy-{stem}");
+    }
+    for suffix in 1..=9999 {
+        let name = if suffix == 1 { format!("{stem}.{extension}") }
+            else { format!("{stem} ({suffix}).{extension}") };
+        let target = root.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(_) => return Ok(ClipDownloadTarget { path: target.display().to_string() }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Cannot create download {}: {error}", target.display())),
+        }
+    }
+    Err("Could not find an available filename for this download.".to_string())
+}
+
+#[tauri::command]
+fn append_file_download_chunk(path: String, bytes: Vec<u8>) -> Result<u64, String> {
+    let target = resolve_any_download_path(&path)?;
+    let mut file = OpenOptions::new().append(true).open(&target)
+        .map_err(|error| format!("Cannot open download {}: {error}", target.display()))?;
+    file.write_all(&bytes)
+        .map_err(|error| format!("Cannot write download {}: {error}", target.display()))?;
+    file.metadata().map(|metadata| metadata.len())
+        .map_err(|error| format!("Cannot inspect download {}: {error}", target.display()))
+}
+
+#[tauri::command]
+fn finish_file_download(path: String) -> Result<String, String> {
+    let target = resolve_any_download_path(&path)?;
+    let file = OpenOptions::new().write(true).open(&target)
+        .map_err(|error| format!("Cannot finalize download {}: {error}", target.display()))?;
+    file.sync_all().map_err(|error| format!("Cannot flush download {}: {error}", target.display()))?;
+    if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) == 0 {
+        return Err("The downloaded file is empty.".to_string());
+    }
+    Ok(target.display().to_string())
+}
+
+#[tauri::command]
+fn cancel_file_download(path: String) -> Result<(), String> {
+    let target = resolve_any_download_path(&path)?;
+    if target.exists() {
+        fs::remove_file(&target)
+            .map_err(|error| format!("Cannot remove incomplete download {}: {error}", target.display()))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn reveal_file_download(path: String) -> Result<(), String> {
+    let target = resolve_any_download_path(&path)?;
+    Command::new("explorer.exe")
+        .arg(format!("/select,{}", target.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Cannot reveal downloaded file: {error}"))
+}
+
 #[tauri::command]
 fn reveal_clip_download(path: String) -> Result<(), String> {
     let path = resolve_clip_download_path(&path)?;
@@ -686,7 +826,13 @@ pub fn run() {
             append_clip_download_chunk,
             finish_clip_download,
             cancel_clip_download,
-            reveal_clip_download
+            reveal_clip_download,
+            reveal_library_path,
+            begin_file_download,
+            append_file_download_chunk,
+            finish_file_download,
+            cancel_file_download,
+            reveal_file_download
         ])
         .build(tauri::generate_context!())
         .expect("error while building Clippy desktop application")

@@ -253,6 +253,7 @@ struct RuntimePaths {
     browser_executable: PathBuf,
     output: PathBuf,
     uploads: PathBuf,
+    library: PathBuf,
     models: PathBuf,
     settings_file: PathBuf,
     references: PathBuf,
@@ -297,6 +298,7 @@ impl RuntimePaths {
             .join("chrome-headless-shell.exe");
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
+        let library = root.join("data").join("library");
         let models = root.join("data").join("models");
         let settings_file = root.join("settings.json");
         let references = root.join("data").join("reference_templates");
@@ -310,6 +312,7 @@ impl RuntimePaths {
             browser_executable,
             output,
             uploads,
+            library,
             models,
             settings_file,
             references,
@@ -434,6 +437,8 @@ impl Supervisor {
             .map_err(|e| format!("Cannot create output directory: {e}"))?;
         fs::create_dir_all(&paths.uploads)
             .map_err(|e| format!("Cannot create uploads directory: {e}"))?;
+        fs::create_dir_all(&paths.library)
+            .map_err(|e| format!("Cannot create Library directory: {e}"))?;
         fs::create_dir_all(&paths.models)
             .map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
@@ -481,6 +486,7 @@ impl Supervisor {
             .env("PYTHONUTF8", "1")
             .env("OUTPUT_DIR", &paths.output)
             .env("UPLOAD_DIR", &paths.uploads)
+            .env("CLIPPY_LIBRARY_DIR", &paths.library)
             .env("CLIPPY_MODELS_DIR", &paths.models)
             .env("CLIPPY_SETTINGS_PATH", &paths.settings_file)
             .env("CLIPPY_DESKTOP_MODE", "1")
