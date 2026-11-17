@@ -2956,11 +2956,14 @@ async def download_local_whisper_model(request: Request, background_tasks: Backg
         raise HTTPException(status_code=400, detail="Unsupported Whisper model size.")
     task_id = str(uuid.uuid4())
     try:
-        queue_whisper_download(task_id, model_size)
+        selection_revision = queue_whisper_download(task_id, model_size)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    # Run in FastAPI's background task pool so the UI remains responsive.
-    background_tasks.add_task(start_whisper_download, task_id, model_size)
+    # The worker may activate this download only if no newer saved selection
+    # has been made since this request was queued.
+    background_tasks.add_task(
+        start_whisper_download, task_id, model_size, selection_revision
+    )
     return {"ok": True, "task_id": task_id}
 
 
