@@ -486,6 +486,7 @@ mod tests {
         fs::create_dir_all(source.join("library/projects/project-a/clips")).unwrap();
         fs::write(source.join("library/projects/project-a/project.json"), b"{\"title\":\"demo\"}").unwrap();
         fs::write(source.join("library/projects/project-a/clips/clip.mp4"), b"video bytes").unwrap();
+        fs::create_dir_all(source.join("models/whisper")).unwrap();
         fs::write(source.join("models/whisper/model.bin"), b"model bytes").unwrap();
 
         let mut last = 0;
