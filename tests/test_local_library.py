@@ -2,6 +2,7 @@ import json
 import os
 import time
 import uuid
+import zipfile
 
 import pytest
 
@@ -11,8 +12,8 @@ from local_library import LocalLibrary
 JOB_ID = "12345678-1234-5678-9abc-1234567890ab"
 
 
-def make_job(tmp_path):
-    output = tmp_path / "output" / JOB_ID
+def make_job(tmp_path, job_id=JOB_ID):
+    output = tmp_path / "output" / job_id
     output.mkdir(parents=True)
     (output / "source.mp4").write_bytes(b"original-source")
     (output / "video_clip_1.mp4").write_bytes(b"rendered-clip")
@@ -30,7 +31,7 @@ def make_job(tmp_path):
     (output / "video_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     result = {"clips": [{
         **metadata["shorts"][0],
-        "video_url": f"/videos/{JOB_ID}/video_clip_1.mp4",
+        "video_url": f"/videos/{job_id}/video_clip_1.mp4",
     }]}
     return output, result
 
@@ -251,14 +252,38 @@ def test_startup_cleans_abandoned_project_exports(tmp_path):
 
 
 
-def test_enabling_source_retention_triggers_archive_sync(tmp_path):
+def test_source_retention_is_snapshotted_per_project(tmp_path):
+    library = LocalLibrary(tmp_path / "library")
+    library.update_settings(True)
+    first_output, first_result = make_job(tmp_path)
+    library.reserve_project(JOB_ID, "First project")
+    library.update_settings(False)
+    first = library.archive_job(JOB_ID, first_output, {}, first_result)
+    assert first["source_video"]["retention_requested"] is True
+    assert first["source_video"]["retained"] is True
+
+    second_id = "22345678-1234-5678-9abc-1234567890ab"
+    second_output, second_result = make_job(tmp_path, second_id)
+    library.reserve_project(second_id, "Second project")
+    library.update_settings(True)
+    second = library.archive_job(second_id, second_output, {}, second_result)
+    assert second["source_video"]["retention_requested"] is False
+    assert second["source_video"]["retained"] is False
+    assert library.needs_sync(second_id, second_output, {}, second_result) is False
+
+
+def test_legacy_project_without_retention_snapshot_defaults_to_existing_state(tmp_path):
     output, result = make_job(tmp_path)
     library = LocalLibrary(tmp_path / "library")
-    library.archive_job(JOB_ID, output, {}, result, keep_source=False)
-
-    assert library.needs_sync(JOB_ID, output, {}, result, keep_source=True) is True
-    library.archive_job(JOB_ID, output, {}, result, keep_source=True)
-    assert library.needs_sync(JOB_ID, output, {}, result, keep_source=True) is False
+    library.archive_job(JOB_ID, output, {}, result)
+    project_file = library._project_dir(JOB_ID) / "project.json"
+    metadata = json.loads(project_file.read_text(encoding="utf-8"))
+    metadata["source_video"].pop("retention_requested", None)
+    project_file.write_text(json.dumps(metadata), encoding="utf-8")
+    library.update_settings(True)
+    synced = library.archive_job(JOB_ID, output, {}, result, keep_source=True)
+    assert synced["source_video"]["retention_requested"] is False
+    assert synced["source_video"]["retained"] is False
 
 
 
@@ -328,3 +353,97 @@ def test_project_deleted_during_archive_cannot_be_published(tmp_path, monkeypatc
     assert library.is_deleted(JOB_ID) is True
     assert not library._project_dir(JOB_ID).exists()
     assert not any(item.name.startswith(f".{JOB_ID}.") for item in library.projects_dir.iterdir())
+
+
+
+def test_project_and_clip_thumbnails_are_generated_and_exposed(tmp_path, monkeypatch):
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    def fake_thumbnail(source, destination):
+        destination.write_bytes(b"jpeg-preview")
+        return True
+    monkeypatch.setattr(library, "_create_thumbnail", fake_thumbnail)
+    project = library.archive_job(JOB_ID, output, {}, result)
+    clip = project["clips"][0]
+    assert project["thumbnail_url"] == f"/api/library/projects/{JOB_ID}/thumbnail"
+    assert clip["thumbnail_url"] == f"/api/library/projects/{JOB_ID}/clips/{clip['clip_id']}/thumbnail"
+    assert library.project_thumbnail_path(JOB_ID).read_bytes() == b"jpeg-preview"
+    assert library.clip_thumbnail_path(JOB_ID, clip["clip_id"]).read_bytes() == b"jpeg-preview"
+
+
+def test_thumbnail_failure_does_not_fail_archive(tmp_path, monkeypatch):
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    monkeypatch.setattr(library, "_create_thumbnail", lambda source, destination: False)
+    project = library.archive_job(JOB_ID, output, {}, result)
+    assert project["clip_count"] == 1
+    assert "thumbnail_url" not in project
+    assert "thumbnail_url" not in project["clips"][0]
+
+
+def test_project_zip_contains_only_light_portable_deliverables(tmp_path, monkeypatch):
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    monkeypatch.setattr(library, "_create_thumbnail", lambda source, destination: False)
+    library.archive_job(JOB_ID, output, {}, result, keep_source=True)
+    destination = tmp_path / "exports" / "project.zip"
+    library.export_project_zip(JOB_ID, destination)
+    with zipfile.ZipFile(destination) as archive:
+        names = archive.namelist()
+        assert len(names) == 3
+        manifest_name = next(name for name in names if name.endswith("/project.json"))
+        manifest = json.loads(archive.read(manifest_name))
+        captions_name = next(name for name in names if name.endswith("/captions/clip-001.json"))
+        captions = json.loads(archive.read(captions_name))
+    assert any(name.endswith("/clips/clip-001.mp4") for name in names)
+    assert not any("/source/" in name or "/workspace/" in name for name in names)
+    assert str(library.root) not in json.dumps(manifest)
+    assert "storage_path" not in manifest and "source_fields" not in captions
+    assert captions["platforms"]["instagram"]["caption"] == "Instagram copy"
+
+
+def test_archive_preserves_user_rename_and_caption_edits_during_copy(tmp_path, monkeypatch):
+    import local_library as module
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    first = library.archive_job(JOB_ID, output, {}, result)
+    clip_id = first["clips"][0]["clip_id"]
+    (output / "video_clip_1.mp4").write_bytes(b"new-rendered-clip")
+    original_copy = module._copy_verified
+    edited = False
+    def mutate_during_copy(source, destination):
+        nonlocal edited
+        if destination.name == "video.mp4" and not edited:
+            edited = True
+            library.rename_project(JOB_ID, "Renamed during archive")
+            library.update_captions(JOB_ID, clip_id, {"instagram": {"caption": "Concurrent edit", "hashtags": ["#saved"]}})
+        return original_copy(source, destination)
+    monkeypatch.setattr(module, "_copy_verified", mutate_during_copy)
+    updated = library.archive_job(JOB_ID, output, {}, result)
+    caption_file = library._project_dir(JOB_ID) / updated["clips"][0]["captions_path"]
+    caption_data = json.loads(caption_file.read_text(encoding="utf-8"))
+    assert edited and updated["title"] == "Renamed during archive"
+    assert caption_data["platforms"]["instagram"]["caption"] == "Concurrent edit"
+    assert library.clip_path(JOB_ID, clip_id).read_bytes() == b"new-rendered-clip"
+
+
+def test_clip_deleted_during_archive_is_not_restored(tmp_path, monkeypatch):
+    import local_library as module
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    clip_id = library.archive_job(JOB_ID, output, {}, result)["clips"][0]["clip_id"]
+    (output / "video_clip_1.mp4").write_bytes(b"new-rendered-clip")
+    original_copy = module._copy_verified
+    deleted = False
+    def delete_during_copy(source, destination):
+        nonlocal deleted
+        if destination.name == "video.mp4" and not deleted:
+            deleted = True
+            library.delete_clip(JOB_ID, clip_id)
+        return original_copy(source, destination)
+    monkeypatch.setattr(module, "_copy_verified", delete_during_copy)
+    updated = library.archive_job(JOB_ID, output, {}, result)
+    assert deleted and updated["clip_count"] == 0
+    assert clip_id in updated["deleted_clip_ids"]
+    with pytest.raises(FileNotFoundError):
+        library.clip_path(JOB_ID, clip_id)

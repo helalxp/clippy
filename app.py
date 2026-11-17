@@ -2901,7 +2901,6 @@ async def run_job(job_id, job_data):
                 try:
                     archived = local_library.archive_job(
                         job_id, output_dir, job_data, jobs[job_id].get('result'),
-                        keep_source=local_library.get_settings().get("keep_source_default", False),
                     )
                     jobs[job_id]['logs'].append(
                         f"📚 Saved {archived['clip_count']} clips to the local Library.")
@@ -4124,15 +4123,11 @@ async def local_library_projects():
             if (project_dir / "project.json").is_file():
                 existing_project = local_library.get_project(job_id)
             output_dir = job.get("output_dir") or os.path.join(OUTPUT_DIR, job_id)
-            keep_source = local_library.get_settings().get("keep_source_default", False)
             if os.path.isdir(output_dir) and (
                 not existing_project
-                or local_library.needs_sync(job_id, output_dir, job, job.get("result"), keep_source)
+                or local_library.needs_sync(job_id, output_dir, job, job.get("result"))
             ):
-                local_library.archive_job(
-                    job_id, output_dir, job, job.get("result"),
-                    keep_source=keep_source,
-                )
+                local_library.archive_job(job_id, output_dir, job, job.get("result"))
         except (ValueError, OSError, FileNotFoundError) as error:
             print(f"⚠️ Could not import existing job {job_id} into Library: {error}")
     return {"projects": local_library.list_projects(), "storage_root": str(local_library.root)}
@@ -4156,14 +4151,10 @@ async def sync_local_library_project(project_id: str):
             return local_library.get_project(project_id)
         except (ValueError, FileNotFoundError):
             raise HTTPException(status_code=404, detail="Project files have expired and no Library archive exists.")
-    keep_source = local_library.get_settings().get("keep_source_default", False)
     try:
-        if not local_library.needs_sync(project_id, output_dir, job, job.get("result"), keep_source):
+        if not local_library.needs_sync(project_id, output_dir, job, job.get("result")):
             return local_library.get_project(project_id)
-        return local_library.archive_job(
-            project_id, output_dir, job, job.get("result"),
-            keep_source=keep_source,
-        )
+        return local_library.archive_job(project_id, output_dir, job, job.get("result"))
     except (OSError, ValueError, FileNotFoundError) as error:
         print(f"⚠️ Local Library sync failed for {project_id}: {error}")
         raise HTTPException(status_code=500, detail="Could not synchronize this project to the Library.")
@@ -4177,6 +4168,26 @@ async def local_library_project(project_id: str):
         return local_library.get_project(project_id)
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Project not found.")
+
+
+@app.get("/api/library/projects/{project_id}/thumbnail")
+async def local_library_project_thumbnail(project_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        return FileResponse(local_library.project_thumbnail_path(project_id), media_type="image/jpeg")
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Project thumbnail not found.")
+
+
+@app.get("/api/library/projects/{project_id}/clips/{clip_id}/thumbnail")
+async def local_library_clip_thumbnail(project_id: str, clip_id: str):
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    try:
+        return FileResponse(local_library.clip_thumbnail_path(project_id, clip_id), media_type="image/jpeg")
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="Clip thumbnail not found.")
 
 
 @app.put("/api/library/projects/{project_id}")
@@ -4248,43 +4259,20 @@ async def download_local_library_project(project_id: str):
         raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
     try:
         project = local_library.get_project(project_id)
-        project_dir = local_library._project_dir(project_id)
         export_dir = local_library.root / "exports"
         export_dir.mkdir(parents=True, exist_ok=True)
         fd, zip_name = tempfile.mkstemp(prefix=f"clippy-{project_id[:8]}-", suffix=".zip", dir=str(export_dir))
         os.close(fd)
         zip_path = Path(zip_name)
         try:
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-                for clip in project.get("clips", []):
-                    clip_path = local_library.clip_path(project_id, clip["clip_id"])
-                    archive.write(clip_path, arcname=f"{project['title']}/clips/{clip['clip_id']}.mp4")
-                    captions_path = (project_dir / clip["captions_path"]).resolve()
-                    if captions_path.is_file() and captions_path.is_relative_to(project_dir):
-                        archive.write(captions_path, arcname=f"{project['title']}/captions/{clip['clip_id']}.json")
-                workspace_dir = (project_dir / "workspace").resolve()
-                if workspace_dir.is_dir() and workspace_dir.is_relative_to(project_dir):
-                    for workspace_file in workspace_dir.rglob("*"):
-                        resolved = workspace_file.resolve()
-                        if resolved.is_file() and resolved.is_relative_to(workspace_dir):
-                            relative_name = resolved.relative_to(workspace_dir).as_posix()
-                            archive.write(resolved, arcname=f"{project['title']}/workspace/{relative_name}")
-                if (project.get("source_video") or {}).get("retained"):
-                    source_dir = (project_dir / "source").resolve()
-                    if source_dir.is_dir() and source_dir.is_relative_to(project_dir):
-                        for source_file in source_dir.iterdir():
-                            resolved = source_file.resolve()
-                            if resolved.is_file() and resolved.is_relative_to(source_dir):
-                                archive.write(resolved, arcname=f"{project['title']}/source/{resolved.name}")
-                archive.write(project_dir / "project.json", arcname=f"{project['title']}/project.json")
+            local_library.export_project_zip(project_id, zip_path)
         except Exception:
             zip_path.unlink(missing_ok=True)
             raise
-        return FileResponse(
-            zip_path, media_type="application/zip",
-            filename=f"clippy-{project['title'][:60]}.zip",
-            background=BackgroundTask(lambda: zip_path.unlink(missing_ok=True)),
-        )
+        safe_title = re.sub(r"[^A-Za-z0-9_-]+", "-", project.get("title") or "project").strip("-")[:60] or "project"
+        return FileResponse(zip_path, media_type="application/zip",
+            filename=f"Clippy-{safe_title}.zip",
+            background=BackgroundTask(lambda: zip_path.unlink(missing_ok=True)))
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="Project not found.")
 
