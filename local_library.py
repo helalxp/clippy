@@ -468,7 +468,9 @@ class LocalLibrary:
                         retained_source = candidates[0] if candidates else None
                 if retained_source and retained_source.is_file():
                     (staging / "source").mkdir()
-                    archive_source_name = source_name or retained_source.name
+                    # Metadata may still hold a temporary filename after the source
+                    # has moved into uploads; persist the name of the file copied.
+                    archive_source_name = retained_source.name
                     source_name = archive_source_name
                     try:
                         _copy_verified(retained_source, staging / "source" / archive_source_name)
