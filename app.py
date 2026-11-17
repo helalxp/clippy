@@ -2928,7 +2928,9 @@ async def verify_local_whisper_model():
     from clippy_local_models import verify_whisper_model_load
 
     try:
-        return verify_whisper_model_load()
+        # Model initialization and the inference probe are CPU-heavy. Keep the
+        # async API event loop responsive while the explicit test is running.
+        return await asyncio.to_thread(verify_whisper_model_load)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
