@@ -290,4 +290,4 @@ The smoke test launches the actual first-run setup in an isolated `LOCALAPPDATA`
 
 For the PowerShell module-path regression, the native Rust launcher removes inherited `PSModulePath` before launching Windows PowerShell 5.1. The smoke-test process helper performs the same isolation and preflights `Get-FileHash` and `ConvertFrom-Json` before setup. Do not replace this process-boundary fix with broad environment resets or a switch to PowerShell 7 without repeating the compatibility tests.
 
-The hardening branch is intentionally not merged into `windows-installer-release` until the user has completed testing on both PCs and approved the merge.
+The v0.2.3 implementation passed the documented CI and manual Windows checks. The promotion sequence for this accepted installer baseline is `windows-installer-hardening` → `windows-installer-release` → `main`; record each merge commit and its post-merge validation here when completed.

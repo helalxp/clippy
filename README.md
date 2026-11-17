@@ -4,8 +4,8 @@
 [![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![GitHub stars](https://img.shields.io/github/stars/helalxp/clippy?style=social)](https://github.com/mutonby/openshorts)
-[![Last Commit](https://img.shields.io/github/last-commit/helalxp/clippy)](https://github.com/mutonby/openshorts/commits/main)
+[![GitHub stars](https://img.shields.io/github/stars/helalxp/clippy?style=social)](https://github.com/helalxp/clippy)
+[![Last Commit](https://img.shields.io/github/last-commit/helalxp/clippy)](https://github.com/helalxp/clippy/commits/main)
 
 ## Clippy Windows desktop
 
@@ -225,7 +225,7 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 ### 1. Clone
 ```bash
 git clone https://github.com/helalxp/clippy.git
-cd openshorts
+cd clippy
 ```
 
 ### 2. Configure (optional)
