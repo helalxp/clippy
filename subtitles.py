@@ -23,7 +23,14 @@ def get_whisper_config():
     directory in the per-user settings file. WHISPER_MODEL remains supported
     for existing Docker/server deployments and takes precedence when set.
     """
-    configured_model = os.environ.get("WHISPER_MODEL")
+    # The packaged desktop app has one authoritative model source: its
+    # persisted per-user selection. Environment overrides remain supported
+    # for Docker and self-hosted deployments, but must not silently defeat the
+    # desktop Settings picker.
+    desktop_mode = os.environ.get("CLIPPY_DESKTOP_MODE", "").strip().lower() in {
+        "1", "true", "yes"
+    }
+    configured_model = None if desktop_mode else os.environ.get("WHISPER_MODEL")
     if configured_model:
         model_size = configured_model
     else:

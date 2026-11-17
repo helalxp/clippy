@@ -66,22 +66,14 @@ def is_first_run() -> bool:
 
 def mark_first_run_complete(model_size: str, gpu_mode: bool):
     global _FIRST_RUN, _USER_MODEL_SIZE, _USER_GPU_MODE
+    # Keep the legacy first-run endpoint on the same locked, atomic settings
+    # writer as the model manager so the two paths cannot overwrite each other.
+    from clippy_local_models import update_whisper_preferences
+
+    update_whisper_preferences(model_size=model_size, gpu_mode=gpu_mode)
     _FIRST_RUN = False
     _USER_MODEL_SIZE = model_size
     _USER_GPU_MODE = gpu_mode
-    # Save settings
-    import json
-    settings_path = _settings_file_path()
-    if not settings_path.parent.exists():
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-    if settings_path.exists():
-        existing = json.loads(settings_path.read_text(encoding="utf-8"))
-    else:
-        existing = {}
-    existing["whisper"] = existing.get("whisper", {})
-    existing["whisper"]["model_size"] = model_size
-    existing["whisper"]["gpu_mode"] = gpu_mode
-    settings_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 def get_user_model_size() -> str:
     if _USER_MODEL_SIZE:
@@ -99,7 +91,7 @@ def get_user_model_size() -> str:
 def get_user_gpu_mode() -> bool:
     if _USER_GPU_MODE is not None:
         return _USER_GPU_MODE
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if settings_path.exists():
         try:
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -2936,7 +2928,9 @@ async def verify_local_whisper_model():
     from clippy_local_models import verify_whisper_model_load
 
     try:
-        return verify_whisper_model_load()
+        # Model initialization and the inference probe are CPU-heavy. Keep the
+        # async API event loop responsive while the explicit test is running.
+        return await asyncio.to_thread(verify_whisper_model_load)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
@@ -2956,11 +2950,14 @@ async def download_local_whisper_model(request: Request, background_tasks: Backg
         raise HTTPException(status_code=400, detail="Unsupported Whisper model size.")
     task_id = str(uuid.uuid4())
     try:
-        queue_whisper_download(task_id, model_size)
+        selection_revision = queue_whisper_download(task_id, model_size)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    # Run in FastAPI's background task pool so the UI remains responsive.
-    background_tasks.add_task(start_whisper_download, task_id, model_size)
+    # The worker may activate this download only if no newer saved selection
+    # has been made since this request was queued.
+    background_tasks.add_task(
+        start_whisper_download, task_id, model_size, selection_revision
+    )
     return {"ok": True, "task_id": task_id}
 
 

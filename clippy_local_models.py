@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import threading
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ WHISPER_MODELS = {
     "large-v3-turbo": {"repo_id": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "label": "Large v3 Turbo", "description": "High quality with faster inference; still resource intensive."},
 }
 
+_settings_lock = threading.RLock()
 _download_lock = threading.Lock()
 _download_tasks: dict[str, dict[str, Any]] = {}
 
@@ -48,20 +51,45 @@ def models_root() -> Path:
 
 
 def _read_settings() -> dict[str, Any]:
-    path = settings_path()
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    with _settings_lock:
+        path = settings_path()
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
 
 def _write_settings(value: dict[str, Any]) -> None:
-    path = settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    """Persist settings atomically without sharing a temporary filename."""
+    with _settings_lock:
+        path = settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+                json.dump(value, stream, indent=2)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, path)
+        except BaseException:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+            raise
+
+
+def _selection_revision(whisper_settings: Any) -> int:
+    if not isinstance(whisper_settings, dict):
+        return 0
+    try:
+        return max(0, int(whisper_settings.get("selection_revision", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def validate_whisper_model_path(value: str) -> Path:
@@ -75,12 +103,25 @@ def validate_whisper_model_path(value: str) -> Path:
     candidate = candidate.resolve()
     if not candidate.is_dir():
         raise ValueError("The selected Whisper model folder does not exist.")
-    required = ("model.bin", "config.json", "tokenizer.json", "vocabulary.json")
+    required = ("model.bin", "config.json", "tokenizer.json")
     missing = [name for name in required if not (candidate / name).is_file()]
+    # faster-whisper model repositories use either vocabulary.txt (Systran's
+    # standard conversions) or vocabulary.json (some newer conversions).
+    # CTranslate2 supports both; requiring only .json rejects valid downloads.
+    vocabulary_files = ("vocabulary.txt", "vocabulary.json")
+    if not any((candidate / name).is_file() for name in vocabulary_files):
+        missing.append("vocabulary.txt or vocabulary.json")
     if missing:
         raise ValueError(
             "This folder is not a complete faster-whisper model. Missing: "
             + ", ".join(missing)
+        )
+    empty = [name for name in (*required, *vocabulary_files)
+             if (candidate / name).is_file() and (candidate / name).stat().st_size == 0]
+    if empty:
+        raise ValueError(
+            "This faster-whisper model contains empty required files: "
+            + ", ".join(empty)
         )
     return candidate
 
@@ -96,12 +137,25 @@ def inspect_whisper_model() -> dict[str, Any]:
         saved = {}
 
     size = saved.get("model_size", "small")
-    if size not in WHISPER_MODELS:
+    if not isinstance(size, str) or size not in WHISPER_MODELS:
         size = "small"
     custom_path = saved.get("model_path")
-    source = "local" if custom_path else "catalog"
-    configured = bool(custom_path or saved.get("model_size") in WHISPER_MODELS)
-    candidate = Path(str(custom_path)).expanduser() if custom_path else _catalog_model_dir(size)
+    source = "catalog"
+    if custom_path:
+        supplied_path = Path(str(custom_path)).expanduser()
+        try:
+            # Downloads from Clippy's catalog are also stored with an absolute
+            # model_path for compatibility with older settings. Recognize that
+            # managed directory as a catalog model, not a user-supplied folder.
+            if supplied_path.resolve() != _catalog_model_dir(size).resolve():
+                source = "local"
+            else:
+                custom_path = None
+        except (OSError, RuntimeError):
+            source = "local"
+
+    configured = bool(saved.get("model_path") or saved.get("model_size") in WHISPER_MODELS)
+    candidate = Path(str(custom_path)).expanduser() if source == "local" else _catalog_model_dir(size)
 
     try:
         resolved = validate_whisper_model_path(str(candidate))
@@ -123,6 +177,7 @@ def inspect_whisper_model() -> dict[str, Any]:
         "available": installed,
         "status": ("ready" if installed else "selected_not_downloaded") if configured else "not_selected",
         "validation_error": validation_error,
+        "selection_revision": _selection_revision(saved),
     }
 
 
@@ -130,27 +185,72 @@ def get_whisper_selection() -> dict[str, Any]:
     return inspect_whisper_model()
 
 
+def update_whisper_preferences(**changes: Any) -> dict[str, Any]:
+    """Update non-picker Whisper preferences through the same atomic settings store."""
+    with _settings_lock:
+        settings = _read_settings()
+        previous = settings.get("whisper", {})
+        if not isinstance(previous, dict):
+            previous = {}
+
+        updated = dict(previous)
+        model_size_changed = (
+            "model_size" in changes
+            and changes["model_size"] != previous.get("model_size")
+        )
+        if model_size_changed and "model_path" not in changes:
+            # A legacy first-run model-size change must not keep an unrelated
+            # custom local path active.
+            updated["model_path"] = None
+        updated.update(changes)
+        if model_size_changed:
+            updated["selection_revision"] = _selection_revision(previous) + 1
+        else:
+            updated["selection_revision"] = _selection_revision(previous)
+
+        settings["whisper"] = updated
+        _write_settings(settings)
+
+    return inspect_whisper_model()
+
+
 def save_whisper_selection(*, model_size: str | None = None,
                            model_path: str | None = None) -> dict[str, Any]:
-    settings = _read_settings()
-    if model_path:
-        resolved = validate_whisper_model_path(model_path)
-        selection = {"model_size": model_size or "small",
-                     "model_path": str(resolved)}
-    else:
-        if model_size not in WHISPER_MODELS:
-            raise ValueError("Choose one of the supported Whisper model sizes.")
-        # A catalog choice is a saved preference, not proof that its weights
-        # exist locally. Keep the selection visible while reporting that it
-        # still needs an explicit download or first-use fetch.
-        selection = {"model_size": model_size, "model_path": None}
-    settings["whisper"] = selection
-    _write_settings(settings)
+    with _settings_lock:
+        settings = _read_settings()
+        previous = settings.get("whisper", {})
+        if not isinstance(previous, dict):
+            previous = {}
+
+        if model_path:
+            resolved = validate_whisper_model_path(model_path)
+            selection = {
+                "model_size": model_size or previous.get("model_size") or "small",
+                "model_path": str(resolved),
+            }
+        else:
+            if model_size not in WHISPER_MODELS:
+                raise ValueError("Choose one of the supported Whisper model sizes.")
+            # A catalog choice is a preference, not proof that its weights exist.
+            selection = {"model_size": model_size, "model_path": None}
+
+        # Preserve unrelated/legacy Whisper preferences (for example gpu_mode)
+        # while making each explicit selection change observable to downloads.
+        updated = dict(previous)
+        updated.update(selection)
+        updated["selection_revision"] = _selection_revision(previous) + 1
+        settings["whisper"] = updated
+        _write_settings(settings)
+
     return get_whisper_selection()
 
 
 def verify_whisper_model_load() -> dict[str, Any]:
-    """Explicitly load the selected local weights on CPU to verify CTranslate2 compatibility."""
+    """Load the selected model and execute a real, short CPU transcription pass."""
+    import math
+    import wave
+    from array import array
+
     selection = get_whisper_selection()
     if not selection.get("installed"):
         raise FileNotFoundError(
@@ -160,71 +260,208 @@ def verify_whisper_model_load() -> dict[str, Any]:
 
     from faster_whisper import WhisperModel
 
-    model_path = selection.get("model_path") or str(_catalog_model_dir(selection["model_size"]))
-    # CPU int8 is a conservative compatibility probe. It avoids depending on
-    # the user's CUDA driver and does not run inference or alter GPU settings.
-    model = WhisperModel(
-        model_path,
-        device="cpu",
-        compute_type="int8",
-        cpu_threads=2,
-        num_workers=1,
-        local_files_only=True,
-    )
-    del model
-    return {
-        "ok": True,
-        "model_size": selection["model_size"],
-        "model_path": model_path,
-        "message": "The selected Whisper model loaded successfully with faster-whisper (CPU int8).",
-    }
+    # Verification and production transcription must load the same resolved source.
+    model_path = whisper_model_argument(selection)
+    # CPU int8 keeps this diagnostic independent of CUDA availability and does
+    # not modify the user's selected production device/compute preferences.
+    audio_path = None
+    model = None
+    load_started = time.perf_counter()
+    try:
+        with tempfile.NamedTemporaryFile(prefix="clippy-whisper-test-", suffix=".wav", delete=False) as audio_file:
+            audio_path = Path(audio_file.name)
+
+        # A short deterministic tone exercises the packaged PyAV decoder and
+        # the actual CTranslate2 encoder/decoder without needing a user file.
+        sample_rate = 16_000
+        duration_seconds = 2
+        samples = array(
+            "h",
+            (
+                int(2500 * math.sin(2.0 * math.pi * 440.0 * index / sample_rate))
+                for index in range(sample_rate * duration_seconds)
+            ),
+        )
+        with wave.open(str(audio_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(samples.tobytes())
+
+        model = WhisperModel(
+            model_path,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=2,
+            num_workers=1,
+            local_files_only=True,
+        )
+        load_seconds = time.perf_counter() - load_started
+
+        inference_started = time.perf_counter()
+        segments, info = model.transcribe(
+            str(audio_path),
+            language="en",
+            beam_size=1,
+            best_of=1,
+            temperature=0.0,
+            vad_filter=False,
+        )
+        # faster-whisper is lazy: iterating is required to execute inference.
+        list(segments)
+        inference_seconds = time.perf_counter() - inference_started
+        if not getattr(info, "duration", None):
+            raise RuntimeError("The test audio was not decoded by faster-whisper.")
+
+        return {
+            "ok": True,
+            "model_size": selection["model_size"],
+            "model_path": model_path,
+            "load_seconds": round(load_seconds, 2),
+            "inference_seconds": round(inference_seconds, 2),
+            "test_audio_seconds": duration_seconds,
+            "message": (
+                "The model loaded and completed a real faster-whisper transcription "
+                "pass on 2 seconds of test audio (CPU int8)."
+            ),
+        }
+    finally:
+        if model is not None:
+            del model
+        if audio_path is not None:
+            try:
+                audio_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
-def whisper_model_argument() -> str:
-    selection = get_whisper_selection()
-    if selection.get("source") == "local":
-        if not selection.get("installed", False):
-            raise FileNotFoundError(
-                "The selected local Whisper model is unavailable. Open Settings "
-                "and choose another model or update its folder path."
-            )
+def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
+    selection = selection or get_whisper_selection()
+
+    # A downloaded catalog model must resolve to Clippy's managed directory,
+    # not back to a Hub identifier (which can trigger a duplicate download).
+    if selection.get("installed") and selection.get("model_path"):
         return selection["model_path"]
-    # Keep faster-whisper's normal cache/download behavior for catalog models.
+
+    if selection.get("source") == "local":
+        raise FileNotFoundError(
+            "The selected local Whisper model is unavailable. Open Settings "
+            "and choose another model or update its folder path."
+        )
+
+    # An undownloaded catalog choice keeps faster-whisper's normal first-use
+    # Hub/cache behavior.
     return selection.get("model_size") or "small"
+
 
 def list_download_tasks() -> dict[str, dict[str, Any]]:
     with _download_lock:
         return {key: dict(value) for key, value in _download_tasks.items()}
 
 
-def queue_whisper_download(task_id: str, model_size: str) -> None:
+def queue_whisper_download(task_id: str, model_size: str) -> int:
+    """Queue a download and capture the user's selection revision at request time."""
     if model_size not in WHISPER_MODELS:
         raise ValueError("Unsupported Whisper model size.")
-    with _download_lock:
-        if any(task.get("status") in {"queued", "downloading"} for task in _download_tasks.values()):
-            raise RuntimeError("A Whisper model download is already running.")
-        _download_tasks[task_id] = {"status": "queued", "model_size": model_size,
-                                    "message": "Preparing model download…"}
+
+    # Serialize the revision snapshot with explicit selection changes. The
+    # background worker may activate its result only while this revision holds.
+    with _settings_lock:
+        settings = _read_settings()
+        revision = _selection_revision(settings.get("whisper"))
+        with _download_lock:
+            if any(task.get("status") in {"queued", "downloading", "validating"}
+                   for task in _download_tasks.values()):
+                raise RuntimeError("A Whisper model download is already running.")
+            now = time.time()
+            _download_tasks[task_id] = {
+                "status": "queued",
+                "model_size": model_size,
+                "message": "Preparing model download…",
+                "created_at": now,
+                "updated_at": now,
+            }
+    return revision
 
 
-def start_whisper_download(task_id: str, model_size: str) -> None:
+def _activate_download_if_selection_is_unchanged(
+    model_size: str, model_dir: Path, expected_revision: int | None
+) -> bool:
+    """Activate a completed download only if no newer user selection was saved."""
+    with _settings_lock:
+        settings = _read_settings()
+        previous = settings.get("whisper", {})
+        if not isinstance(previous, dict):
+            previous = {}
+        current_revision = _selection_revision(previous)
+        if expected_revision is not None and current_revision != expected_revision:
+            return False
+
+        updated = dict(previous)
+        updated.update({
+            "model_size": model_size,
+            # The catalog path is deterministic from the model size. Keeping
+            # model_path empty preserves the catalog identity in the UI and
+            # lets the shared resolver discover the managed folder.
+            "model_path": None,
+            "selection_revision": current_revision + 1,
+        })
+        settings["whisper"] = updated
+        _write_settings(settings)
+        return True
+
+
+def _update_download_task(task_id: str, **changes: Any) -> None:
     with _download_lock:
-        _download_tasks[task_id] = {"status": "downloading", "model_size": model_size,
-                                    "message": "Downloading model files…"}
+        task = _download_tasks.get(task_id)
+        if task is not None:
+            task.update(changes)
+            task["updated_at"] = time.time()
+
+
+def start_whisper_download(
+    task_id: str, model_size: str, expected_selection_revision: int | None = None
+) -> None:
+    _update_download_task(
+        task_id,
+        status="downloading",
+        model_size=model_size,
+        message="Downloading model files…",
+    )
     try:
         from huggingface_hub import snapshot_download
+
         destination = models_root() / "whisper" / model_size
         destination.parent.mkdir(parents=True, exist_ok=True)
         snapshot_download(
             repo_id=WHISPER_MODELS[model_size]["repo_id"],
             local_dir=str(destination),
         )
+
+        _update_download_task(
+            task_id, status="validating", message="Download complete. Checking model files…"
+        )
         model_dir = validate_whisper_model_path(str(destination))
-        save_whisper_selection(model_size=model_size, model_path=str(model_dir))
-        with _download_lock:
-            _download_tasks[task_id] = {"status": "complete", "model_size": model_size,
-                                        "model_path": str(model_dir), "message": "Model ready."}
+        activated = _activate_download_if_selection_is_unchanged(
+            model_size, model_dir, expected_selection_revision
+        )
+        message = (
+            "Model downloaded and selected."
+            if activated
+            else "Model downloaded. Your newer selection was preserved."
+        )
+        _update_download_task(
+            task_id,
+            status="complete",
+            model_size=model_size,
+            model_path=str(model_dir),
+            activated=activated,
+            message=message,
+        )
     except Exception as exc:
-        with _download_lock:
-            _download_tasks[task_id] = {"status": "failed", "model_size": model_size,
-                                        "message": str(exc)[:500]}
+        _update_download_task(
+            task_id,
+            status="failed",
+            model_size=model_size,
+            message=str(exc)[:500],
+        )

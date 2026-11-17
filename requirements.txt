@@ -6,6 +6,8 @@ torchvision==0.26.0
 tqdm==4.67.3
 yt-dlp[default]
 bgutil-ytdlp-pot-provider==1.3.2
+# faster-whisper 1.2.1 still passes metadata_errors to av.open(); PyAV 19 removed it.
+av==18.1.0
 faster-whisper==1.2.1
 py3langid==0.3.0
 google-genai==1.75.0
