@@ -44,6 +44,18 @@ export default function DesktopRuntimeGate({ children }) {
   });
   const [attempt, setAttempt] = useState(0);
 
+  const runSetupRuntime = useCallback(async () => {
+    if (!isDesktop) return;
+    setState((current) => ({
+      ...current,
+      status: 'starting',
+      phase: 'setup',
+      stage: 'Preparing missing or outdated dependencies…',
+      error: '',
+    }));
+    await invoke('setup_runtime');
+  }, [invoke, isDesktop]);
+
   const start = useCallback(async () => {
     if (!isDesktop) return;
     setState((current) => ({
@@ -61,14 +73,8 @@ export default function DesktopRuntimeGate({ children }) {
       await invoke('install_app_payload');
 
       let runtimeStatus = await invoke('check_runtime');
-      if (runtimeStatus?.error) {
-        setState((current) => ({
-          ...current,
-          status: 'starting',
-          phase: 'setup',
-          stage: 'Preparing missing or outdated dependencies…',
-        }));
-        await invoke('setup_runtime');
+      if (attempt > 0 || runtimeStatus?.error) {
+        await runSetupRuntime();
         runtimeStatus = await invoke('check_runtime');
       }
 
@@ -113,7 +119,7 @@ export default function DesktopRuntimeGate({ children }) {
         error: typeof error === 'string' ? error : error?.message || String(error),
       }));
     }
-  }, [invoke, isDesktop]);
+  }, [attempt, invoke, isDesktop, runSetupRuntime]);
 
   useEffect(() => {
     let active = true;

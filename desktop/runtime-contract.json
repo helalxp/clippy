@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "python": "3.12.10",
+  "node": "22.23.3",
+  "ffmpeg": "gyan-release-essentials",
+  "browserVersion": "144.0.7559.20",
+  "browserArchiveSha256": "1257eb62934ceb95aeef2a32b2f032fbba92447e96cbda54fc6cd9e8bd81b673",
+  "browserSha256": "46f0c31fa1c6d54947977e9508bb42abb94693afb175360857d0a8fd4d4ad8f6"
+}

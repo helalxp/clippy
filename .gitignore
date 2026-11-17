@@ -56,3 +56,10 @@ gen/
 desktop/src-tauri/resources/app-payload.zip
 desktop/src-tauri/resources/app-payload.sha256
 desktop/src-tauri/resources/app-payload-stage/
+
+# Local installer regression tools and generated runtime test packages
+.venv-installer-tests/
+desktop/.runtime-test-work/
+desktop/.runtime-test-assets/
+desktop/.test-tools/
+testResults.xml

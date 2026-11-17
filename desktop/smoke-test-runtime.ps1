@@ -32,6 +32,8 @@ $originalLocalAppData = $env:LOCALAPPDATA
 $originalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $originalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 $originalForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME
+$originalEnvironment = @{}
+foreach ($key in @('PATH','OUTPUT_DIR','UPLOAD_DIR','REFERENCE_TEMPLATES_DIR','CLIPPY_SETTINGS_PATH','PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { $originalEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 if ([string]::IsNullOrWhiteSpace($originalLocalAppData)) {
     throw "The first-run smoke test requires the Windows LOCALAPPDATA environment variable."
 }
@@ -48,7 +50,7 @@ try {
     Assert-Sha256 $PayloadArchive $PayloadChecksum "embedded application payload"
     Assert-Sha256 $CpuRuntimeArchive $CpuRuntimeChecksum "CPU Python runtime archive"
 
-    $runtimeManifestPath = Join-Path $PSScriptRoot "runtime-dist\clippy-python-cpu.manifest.json"
+    $runtimeManifestPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($CpuRuntimeArchive))) 'clippy-python-cpu.manifest.json'
     Assert-File $runtimeManifestPath "CPU runtime release manifest"
     $runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Raw | ConvertFrom-Json
     $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -82,6 +84,8 @@ try {
         "setup-runtime.ps1",
         "runtime-archive.ps1",
         "runtime-manifest-state.ps1",
+        "runtime-health.ps1",
+        "runtime-contract.json",
         "app.py",
         "requirements.txt",
         "VERSION",
@@ -144,15 +148,38 @@ try {
         }
     }
 
-    & $pythonExe -c "import app, torch, fastapi, faster_whisper; assert torch.version.cuda is None; print('Backend imports and CPU runtime OK:', torch.__version__)"
+    foreach ($key in @('PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
+    $env:OUTPUT_DIR = Join-Path $root 'data\output'
+    $env:UPLOAD_DIR = Join-Path $root 'data\uploads'
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $root 'data\reference_templates'
+    $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
+    & $pythonExe -c "import sys,pathlib,app,torch,fastapi,faster_whisper; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(); assert torch.version.cuda is None; print('Packaged backend imports and CPU runtime OK:', torch.__version__)" $appDirectory
     if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
     & $nodeExe --version
     if ($LASTEXITCODE -ne 0) { throw "Managed Node.js executable smoke test failed." }
     & $ffmpegExe -version *> $null
     if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg executable smoke test failed." }
 
-    Write-Host "Clean first-run runtime smoke test passed for Clippy $appVersion."
+    # Match the supervisor's private environment for the post-setup checks.
+    $env:OUTPUT_DIR = Join-Path $root 'data\output'
+    $env:UPLOAD_DIR = Join-Path $root 'data\uploads'
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $root 'data\reference_templates'
+    $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
+    $env:PATH = (Split-Path $nodeExe -Parent) + ';' + (Split-Path $ffmpegExe -Parent) + ';' + "$env:SystemRoot\System32"
+    $fixture = Join-Path $smokeRoot 'fixture.mp4'
+    & $ffmpegExe -hide_banner -loglevel error -f lavfi -i 'color=c=blue:s=180x320:r=12:d=1' -an -c:v libx264 -pix_fmt yuv420p $fixture
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create render smoke fixture.' }
+    & $nodeExe (Join-Path $PSScriptRoot 'smoke-render.mjs') $appDirectory $browserExe $fixture (Join-Path $smokeRoot 'rendered.mp4')
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged render smoke test failed.' }
+    # A healthy second setup must succeed without the local archive and without downloads.
+    Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE,Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue
+    $rerunOut = Join-Path $smokeRoot 'rerun.stdout.log'
+    $rerunErr = Join-Path $smokeRoot 'rerun.stderr.log'
+    $rerun = Start-Process -FilePath $powershell -ArgumentList $argumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $rerunOut -RedirectStandardError $rerunErr
+    if ($rerun.ExitCode -ne 0 -or (Get-Content $rerunOut -Raw) -notmatch 'No downloads needed') { throw 'Healthy setup did not reuse the installed runtime.' }
+    Write-Host "Clean first-run runtime and rendering smoke tests passed for Clippy $appVersion."
 } finally {
+    foreach ($key in $originalEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key, $originalEnvironment[$key], 'Process') }
     if ($null -eq $originalLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $originalLocalAppData }
     if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
     if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }

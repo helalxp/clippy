@@ -31,7 +31,15 @@ Write-Host "Preparing the renderer runtime payload..."
 Invoke-Checked "npm" @("ci") $renderDir
 Invoke-Checked "npm" @("run", "build") $renderDir
 Invoke-Checked "npm" @("prune", "--omit=dev") $renderDir
-Invoke-Checked "npm" @("install", "--omit=dev", "--no-package-lock") $remotionDir
+Invoke-Checked "npm" @("ci", "--omit=dev") $remotionDir
+$rendererVersion = (Get-Content (Join-Path $renderDir 'node_modules/@remotion/renderer/package.json') -Raw | ConvertFrom-Json).version
+$contract = Get-Content (Join-Path $PSScriptRoot 'runtime-contract.json') -Raw | ConvertFrom-Json
+$browserSource = Get-Content (Join-Path $renderDir 'node_modules/@remotion/renderer/dist/browser/get-chrome-download-url.js') -Raw
+if ($browserSource -notmatch ("TESTED_VERSION\s*=\s*'" + [regex]::Escape($contract.browserVersion) + "'")) { throw 'Pinned browser contract differs from the renderer-tested browser; update and verify its hashes before release.' }
+foreach ($name in @('remotion', '@remotion/media', '@remotion/player', '@remotion/cli', '@remotion/google-fonts', '@remotion/layout-utils')) {
+    $version = (Get-Content (Join-Path $remotionDir "node_modules/$name/package.json") -Raw | ConvertFrom-Json).version
+    if ($version -ne $rendererVersion) { throw "Remotion package $name ($version) differs from renderer $rendererVersion." }
+}
 
 if (-not (Test-Path (Join-Path $renderDir "dist\server.js"))) {
     throw "Renderer build did not produce render-service\dist\server.js."
@@ -80,6 +88,8 @@ Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-archive.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-manifest-state.ps1") -Destination $stageRoot
+Copy-Item (Join-Path $PSScriptRoot "runtime-health.ps1") -Destination $stageRoot
+Copy-Item (Join-Path $PSScriptRoot "runtime-contract.json") -Destination $stageRoot
 
 # The runtime bootstrap dot-sources these files before it can inspect or repair
 # any installed component. Fail the build here rather than shipping a payload
@@ -87,6 +97,8 @@ Copy-Item (Join-Path $PSScriptRoot "runtime-manifest-state.ps1") -Destination $s
 $requiredRuntimeFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
+    "runtime-health.ps1",
+    "runtime-contract.json",
     "runtime-manifest-state.ps1"
 )
 foreach ($relativePath in $requiredRuntimeFiles) {
@@ -95,7 +107,7 @@ foreach ($relativePath in $requiredRuntimeFiles) {
     }
 }
 
-$directories = @("assets", "fonts", "reference_templates", "render-service", "remotion", "bin")
+$directories = @("assets", "fonts", "render-service", "remotion", "bin")
 foreach ($name in $directories) {
     $source = Join-Path $repoRoot $name
     if (Test-Path $source) {
@@ -106,7 +118,7 @@ foreach ($name in $directories) {
 # Remove development-only files while retaining package locks and production
 # node_modules needed by the renderer and Remotion bundler.
 Get-ChildItem $stageRoot -Directory -Recurse -Force |
-    Where-Object { $_.Name -in @(".git", ".cache", "coverage") } |
+    Where-Object { $_.Name -in @(".git", ".cache", ".remotion", "coverage") } |
     Sort-Object FullName -Descending |
     ForEach-Object { if (Test-Path $_.FullName) { Remove-Item $_.FullName -Recurse -Force } }
 
@@ -119,6 +131,8 @@ $requiredPayloadFiles = @(
     "VERSION",
     "setup-runtime.ps1",
     "runtime-archive.ps1",
+    "runtime-health.ps1",
+    "runtime-contract.json",
     "runtime-manifest-state.ps1",
     "render-service\dist\server.js",
     "render-service\node_modules\@remotion\renderer\package.json",

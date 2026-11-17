@@ -156,7 +156,7 @@ jobs:
           $certificatePath = Join-Path $env:RUNNER_TEMP "clippy-code-signing.pfx"
           $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_CERTIFICATE_PFX_BASE64)
           [System.IO.File]::WriteAllBytes($certificatePath, $certificateBytes)
-          $signtool = Get-ChildItem "$env:ProgramFiles(x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
             Sort-Object FullName -Descending |
             Select-Object -First 1

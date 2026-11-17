@@ -2,8 +2,8 @@
 
 **Status:** Implementation committed on `windows-installer-hardening`; awaiting CI and clean-machine validation  
 **Implementation branch:** `windows-installer-hardening`  
-**Application version in source:** `0.2.2`  
-**Last reviewed:** 2026-11-13
+**Application version in source:** `0.2.3`
+**Last reviewed:** 2026-11-15
 
 ## 1. Purpose
 
@@ -255,7 +255,19 @@ A Windows release is not ready to distribute until all of the following are true
 - [ ] A clean Windows installation completes without environment overrides or manual files.
 - [ ] The published release is checked for all expected assets before users receive the installer.
 
-## 9. Implementation status
+## 9. Runtime repair and upgrade safeguards
+
+- `desktop/runtime-contract.json` defines Python, Node and FFmpeg identities for both setup and native validation. Browser identity comes from the packaged Remotion renderer, not the previous installed manifest.
+- Embedded Python retains `_pth` isolation and explicitly admits `../../app/current`; setup smoke checks the imported backend belongs to that payload.
+- Saved reference templates live under `data/reference_templates`. Before replacing a payload, native setup copies legacy references there, verifies conflicting files and aborts rather than overwriting user data.
+- A desktop-lifetime named mutex prevents concurrent shells; the payload installer and PowerShell setup share an installation mutex. Setup waits for the native `GO` handshake before mutating files, then runs in the shell's kill-on-close Job Object.
+- Runtime replacements are staged and validated before directory activation, with rollback and interrupted-upgrade recovery. Windows sharing/access failures get a bounded retry, never a destructive workaround.
+- Google's Chrome Headless Shell is unsigned. Setup pins its official versioned Google HTTPS archive and executable SHA-256 hashes in `runtime-contract.json`, verifies both before activation, and never substitutes system Chrome. Payload preparation rejects a renderer whose tested browser version differs from the contract.
+- Native checks include backend imports, FFprobe and an actual headless-browser launch. Retry setup invokes repair even if executable-version checks previously passed.
+- Renderer and composition packages use matching pinned Remotion versions and committed lockfiles. `prepare-payload.ps1` checks package identities and required files.
+- `desktop/smoke-test-runtime.ps1` verifies clean CPU setup, a packaged video render using the persistent browser, and a repeat setup without downloads. These checks do not replace CUDA hardware validation or testing the published release download route.
+
+## 10. Implementation status
 
 The coordinated implementation has been committed on `windows-installer-hardening`:
 

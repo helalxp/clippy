@@ -14,7 +14,7 @@ use std::{
 // KILL_ON_JOB_CLOSE limit then reaps uvicorn workers, ffmpeg, Chromium, and
 // other grandchildren even when Rust Drop cannot run.
 #[cfg(windows)]
-struct ProcessJob {
+pub(crate) struct ProcessJob {
     // Store the opaque HANDLE as an integer so Supervisor remains Send + Sync
     // when managed by Tauri's thread-safe state container.
     handle: usize,
@@ -22,7 +22,7 @@ struct ProcessJob {
 
 #[cfg(windows)]
 impl ProcessJob {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         use std::{mem, ptr};
         const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: u32 = 9;
         const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
@@ -61,15 +61,26 @@ impl ProcessJob {
         }
         #[link(name = "kernel32")]
         extern "system" {
-            fn CreateJobObjectW(attributes: *const std::ffi::c_void, name: *const u16) -> *mut std::ffi::c_void;
-            fn SetInformationJobObject(job: *mut std::ffi::c_void, class: u32, info: *const std::ffi::c_void, length: u32) -> i32;
+            fn CreateJobObjectW(
+                attributes: *const std::ffi::c_void,
+                name: *const u16,
+            ) -> *mut std::ffi::c_void;
+            fn SetInformationJobObject(
+                job: *mut std::ffi::c_void,
+                class: u32,
+                info: *const std::ffi::c_void,
+                length: u32,
+            ) -> i32;
             fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
         }
 
         unsafe {
             let handle = CreateJobObjectW(ptr::null(), ptr::null());
             if handle.is_null() {
-                return Err(format!("Could not create the Clippy process job (Windows error {}).", std::io::Error::last_os_error()));
+                return Err(format!(
+                    "Could not create the Clippy process job (Windows error {}).",
+                    std::io::Error::last_os_error()
+                ));
             }
             let mut info: ExtendedLimitInformation = mem::zeroed();
             info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -82,31 +93,49 @@ impl ProcessJob {
             if configured == 0 {
                 let error = std::io::Error::last_os_error();
                 CloseHandle(handle);
-                return Err(format!("Could not configure Clippy process cleanup: {error}"));
+                return Err(format!(
+                    "Could not configure Clippy process cleanup: {error}"
+                ));
             }
-            Ok(Self { handle: handle as usize })
+            Ok(Self {
+                handle: handle as usize,
+            })
         }
     }
 
-    fn assign(&self, child: &Child) -> Result<(), String> {
+    pub(crate) fn assign(&self, child: &Child) -> Result<(), String> {
         const PROCESS_TERMINATE: u32 = 0x0001;
         const PROCESS_SET_QUOTA: u32 = 0x0100;
         #[link(name = "kernel32")]
         extern "system" {
             fn OpenProcess(access: u32, inherit: i32, process_id: u32) -> *mut std::ffi::c_void;
-            fn AssignProcessToJobObject(job: *mut std::ffi::c_void, process: *mut std::ffi::c_void) -> i32;
+            fn AssignProcessToJobObject(
+                job: *mut std::ffi::c_void,
+                process: *mut std::ffi::c_void,
+            ) -> i32;
             fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
         }
         unsafe {
             let process = OpenProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, 0, child.id());
             if process.is_null() {
-                return Err(format!("Could not open service process {} for job assignment: {}", child.id(), std::io::Error::last_os_error()));
+                return Err(format!(
+                    "Could not open service process {} for job assignment: {}",
+                    child.id(),
+                    std::io::Error::last_os_error()
+                ));
             }
             let assigned = AssignProcessToJobObject(self.handle as *mut std::ffi::c_void, process);
-            let error = if assigned == 0 { Some(std::io::Error::last_os_error()) } else { None };
+            let error = if assigned == 0 {
+                Some(std::io::Error::last_os_error())
+            } else {
+                None
+            };
             CloseHandle(process);
             if let Some(error) = error {
-                return Err(format!("Could not attach service process {} to the Clippy cleanup job: {error}", child.id()));
+                return Err(format!(
+                    "Could not attach service process {} to the Clippy cleanup job: {error}",
+                    child.id()
+                ));
             }
             Ok(())
         }
@@ -117,18 +146,26 @@ impl ProcessJob {
 impl Drop for ProcessJob {
     fn drop(&mut self) {
         #[link(name = "kernel32")]
-        extern "system" { fn CloseHandle(handle: *mut std::ffi::c_void) -> i32; }
-        unsafe { CloseHandle(self.handle as *mut std::ffi::c_void); }
+        extern "system" {
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+        unsafe {
+            CloseHandle(self.handle as *mut std::ffi::c_void);
+        }
     }
 }
 
 #[cfg(not(windows))]
-struct ProcessJob;
+pub(crate) struct ProcessJob;
 
 #[cfg(not(windows))]
 impl ProcessJob {
-    fn new() -> Result<Self, String> { Ok(Self) }
-    fn assign(&self, _child: &Child) -> Result<(), String> { Ok(()) }
+    pub(crate) fn new() -> Result<Self, String> {
+        Ok(Self)
+    }
+    pub(crate) fn assign(&self, _child: &Child) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -137,13 +174,26 @@ fn generate_api_token() -> Result<String, String> {
     const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
     #[link(name = "bcrypt")]
     extern "system" {
-        fn BCryptGenRandom(algorithm: *mut std::ffi::c_void, buffer: *mut u8, length: u32, flags: u32) -> i32;
+        fn BCryptGenRandom(
+            algorithm: *mut std::ffi::c_void,
+            buffer: *mut u8,
+            length: u32,
+            flags: u32,
+        ) -> i32;
     }
     let status = unsafe {
-        BCryptGenRandom(std::ptr::null_mut(), bytes.as_mut_ptr(), bytes.len() as u32, BCRYPT_USE_SYSTEM_PREFERRED_RNG)
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
     };
     if status < 0 {
-        return Err(format!("Windows could not generate a private local API token (NTSTATUS 0x{:08X}).", status as u32));
+        return Err(format!(
+            "Windows could not generate a private local API token (NTSTATUS 0x{:08X}).",
+            status as u32
+        ));
     }
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
@@ -156,8 +206,10 @@ fn generate_api_token() -> Result<String, String> {
         let state = std::collections::hash_map::RandomState::new();
         let mut hasher = state.build_hasher();
         hasher.write_u128(
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
         );
         hasher.write_u32(std::process::id());
         output.push_str(&format!("{:016x}", hasher.finish()));
@@ -174,7 +226,9 @@ fn allocate_loopback_port() -> Result<u16, String> {
     // before the child binds; startup health checks catch the rare race.
     let listener = TcpListener::bind((BACKEND_HOST, 0))
         .map_err(|e| format!("Could not reserve a local service port: {e}"))?;
-    listener.local_addr().map(|address| address.port())
+    listener
+        .local_addr()
+        .map(|address| address.port())
         .map_err(|e| format!("Could not inspect the reserved local service port: {e}"))
 }
 
@@ -201,6 +255,7 @@ struct RuntimePaths {
     uploads: PathBuf,
     models: PathBuf,
     settings_file: PathBuf,
+    references: PathBuf,
     logs: PathBuf,
 }
 
@@ -231,14 +286,35 @@ impl RuntimePaths {
         let python = runtime.join("python").join("python.exe");
         let node = runtime.join("node").join("node.exe");
         let ffmpeg = runtime.join("ffmpeg").join("bin");
-        let bgutil_script = app.join("bgutil-provider").join("server").join("build").join("generate_once.js");
-        let browser_executable = root.join("browser").join("headless-shell").join("chrome-headless-shell.exe");
+        let bgutil_script = app
+            .join("bgutil-provider")
+            .join("server")
+            .join("build")
+            .join("generate_once.js");
+        let browser_executable = root
+            .join("browser")
+            .join("headless-shell")
+            .join("chrome-headless-shell.exe");
         let output = root.join("data").join("output");
         let uploads = root.join("data").join("uploads");
         let models = root.join("data").join("models");
         let settings_file = root.join("settings.json");
+        let references = root.join("data").join("reference_templates");
         let logs = root.join("logs");
-        Ok(Self { root: app, python, node, ffmpeg, bgutil_script, browser_executable, output, uploads, models, settings_file, logs })
+        Ok(Self {
+            root: app,
+            python,
+            node,
+            ffmpeg,
+            bgutil_script,
+            browser_executable,
+            output,
+            uploads,
+            models,
+            settings_file,
+            references,
+            logs,
+        })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -249,10 +325,21 @@ impl RuntimePaths {
             (&self.bgutil_script, "YouTube PO-token provider script"),
             (&self.browser_executable, "Persistent Remotion browser"),
             (&self.root.join("app.py"), "Clippy backend payload (app.py)"),
-            (&self.root.join("render-service").join("dist").join("server.js"), "Compiled renderer"),
-            (&self.root.join("remotion").join("src").join("index.ts"), "Remotion source"),
+            (
+                &self
+                    .root
+                    .join("render-service")
+                    .join("dist")
+                    .join("server.js"),
+                "Compiled renderer",
+            ),
+            (
+                &self.root.join("remotion").join("src").join("index.ts"),
+                "Remotion source",
+            ),
         ];
-        let missing: Vec<String> = required.iter()
+        let missing: Vec<String> = required
+            .iter()
             .filter(|(path, _)| !path.is_file())
             .map(|(path, label)| format!("{}: {}", label, path.display()))
             .collect();
@@ -266,7 +353,6 @@ impl RuntimePaths {
     }
 }
 
-
 /// Build a deterministic PATH for Clippy's child processes. In particular,
 /// never append the user's PATH: it can contain another Python/Node install,
 /// Conda, or a user-controlled executable that shadows an application tool.
@@ -279,7 +365,11 @@ fn managed_child_path(paths: &RuntimePaths) -> Result<std::ffi::OsString, String
         // The Windows PyTorch wheel stores its CUDA runtime DLLs directly in
         // torch\\lib. Setup validates CUDA kernels with this directory on PATH,
         // so the supervised backend must receive the same DLL search location.
-        let torch_lib = python_root.join("Lib").join("site-packages").join("torch").join("lib");
+        let torch_lib = python_root
+            .join("Lib")
+            .join("site-packages")
+            .join("torch")
+            .join("lib");
         if torch_lib.is_dir() {
             directories.push(torch_lib);
         }
@@ -340,9 +430,12 @@ impl Supervisor {
 
         let paths = RuntimePaths::discover()?;
         paths.validate()?;
-        fs::create_dir_all(&paths.output).map_err(|e| format!("Cannot create output directory: {e}"))?;
-        fs::create_dir_all(&paths.uploads).map_err(|e| format!("Cannot create uploads directory: {e}"))?;
-        fs::create_dir_all(&paths.models).map_err(|e| format!("Cannot create models directory: {e}"))?;
+        fs::create_dir_all(&paths.output)
+            .map_err(|e| format!("Cannot create output directory: {e}"))?;
+        fs::create_dir_all(&paths.uploads)
+            .map_err(|e| format!("Cannot create uploads directory: {e}"))?;
+        fs::create_dir_all(&paths.models)
+            .map_err(|e| format!("Cannot create models directory: {e}"))?;
         fs::create_dir_all(&paths.logs).map_err(|e| format!("Cannot create log directory: {e}"))?;
         let child_path = managed_child_path(&paths)?;
         let job = ProcessJob::new()?;
@@ -359,7 +452,16 @@ impl Supervisor {
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
         let renderer_stdout = renderer_log.try_clone().map_err(|e| e.to_string())?;
         let mut backend = Command::new(&paths.python)
-            .args(["-m", "uvicorn", "app:app", "--host", BACKEND_HOST, "--port", &backend_port_arg, "--no-access-log"])
+            .args([
+                "-m",
+                "uvicorn",
+                "app:app",
+                "--host",
+                BACKEND_HOST,
+                "--port",
+                &backend_port_arg,
+                "--no-access-log",
+            ])
             .current_dir(&paths.root)
             // Do not allow a user's Python/Conda environment to influence the
             // interpreter or imports. The executable is always Clippy's private
@@ -381,9 +483,13 @@ impl Supervisor {
             .env("UPLOAD_DIR", &paths.uploads)
             .env("CLIPPY_MODELS_DIR", &paths.models)
             .env("CLIPPY_SETTINGS_PATH", &paths.settings_file)
+            .env("REFERENCE_TEMPLATES_DIR", &paths.references)
             .env("CLIPPY_NODE_EXE", &paths.node)
             .env("HF_HOME", paths.models.join("huggingface"))
-            .env("HUGGINGFACE_HUB_CACHE", paths.models.join("huggingface").join("hub"))
+            .env(
+                "HUGGINGFACE_HUB_CACHE",
+                paths.models.join("huggingface").join("hub"),
+            )
             .env("TORCH_HOME", paths.models.join("torch"))
             .env("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
             .env_remove("NODE_PATH")
@@ -391,13 +497,18 @@ impl Supervisor {
             .env_remove("NPM_CONFIG_PREFIX")
             .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
-            .env("RENDER_SERVICE_URL", format!("http://{RENDERER_HOST}:{renderer_port}"))
+            .env(
+                "RENDER_SERVICE_URL",
+                format!("http://{RENDERER_HOST}:{renderer_port}"),
+            )
             .env("BGUTIL_SCRIPT_PATH", &paths.bgutil_script)
             .env("REMOTION_BROWSER_EXECUTABLE", &paths.browser_executable)
             .env("HOST", BACKEND_HOST)
             .env("PORT", backend_port_arg.clone())
             .env("CLIPPY_API_TOKEN", &api_token)
-            .stdout(Stdio::from(backend_log.try_clone().map_err(|e| e.to_string())?))
+            .stdout(Stdio::from(
+                backend_log.try_clone().map_err(|e| e.to_string())?,
+            ))
             .stderr(Stdio::from(backend_log))
             .spawn()
             .map_err(|e| format!("Could not start the Clippy backend: {e}"))?;
@@ -408,7 +519,13 @@ impl Supervisor {
         }
 
         let renderer = Command::new(&paths.node)
-            .arg(paths.root.join("render-service").join("dist").join("server.js"))
+            .arg(
+                paths
+                    .root
+                    .join("render-service")
+                    .join("dist")
+                    .join("server.js"),
+            )
             .current_dir(paths.root.join("render-service"))
             .env("HOST", RENDERER_HOST)
             .env("NODE_ENV", "production")
@@ -420,6 +537,7 @@ impl Supervisor {
             .env_remove("NPM_CONFIG_PREFIX")
             .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
+            .env("REMOTION_BROWSER_EXECUTABLE", &paths.browser_executable)
             .env("REMOTION_BUNDLE_PATH", paths.root.join("remotion"))
             .stdout(Stdio::from(renderer_stdout))
             .stderr(Stdio::from(renderer_log))
@@ -427,23 +545,49 @@ impl Supervisor {
 
         let mut renderer = match renderer {
             Ok(child) => child,
-            Err(error) => { let _ = backend.kill(); let _ = backend.wait(); return Err(format!("Could not start the Remotion renderer: {error}")); }
+            Err(error) => {
+                let _ = backend.kill();
+                let _ = backend.wait();
+                return Err(format!("Could not start the Remotion renderer: {error}"));
+            }
         };
         if let Err(error) = job.assign(&renderer) {
-            let _ = renderer.kill(); let _ = renderer.wait();
-            let _ = backend.kill(); let _ = backend.wait();
+            let _ = renderer.kill();
+            let _ = renderer.wait();
+            let _ = backend.kill();
+            let _ = backend.wait();
             return Err(error);
         }
 
-        if let Err(error) = wait_for_health(&mut backend, backend_port, "/health/ready", Duration::from_secs(300)) {
-            let _ = renderer.kill(); let _ = renderer.wait();
-            let _ = backend.kill(); let _ = backend.wait();
-            return Err(format!("Backend startup failed: {error}. See {}", paths.logs.join("backend.log").display()));
+        if let Err(error) = wait_for_health(
+            &mut backend,
+            backend_port,
+            "/health/ready",
+            Duration::from_secs(300),
+        ) {
+            let _ = renderer.kill();
+            let _ = renderer.wait();
+            let _ = backend.kill();
+            let _ = backend.wait();
+            return Err(format!(
+                "Backend startup failed: {error}. See {}",
+                paths.logs.join("backend.log").display()
+            ));
         }
-        if let Err(error) = wait_for_health(&mut renderer, renderer_port, "/health", Duration::from_secs(180)) {
-            let _ = renderer.kill(); let _ = renderer.wait();
-            let _ = backend.kill(); let _ = backend.wait();
-            return Err(format!("Renderer startup failed: {error}. See {}", paths.logs.join("renderer.log").display()));
+        if let Err(error) = wait_for_health(
+            &mut renderer,
+            renderer_port,
+            "/health",
+            Duration::from_secs(180),
+        ) {
+            let _ = renderer.kill();
+            let _ = renderer.wait();
+            let _ = backend.kill();
+            let _ = backend.wait();
+            return Err(format!(
+                "Renderer startup failed: {error}. See {}",
+                paths.logs.join("renderer.log").display()
+            ));
         }
 
         self.backend = Some(backend);
@@ -457,7 +601,10 @@ impl Supervisor {
     }
 
     pub fn api_token(&self) -> Result<String, String> {
-        self.api_token.clone().ok_or_else(|| "Clippy's local API token is not available because services are not running.".to_string())
+        self.api_token.clone().ok_or_else(|| {
+            "Clippy's local API token is not available because services are not running."
+                .to_string()
+        })
     }
 
     pub fn stop(&mut self) -> Result<ServiceStatus, String> {
@@ -474,10 +621,24 @@ impl Supervisor {
         let backend = child_status(&mut self.backend);
         let renderer = child_status(&mut self.renderer);
         let paths = self.paths.clone().or_else(|| RuntimePaths::discover().ok());
-        let backend_url = if self.backend_port > 0 { format!("http://{BACKEND_HOST}:{}", self.backend_port) } else { String::new() };
-        let renderer_url = if self.renderer_port > 0 { format!("http://{RENDERER_HOST}:{}", self.renderer_port) } else { String::new() };
-        let output_directory = paths.as_ref().map(|p| p.output.display().to_string()).unwrap_or_default();
-        let setup_required = paths.as_ref().map(|p| p.validate().is_err()).unwrap_or(true);
+        let backend_url = if self.backend_port > 0 {
+            format!("http://{BACKEND_HOST}:{}", self.backend_port)
+        } else {
+            String::new()
+        };
+        let renderer_url = if self.renderer_port > 0 {
+            format!("http://{RENDERER_HOST}:{}", self.renderer_port)
+        } else {
+            String::new()
+        };
+        let output_directory = paths
+            .as_ref()
+            .map(|p| p.output.display().to_string())
+            .unwrap_or_default();
+        let setup_required = paths
+            .as_ref()
+            .map(|p| p.validate().is_err())
+            .unwrap_or(true);
         let message = if setup_required {
             "First-run dependency setup is required before Clippy can start.".to_string()
         } else if backend == "running" && renderer == "running" {
@@ -485,16 +646,32 @@ impl Supervisor {
         } else {
             "Clippy services are not running.".to_string()
         };
-        Ok(ServiceStatus { backend, renderer, backend_url, renderer_url, output_directory, setup_required, message })
+        Ok(ServiceStatus {
+            backend,
+            renderer,
+            backend_url,
+            renderer_url,
+            output_directory,
+            setup_required,
+            message,
+        })
     }
 }
 
 fn open_log(path: &Path) -> Result<File, String> {
-    OpenOptions::new().create(true).append(true).open(path)
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
         .map_err(|e| format!("Cannot open log {}: {e}", path.display()))
 }
 
-fn wait_for_health(child: &mut Child, port: u16, path: &str, timeout: Duration) -> Result<(), String> {
+fn wait_for_health(
+    child: &mut Child,
+    port: u16,
+    path: &str,
+    timeout: Duration,
+) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
@@ -503,17 +680,22 @@ fn wait_for_health(child: &mut Child, port: u16, path: &str, timeout: Duration) 
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             use std::io::{Read, Write};
             stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-            let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            let request =
+                format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
             if stream.write_all(request.as_bytes()).is_ok() {
                 let mut response = String::new();
-                if stream.read_to_string(&mut response).is_ok() && response.starts_with("HTTP/1.1 200") {
+                if stream.read_to_string(&mut response).is_ok()
+                    && response.starts_with("HTTP/1.1 200")
+                {
                     return Ok(());
                 }
             }
         }
         thread::sleep(Duration::from_millis(500));
     }
-    Err(format!("health endpoint {path} on 127.0.0.1:{port} did not become ready before timeout"))
+    Err(format!(
+        "health endpoint {path} on 127.0.0.1:{port} did not become ready before timeout"
+    ))
 }
 
 fn child_status(child: &mut Option<Child>) -> String {
@@ -534,18 +716,70 @@ fn stop_child(child: &mut Option<Child>) {
     }
 }
 
-
 #[cfg(test)]
 mod managed_path_tests {
     use super::{managed_child_path, RuntimePaths};
-    use std::{env, fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        env, fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    #[cfg(windows)]
+    fn closing_setup_job_reaps_waiting_setup_process() {
+        use std::{
+            io::Write,
+            process::{Command, Stdio},
+        };
+        let shell = PathBuf::from(env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let job = super::ProcessJob::new().unwrap();
+        let mut child = Command::new(shell)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "if ([Console]::ReadLine() -ne 'GO') { exit 1 }; Start-Sleep -Seconds 60",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        job.assign(&child).unwrap();
+        child.stdin.take().unwrap().write_all(b"GO\n").unwrap();
+        drop(job);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("Setup survived cleanup job closure");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
 
     #[test]
     fn includes_the_windows_pytorch_cuda_dll_directory() {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = env::temp_dir().join(format!("clippy-managed-path-{}-{nonce}", std::process::id()));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!(
+            "clippy-managed-path-{}-{nonce}",
+            std::process::id()
+        ));
         let python_root = root.join("runtime").join("python");
-        let torch_lib = python_root.join("Lib").join("site-packages").join("torch").join("lib");
+        let torch_lib = python_root
+            .join("Lib")
+            .join("site-packages")
+            .join("torch")
+            .join("lib");
         fs::create_dir_all(&torch_lib).unwrap();
 
         let paths = RuntimePaths {
@@ -559,6 +793,7 @@ mod managed_path_tests {
             uploads: root.join("data").join("uploads"),
             models: root.join("data").join("models"),
             settings_file: root.join("settings.json"),
+            references: root.join("data/reference_templates"),
             logs: root.join("logs"),
         };
 

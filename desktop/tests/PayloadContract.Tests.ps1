@@ -26,6 +26,8 @@ Describe "Assembled Clippy application payload contract" {
         foreach ($entry in @(
             "setup-runtime.ps1",
             "runtime-archive.ps1",
+            "runtime-health.ps1",
+            "runtime-contract.json",
             "runtime-manifest-state.ps1",
             "VERSION",
             "requirements.txt"
@@ -43,6 +45,16 @@ Describe "Assembled Clippy application payload contract" {
             "bgutil-provider/server/build/generate_once.js"
         )) {
             Get-PayloadZipEntry $entry | Should -Not -BeNullOrEmpty -Because "the installed desktop shell requires $entry"
+        }
+    }
+
+    It "contains the current setup contract and helpers, not a stale build" {
+        foreach ($relative in @('setup-runtime.ps1','runtime-health.ps1','runtime-contract.json','runtime-archive.ps1','runtime-manifest-state.ps1')) {
+            $stream = (Get-PayloadZipEntry $relative).Open()
+            $reader = [IO.StreamReader]::new($stream)
+            try { $packaged = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            $source = Get-Content (Join-Path $PSScriptRoot "../$relative") -Raw
+            $packaged | Should -Be $source -Because "$relative must be the exact source tested for this installer"
         }
     }
 
