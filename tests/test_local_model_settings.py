@@ -92,6 +92,126 @@ def test_catalog_selection_reports_installed_weights(tmp_path, monkeypatch):
     assert selected["model_path"] == str(model_dir.resolve())
 
 
+def test_catalog_selection_uses_managed_directory_for_transcription(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    model_dir = make_model(tmp_path / "models" / "whisper" / "medium")
+
+    selected = models.save_whisper_selection(model_size="medium")
+
+    assert selected["source"] == "catalog"
+    assert selected["installed"] is True
+    assert selected["model_path"] == str(model_dir.resolve())
+    assert models.whisper_model_argument() == str(model_dir.resolve())
+
+
+def test_catalog_verification_uses_the_same_resolved_path_as_transcription(
+    tmp_path, monkeypatch
+):
+    import sys
+    import types
+
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    model_dir = make_model(tmp_path / "models" / "whisper" / "small")
+    models.save_whisper_selection(model_size="small")
+    calls = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_path, **kwargs):
+            calls["model_path"] = model_path
+            calls.update(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper",
+        types.SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+
+    result = models.verify_whisper_model_load()
+
+    assert result["model_path"] == str(model_dir.resolve())
+    assert calls["model_path"] == models.whisper_model_argument()
+    assert calls["model_path"] == str(model_dir.resolve())
+
+
+def test_saving_catalog_selection_preserves_other_whisper_preferences(
+    tmp_path, monkeypatch
+):
+    settings = tmp_path / "settings.json"
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    settings.write_text(
+        json.dumps({"whisper": {"gpu_mode": True, "other_setting": "preserve"}}),
+        encoding="utf-8",
+    )
+
+    selected = models.save_whisper_selection(model_size="medium")
+    saved = json.loads(settings.read_text(encoding="utf-8"))["whisper"]
+
+    assert saved["gpu_mode"] is True
+    assert saved["other_setting"] == "preserve"
+    assert saved["selection_revision"] == 1
+    assert selected["selection_revision"] == 1
+
+
+def _install_fake_snapshot_download(monkeypatch):
+    import sys
+    import types
+
+    def snapshot_download(repo_id, local_dir):
+        make_model(Path(local_dir))
+
+    from pathlib import Path
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=snapshot_download),
+    )
+
+
+def test_download_completion_does_not_overwrite_a_newer_user_selection(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+
+    download_revision = models.queue_whisper_download("download-medium", "medium")
+    models.save_whisper_selection(model_size="small")
+    _install_fake_snapshot_download(monkeypatch)
+
+    models.start_whisper_download("download-medium", "medium", download_revision)
+
+    selection = models.get_whisper_selection()
+    task = models.list_download_tasks()["download-medium"]
+
+    assert selection["model_size"] == "small"
+    assert selection["source"] == "catalog"
+    assert task["status"] == "complete"
+    assert task["activated"] is False
+    assert "newer selection was preserved" in task["message"]
+    assert (tmp_path / "models" / "whisper" / "medium" / "model.bin").is_file()
+
+
+def test_download_activates_model_when_selection_has_not_changed(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+
+    download_revision = models.queue_whisper_download("download-small", "small")
+    _install_fake_snapshot_download(monkeypatch)
+
+    models.start_whisper_download("download-small", "small", download_revision)
+
+    selection = models.get_whisper_selection()
+    task = models.list_download_tasks()["download-small"]
+
+    assert selection["model_size"] == "small"
+    assert selection["source"] == "local"
+    assert selection["installed"] is True
+    assert models.whisper_model_argument() == selection["model_path"]
+    assert task["status"] == "complete"
+    assert task["activated"] is True
+
+
 def test_verify_whisper_model_load_calls_real_loader_with_safe_cpu_settings(tmp_path, monkeypatch):
     import sys
     import types
