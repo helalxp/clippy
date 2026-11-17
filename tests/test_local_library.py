@@ -254,21 +254,27 @@ def test_startup_cleans_abandoned_project_exports(tmp_path):
 
 def test_source_retention_is_snapshotted_per_project(tmp_path):
     library = LocalLibrary(tmp_path / "library")
+    first_source = tmp_path / "first-source.mp4"
+    first_source.write_bytes(b"source-video-one")
     library.update_settings(True)
     first_output, first_result = make_job(tmp_path)
-    library.reserve_project(JOB_ID, "First project")
+    library.reserve_project(JOB_ID, "First project", source_path=str(first_source))
     library.update_settings(False)
-    first = library.archive_job(JOB_ID, first_output, {}, first_result)
+    first = library.archive_job(JOB_ID, first_output, {"source_path": str(first_source)}, first_result)
     assert first["source_video"]["retention_requested"] is True
     assert first["source_video"]["retained"] is True
+    assert (library._project_dir(JOB_ID) / "source" / first_source.name).read_bytes() == b"source-video-one"
 
     second_id = "22345678-1234-5678-9abc-1234567890ab"
+    second_source = tmp_path / "second-source.mp4"
+    second_source.write_bytes(b"source-video-two")
     second_output, second_result = make_job(tmp_path, second_id)
-    library.reserve_project(second_id, "Second project")
+    library.reserve_project(second_id, "Second project", source_path=str(second_source))
     library.update_settings(True)
-    second = library.archive_job(second_id, second_output, {}, second_result)
+    second = library.archive_job(second_id, second_output, {"source_path": str(second_source)}, second_result)
     assert second["source_video"]["retention_requested"] is False
     assert second["source_video"]["retained"] is False
+    assert not (library._project_dir(second_id) / "source").exists()
     assert library.needs_sync(second_id, second_output, {}, second_result) is False
 
 
