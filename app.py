@@ -1385,7 +1385,7 @@ async def _resume_scan():
     them queued, or was killed at the end of its grace period)."""
     while True:
         await asyncio.sleep(RESUME_SCAN_INTERVAL)
-        if _draining:
+        if _draining or _DATA_MOVE_PENDING:
             continue
         try:
             _resume_interrupted_jobs()
@@ -1783,6 +1783,8 @@ async def cleanup_jobs():
     while True:
         try:
             await asyncio.sleep(300) # Check every 5 minutes
+            if _DATA_MOVE_PENDING:
+                continue
             now = time.time()
             
             # Simple directory cleanup based on modification time
@@ -1833,6 +1835,14 @@ async def process_queue():
             # Wait for a job (priority, seq, job_id) — lowest priority first.
             _priority, _seq, job_id = await job_queue.get()
 
+            if _DATA_MOVE_PENDING:
+                # Keep the queued reservation intact. The data move handshake
+                # will refuse while queued jobs exist, and the worker must not
+                # launch one between the idle check and filesystem copy.
+                await job_queue.put((_priority, _seq, job_id))
+                job_queue.task_done()
+                await asyncio.sleep(0.1)
+                continue
             if _draining:
                 # Leave it on disk for the next instance (manifest, no heartbeat).
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
@@ -1842,6 +1852,13 @@ async def process_queue():
             # Acquire semaphore slot (waits if max jobs are running)
             _admitting.add(job_id)
             await concurrency_semaphore.acquire()
+            if _DATA_MOVE_PENDING:
+                _admitting.discard(job_id)
+                concurrency_semaphore.release()
+                await job_queue.put((_priority, _seq, job_id))
+                job_queue.task_done()
+                await asyncio.sleep(0.1)
+                continue
             if _draining:
                 _admitting.discard(job_id)
                 concurrency_semaphore.release()
@@ -1851,6 +1868,12 @@ async def process_queue():
             # The old container may still be draining its jobs on this GPU.
             await _wait_for_shared_gpu()
             _admitting.discard(job_id)
+            if _DATA_MOVE_PENDING:
+                concurrency_semaphore.release()
+                await job_queue.put((_priority, _seq, job_id))
+                job_queue.task_done()
+                await asyncio.sleep(0.1)
+                continue
             if _draining:
                 concurrency_semaphore.release()
                 job_queue.task_done()
@@ -2547,6 +2570,35 @@ _DESKTOP_API_TOKEN = os.environ.get("CLIPPY_API_TOKEN", "").strip()
 _DATA_MOVE_LOCK = threading.Lock()
 _DATA_MOVE_PENDING = False
 _DATA_MOVE_ACTIVE_REQUESTS = 0
+_DATA_MOVE_ACTIVE_BACKGROUND_TASKS = 0
+
+
+def _create_data_background_task(coroutine):
+    """Track background work that may read or write under the movable data root."""
+    global _DATA_MOVE_ACTIVE_BACKGROUND_TASKS
+    with _DATA_MOVE_LOCK:
+        if _DATA_MOVE_PENDING:
+            coroutine.close()
+            raise HTTPException(
+                status_code=503,
+                detail="Clippy data is being relocated. Try again after the app restarts.",
+            )
+        _DATA_MOVE_ACTIVE_BACKGROUND_TASKS += 1
+    try:
+        task = asyncio.create_task(coroutine)
+    except Exception:
+        with _DATA_MOVE_LOCK:
+            _DATA_MOVE_ACTIVE_BACKGROUND_TASKS = max(0, _DATA_MOVE_ACTIVE_BACKGROUND_TASKS - 1)
+        coroutine.close()
+        raise
+
+    def _release_background_task(_task):
+        global _DATA_MOVE_ACTIVE_BACKGROUND_TASKS
+        with _DATA_MOVE_LOCK:
+            _DATA_MOVE_ACTIVE_BACKGROUND_TASKS = max(0, _DATA_MOVE_ACTIVE_BACKGROUND_TASKS - 1)
+
+    task.add_done_callback(_release_background_task)
+    return task
 _LIBRARY_MEDIA_PATH_RE = re.compile(
     r"^/api/library/projects/[0-9a-f-]{36}/(?:thumbnail|clips/[0-9a-f-]+/(?:thumbnail|video))$",
     re.IGNORECASE,
@@ -4190,12 +4242,13 @@ async def prepare_local_library_storage_move():
         while True:
             with _DATA_MOVE_LOCK:
                 active_requests = _DATA_MOVE_ACTIVE_REQUESTS
-            if active_requests == 0:
+                active_background_tasks = _DATA_MOVE_ACTIVE_BACKGROUND_TASKS
+            if active_requests == 0 and active_background_tasks == 0:
                 break
             if time.monotonic() >= deadline:
                 raise HTTPException(
                     status_code=409,
-                    detail="Clippy is still handling another request. Wait for it to finish, then retry the data move.",
+                    detail="Clippy is still handling a request or background task. Wait for active work to finish, then retry the data move.",
                 )
             await asyncio.sleep(0.05)
 
@@ -7131,7 +7184,7 @@ async def thumbnail_upload(
         finally:
             transcript_event.set()
 
-    asyncio.create_task(run_background_whisper())
+    _create_data_background_task(run_background_whisper())
 
     return {"session_id": session_id}
 
