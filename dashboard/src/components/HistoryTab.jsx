@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Loader2, Download, Film, FolderOpen } from 'lucide-react';
 import { apiJson } from '../lib/api';
+import LocalLibraryTab from './LocalLibraryTab';
 
 // The signed-in user's saved video library (stored in R2). Private, signed links.
 // Videos are grouped by project (job); re-openable projects get a "reopen"
 // action that restores the whole job for further editing in the Clip Generator.
-export default function HistoryTab({ onReopenProject }) {
+export default function HistoryTab({ onReopenProject, localMode = false }) {
   const [videos, setVideos] = useState(null);
   const [projects, setProjects] = useState({});
   const [reopening, setReopening] = useState(null);
@@ -13,6 +14,7 @@ export default function HistoryTab({ onReopenProject }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (localMode) return;
     apiJson('/api/history')
       .then((d) => setVideos(d.videos || []))
       .catch(() => setError('Could not load your library.'));
@@ -23,7 +25,7 @@ export default function HistoryTab({ onReopenProject }) {
         setProjects(map);
       })
       .catch(() => {});
-  }, []);
+  }, [localMode]);
 
   // Group videos by job, preserving the newest-first order of /api/history.
   const groups = useMemo(() => {
@@ -49,6 +51,8 @@ export default function HistoryTab({ onReopenProject }) {
   };
 
   const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
+
+  if (localMode) return <LocalLibraryTab />;
 
   if (videos === null && !error) {
     return <div className="flex justify-center py-20"><Loader2 className="animate-spin text-brass" /></div>;

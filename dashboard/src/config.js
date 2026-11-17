@@ -31,8 +31,9 @@ export const getApiUrl = (path) => {
     // Browser media elements cannot attach X-Clippy-Token headers. Scope only
     // local static-media URLs with the current desktop session token instead.
     const mediaPath = normalizedPath.split('?')[0];
-    const isMedia = /^\/(videos|thumbnails|reference-templates-media)(\/|$)/.test(mediaPath);
-    if (isMedia && sessionToken) {
+    const isStaticMedia = /^\/(videos|thumbnails|reference-templates-media)(\/|$)/.test(mediaPath);
+    const isLibraryMedia = /^\/api\/library\/projects\/[0-9a-f-]{36}\/(?:thumbnail|clips\/[0-9a-f-]+\/(?:thumbnail|video))$/i.test(mediaPath);
+    if ((isStaticMedia || isLibraryMedia) && sessionToken) {
         const mediaUrl = new URL(url, window.location.href);
         mediaUrl.searchParams.set('token', sessionToken);
         return mediaUrl.toString();

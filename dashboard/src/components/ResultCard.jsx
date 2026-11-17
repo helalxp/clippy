@@ -132,7 +132,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const total = Number(response.headers.get('content-length')) || 0;
             const isDesktop = typeof invoke === 'function';
             if (isDesktop) {
-                target = await invoke('begin_clip_download', { filename: `clip-${index + 1}.mp4` });
+                target = await invoke('begin_file_download', { filename: `clip-${index + 1}.mp4` });
             }
             setDownloadState({
                 status: 'downloading', percent: total ? 0 : null,
@@ -145,7 +145,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 for (let offset = 0; offset < chunk.length; offset += 256 * 1024) {
                     const part = chunk.subarray(offset, Math.min(offset + 256 * 1024, chunk.length));
                     if (isDesktop) {
-                        await invoke('append_clip_download_chunk', {
+                        await invoke('append_file_download_chunk', {
                             path: target.path,
                             bytes: Array.from(part),
                         });
@@ -174,7 +174,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             }
 
             if (isDesktop) {
-                const savedPath = await invoke('finish_clip_download', { path: target.path });
+                const savedPath = await invoke('finish_file_download', { path: target.path });
                 setDownloadState({
                     status: 'complete', percent: 100, downloaded: received,
                     total: total || received, path: savedPath, error: '',
@@ -197,7 +197,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             }
         } catch (err) {
             if (target?.path && typeof invoke === 'function') {
-                await invoke('cancel_clip_download', { path: target.path }).catch(() => {});
+                await invoke('cancel_file_download', { path: target.path }).catch(() => {});
             }
             console.error('Download error:', err);
             setDownloadState({
@@ -1211,7 +1211,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             </div>
                             {typeof window.__TAURI__?.core?.invoke === 'function' && (
                                 <button
-                                    onClick={() => window.__TAURI__.core.invoke('reveal_clip_download', { path: downloadState.path })}
+                                    onClick={() => window.__TAURI__.core.invoke('reveal_file_download', { path: downloadState.path })}
                                     className="inline-flex shrink-0 items-center gap-1.5 text-brass hover:text-ink"
                                 >
                                     <FolderOpen size={13} /> show in folder

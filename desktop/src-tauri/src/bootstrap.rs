@@ -14,6 +14,7 @@ use std::{
 pub struct BootstrapConfig {
     pub runtime_root: PathBuf,
     pub manifest_path: PathBuf,
+    pub data_root: PathBuf,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeComponent {
@@ -249,16 +250,18 @@ impl Bootstrap {
         command
             .env("PYTHONNOUSERSITE", "1")
             .env("PYTHONUTF8", "1")
-            .env("OUTPUT_DIR", root.join("data/output"))
-            .env("UPLOAD_DIR", root.join("data/uploads"))
+            .env("CLIPPY_DATA_DIR", &self.config.data_root)
+            .env("OUTPUT_DIR", self.config.data_root.join("output"))
+            .env("UPLOAD_DIR", self.config.data_root.join("uploads"))
+            .env("CLIPPY_LIBRARY_DIR", self.config.data_root.join("library"))
             .env(
                 "REFERENCE_TEMPLATES_DIR",
-                root.join("data/reference_templates"),
+                self.config.data_root.join("reference_templates"),
             )
             .env("CLIPPY_SETTINGS_PATH", root.join("settings.json"))
-            .env("CLIPPY_MODELS_DIR", root.join("data/models"))
-            .env("HF_HOME", root.join("data/models/huggingface"))
-            .env("TORCH_HOME", root.join("data/models/torch"))
+            .env("CLIPPY_MODELS_DIR", self.config.data_root.join("models"))
+            .env("HF_HOME", self.config.data_root.join("models/huggingface"))
+            .env("TORCH_HOME", self.config.data_root.join("models/torch"))
             .env("HF_HUB_OFFLINE", "1");
         command
     }
@@ -445,11 +448,44 @@ mod tests {
         let bootstrap = Bootstrap::new(BootstrapConfig {
             runtime_root: root.clone(),
             manifest_path: root.join("runtime-manifest.json"),
+            data_root: root.join("data"),
         });
         assert_eq!(bootstrap.validate_components().len(), 4);
         assert!(bootstrap.get_status().unwrap().error.is_some());
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn runtime_validation_commands_use_the_configured_data_location() {
+        use std::ffi::OsStr;
+
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let data_root = root.join("external-data");
+        let bootstrap = Bootstrap::new(BootstrapConfig {
+            runtime_root: root.join("runtime"),
+            manifest_path: root.join("runtime-manifest.json"),
+            data_root: data_root.clone(),
+        });
+        let command = bootstrap.command(Path::new("python.exe"));
+        let env_value = |name: &str| {
+            command
+                .get_envs()
+                .find(|(key, _)| *key == OsStr::new(name))
+                .and_then(|(_, value)| value)
+                .map(|value| value.to_os_string())
+        };
+        assert_eq!(env_value("CLIPPY_DATA_DIR"), Some(data_root.clone().into_os_string()));
+        assert_eq!(env_value("OUTPUT_DIR"), Some(data_root.join("output").into_os_string()));
+        assert_eq!(env_value("UPLOAD_DIR"), Some(data_root.join("uploads").into_os_string()));
+        assert_eq!(env_value("CLIPPY_LIBRARY_DIR"), Some(data_root.join("library").into_os_string()));
+        assert_eq!(env_value("CLIPPY_MODELS_DIR"), Some(data_root.join("models").into_os_string()));
+        assert_eq!(
+            env_value("REFERENCE_TEMPLATES_DIR"),
+            Some(data_root.join("reference_templates").into_os_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     #[cfg(windows)]
     fn functional_checks_fail_on_error_and_timeout() {

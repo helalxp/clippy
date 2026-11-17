@@ -1,4 +1,5 @@
 mod bootstrap;
+mod data_storage;
 mod installation;
 mod supervisor;
 
@@ -16,10 +17,242 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 use supervisor::{ServiceStatus, Supervisor};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+
+
+#[derive(Clone, serde::Serialize)]
+struct StorageMoveProgress {
+    stage: String,
+    progress: f64,
+    copied_bytes: u64,
+    total_bytes: u64,
+}
+
+#[derive(serde::Serialize)]
+struct StorageMoveResult {
+    data_directory: String,
+    previous_location_removed: bool,
+}
+
+fn emit_storage_move_progress(
+    app: &tauri::AppHandle,
+    stage: &str,
+    copied_bytes: u64,
+    total_bytes: u64,
+) {
+    let progress = if total_bytes == 0 {
+        if matches!(stage, "starting" | "complete") { 100.0 } else { 0.0 }
+    } else {
+        (copied_bytes as f64 / total_bytes as f64 * 100.0).clamp(0.0, 100.0)
+    };
+    let _ = app.emit(
+        "clippy://data-move-progress",
+        StorageMoveProgress {
+            stage: stage.to_string(),
+            progress,
+            copied_bytes,
+            total_bytes,
+        },
+    );
+}
+
+#[tauri::command]
+async fn choose_data_directory(current_path: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || choose_data_directory_blocking(current_path))
+        .await
+        .map_err(|error| format!("Folder picker worker failed: {error}"))?
+}
+
+fn choose_data_directory_blocking(current_path: Option<String>) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let initial = current_path
+            .map(PathBuf::from)
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default();
+        let script = r#"
+            [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+            Add-Type -AssemblyName System.Windows.Forms
+            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            $dialog.Description = 'Choose an empty folder for Clippy data'
+            $dialog.ShowNewFolderButton = $true
+            $dialog.SelectedPath = $env:CLIPPY_PICKER_INITIAL
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+                [Console]::WriteLine($dialog.SelectedPath)
+            }
+        "#;
+        let mut command = Command::new("powershell.exe");
+        command.env("CLIPPY_PICKER_INITIAL", initial);
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let output = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("Could not open the Windows folder picker: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "The Windows folder picker failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            return Ok(None);
+        }
+        let path = PathBuf::from(selected);
+        if !path.is_absolute() {
+            return Err("The selected destination must be an absolute Windows path.".into());
+        }
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = current_path;
+        Err("Changing the Clippy data location is currently supported on Windows desktop only.".into())
+    }
+}
+
+#[tauri::command]
+async fn move_data_directory(
+    app: tauri::AppHandle,
+    destination: String,
+) -> Result<StorageMoveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        move_data_directory_blocking(app, destination)
+    })
+    .await
+    .map_err(|error| format!("Storage move worker failed: {error}"))?
+}
+
+fn move_data_directory_blocking(
+    app: tauri::AppHandle,
+    destination: String,
+) -> Result<StorageMoveResult, String> {
+    let _operation = INSTALL_OPERATION
+        .lock()
+        .map_err(|_| "Installation worker unavailable")?;
+    let install_root = installation::user_root()?;
+    let _installation = installation::InstallationLock::acquire(&install_root, "Install", 300_000)?;
+
+    let state = app.state::<Mutex<Supervisor>>();
+    let mut supervisor = state
+        .lock()
+        .map_err(|_| "Service supervisor is unavailable")?;
+    let current = supervisor.data_directory()?;
+    let (source, destination) =
+        data_storage::validate_destination(&current, Path::new(destination.trim()))?;
+    data_storage::validate_destination_outside_install_root(&install_root, &destination)?;
+    let staging = data_storage::staging_path(&destination)?;
+
+    // The backend atomically rejects new mutations and refuses this handshake
+    // while any generation job or upload is still active.
+    supervisor.prepare_data_move()?;
+    supervisor.stop()?;
+
+    emit_storage_move_progress(&app, "copying", 0, 0);
+    let mut last_reported_percent = 0u64;
+    let mut last_reported_at = std::time::Instant::now();
+    if let Err(error) = data_storage::copy_tree_verified(
+        &source,
+        &staging,
+        |copied_bytes, total_bytes| {
+            let percent = if total_bytes == 0 {
+                0
+            } else {
+                (copied_bytes.saturating_mul(100) / total_bytes).min(100)
+            };
+            if percent > last_reported_percent
+                || last_reported_at.elapsed() >= std::time::Duration::from_millis(250)
+                || copied_bytes == total_bytes
+            {
+                emit_storage_move_progress(&app, "copying", copied_bytes, total_bytes);
+                last_reported_percent = percent;
+                last_reported_at = std::time::Instant::now();
+            }
+        },
+    ) {
+        let _ = data_storage::remove_tree(&staging);
+        let restart = supervisor.start();
+        return Err(match restart {
+            Ok(_) => format!("Data move was cancelled safely: {error}"),
+            Err(restart_error) => format!(
+                "Data move failed: {error}. Clippy could not restart from the original location: {restart_error}"
+            ),
+        });
+    }
+
+    if let Err(error) = data_storage::activate_staged_directory(&staging, &destination) {
+        let _ = data_storage::remove_tree(&staging);
+        let restart = supervisor.start();
+        return Err(match restart {
+            Ok(_) => format!("Data move was not activated: {error}"),
+            Err(restart_error) => format!(
+                "Data move was not activated: {error}. Clippy could not restart from the original location: {restart_error}"
+            ),
+        });
+    }
+
+    if let Err(error) = data_storage::write_config(&install_root, &destination) {
+        // Keep the verified destination copy as a recovery copy. The original
+        // configuration remains active because the config write is atomic.
+        let restart = supervisor.start();
+        return Err(match restart {
+            Ok(_) => format!(
+                "Could not save the new data location: {error}. The original location remains active and the complete copy is preserved at {}.",
+                destination.display()
+            ),
+            Err(restart_error) => format!(
+                "Could not save the new data location: {error}. The complete copy is preserved at {}. Clippy could not restart from the original location: {restart_error}",
+                destination.display()
+            ),
+        });
+    }
+
+    emit_storage_move_progress(&app, "starting", 100, 100);
+    if let Err(error) = supervisor.start() {
+        let _ = supervisor.stop();
+        let restore_config = data_storage::write_config(&install_root, &source);
+        let restore_services = supervisor.start();
+        let rollback_details = match (restore_config, restore_services) {
+            (Ok(()), Ok(_)) => "The previous location has been restored and Clippy services restarted.".to_string(),
+            (config, services) => format!(
+                "Rollback needs attention (configuration: {}; services: {}). The original data was not deleted.",
+                config.err().unwrap_or_else(|| "restored".into()),
+                services.err().unwrap_or_else(|| "running".into())
+            ),
+        };
+        return Err(format!("Clippy could not start from the new data location: {error}. {rollback_details}"));
+    }
+
+    // Only remove the old copy after the backend and renderer are healthy from
+    // the new location. A cleanup failure leaves a harmless duplicate, never a
+    // partially moved Library.
+    let previous_location_removed = data_storage::remove_tree(&source).is_ok();
+    emit_storage_move_progress(&app, "complete", 100, 100);
+    Ok(StorageMoveResult {
+        data_directory: destination.to_string_lossy().into_owned(),
+        previous_location_removed,
+    })
+}
+
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
@@ -60,126 +293,140 @@ fn clip_download_root() -> Result<PathBuf, String> {
         .map_err(|e| format!("Cannot resolve Clippy download folder: {e}"))
 }
 
-fn resolve_clip_download_path(raw: &str) -> Result<PathBuf, String> {
-    let candidate = PathBuf::from(raw);
-    let file_name = candidate
-        .file_name()
+fn library_root() -> Result<PathBuf, String> {
+    let install_root = installation::user_root()?;
+    let data_root = data_storage::configured_data_directory(&install_root)?;
+    Ok(data_root.join("library"))
+}
+
+fn resolve_library_path(raw: &str) -> Result<PathBuf, String> {
+    let root = library_root()?.canonicalize()
+        .map_err(|error| format!("Library folder is unavailable: {error}"))?;
+    let target = PathBuf::from(raw).canonicalize()
+        .map_err(|error| format!("Library item is unavailable: {error}"))?;
+    if !target.starts_with(&root) {
+        return Err("The requested path is outside the Clippy Library.".to_string());
+    }
+    Ok(target)
+}
+
+#[tauri::command]
+fn reveal_library_path(path: String) -> Result<(), String> {
+    let target = resolve_library_path(&path)?;
+    let mut command = Command::new("explorer.exe");
+    if target.is_file() {
+        command.arg(format!("/select,{}", target.display()));
+    } else {
+        command.arg(&target);
+    }
+    command.spawn().map(|_| ())
+        .map_err(|error| format!("Cannot open the Library location in File Explorer: {error}"))
+}
+
+fn resolve_any_download_path(raw: &str) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(raw);
+    let name = requested.file_name()
         .ok_or_else(|| "Download file path is invalid".to_string())?;
-    let parent = candidate
-        .parent()
+    let parent = requested.parent()
         .ok_or_else(|| "Download folder is invalid".to_string())?
         .canonicalize()
-        .map_err(|e| format!("Download folder is unavailable: {e}"))?;
-    let root = clip_download_root()?;
-    if parent != root {
+        .map_err(|error| format!("Download folder is unavailable: {error}"))?;
+    let download_root = clip_download_root()?.canonicalize()
+        .map_err(|error| format!("Clippy download folder is unavailable: {error}"))?;
+    if parent != download_root {
         return Err("Downloads can only be written inside the Clippy download folder.".to_string());
     }
-    if candidate
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("mp4"))
-        != Some(true)
-    {
-        return Err("Only MP4 clip downloads are supported.".to_string());
+    let extension = requested.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(extension.as_str(), "mp4" | "zip") {
+        return Err("Only MP4 and ZIP downloads are supported.".to_string());
     }
-    let resolved = parent.join(file_name);
-    if fs::symlink_metadata(&resolved)
-        .map(|meta| meta.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        return Err("The requested download path is not a regular file.".to_string());
+    let target = parent.join(name);
+    if fs::symlink_metadata(&target).map(|metadata| metadata.file_type().is_symlink()).unwrap_or(false) {
+        return Err("The requested download target is not a regular file.".to_string());
     }
-    Ok(resolved)
+    Ok(target)
 }
 
 #[tauri::command]
-fn begin_clip_download(filename: String) -> Result<ClipDownloadTarget, String> {
+fn begin_file_download(filename: String) -> Result<ClipDownloadTarget, String> {
     let root = clip_download_root()?;
-    let requested_stem = Path::new(&filename)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("clip");
-    let mut stem: String = requested_stem
-        .chars()
-        .filter(|ch| ch.is_alphanumeric() || *ch == '-' || *ch == '_')
-        .take(64)
-        .collect();
-    if stem.is_empty() {
-        stem = "clip".to_string();
+    let requested = Path::new(&filename);
+    let extension = requested.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(extension.as_str(), "mp4" | "zip") {
+        return Err("Only MP4 and ZIP downloads are supported.".to_string());
     }
-
+    let requested_stem = requested.file_stem().and_then(|value| value.to_str()).unwrap_or("clippy-export");
+    let mut stem: String = requested_stem.chars()
+        .filter(|character| character.is_alphanumeric() || *character == '-' || *character == '_' || *character == ' ')
+        .take(100)
+        .collect();
+    stem = stem.trim().trim_matches('.').to_string();
+    if stem.is_empty() {
+        stem = "clippy-export".to_string();
+    }
+    let upper = stem.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.as_bytes()[3].is_ascii_digit()
+            && upper.as_bytes()[3] != b'0')
+    {
+        stem = format!("Clippy-{stem}");
+    }
     for suffix in 1..=9999 {
-        let name = if suffix == 1 {
-            format!("{stem}.mp4")
-        } else {
-            format!("{stem} ({suffix}).mp4")
-        };
-        let path = root.join(name);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(_) => {
-                return Ok(ClipDownloadTarget {
-                    path: path.display().to_string(),
-                })
-            }
+        let name = if suffix == 1 { format!("{stem}.{extension}") }
+            else { format!("{stem} ({suffix}).{extension}") };
+        let target = root.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(_) => return Ok(ClipDownloadTarget { path: target.display().to_string() }),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(format!(
-                    "Cannot create download file {}: {error}",
-                    path.display()
-                ))
-            }
+            Err(error) => return Err(format!("Cannot create download {}: {error}", target.display())),
         }
     }
-    Err("Could not find an available filename for this clip.".to_string())
+    Err("Could not find an available filename for this download.".to_string())
 }
 
 #[tauri::command]
-fn append_clip_download_chunk(path: String, bytes: Vec<u8>) -> Result<u64, String> {
-    let path = resolve_clip_download_path(&path)?;
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("Cannot open download file {}: {e}", path.display()))?;
+fn append_file_download_chunk(path: String, bytes: Vec<u8>) -> Result<u64, String> {
+    let target = resolve_any_download_path(&path)?;
+    let mut file = OpenOptions::new().append(true).open(&target)
+        .map_err(|error| format!("Cannot open download {}: {error}", target.display()))?;
     file.write_all(&bytes)
-        .map_err(|e| format!("Cannot write download file {}: {e}", path.display()))?;
-    file.metadata()
-        .map(|metadata| metadata.len())
-        .map_err(|e| format!("Cannot inspect download file: {e}"))
+        .map_err(|error| format!("Cannot write download {}: {error}", target.display()))?;
+    file.metadata().map(|metadata| metadata.len())
+        .map_err(|error| format!("Cannot inspect download {}: {error}", target.display()))
 }
 
 #[tauri::command]
-fn finish_clip_download(path: String) -> Result<String, String> {
-    let path = resolve_clip_download_path(&path)?;
-    let file = OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .map_err(|e| format!("Cannot finalize download file {}: {e}", path.display()))?;
-    file.sync_all()
-        .map_err(|e| format!("Cannot flush download file {}: {e}", path.display()))?;
+fn finish_file_download(path: String) -> Result<String, String> {
+    let target = resolve_any_download_path(&path)?;
+    let file = OpenOptions::new().write(true).open(&target)
+        .map_err(|error| format!("Cannot finalize download {}: {error}", target.display()))?;
+    file.sync_all().map_err(|error| format!("Cannot flush download {}: {error}", target.display()))?;
     if file.metadata().map(|metadata| metadata.len()).unwrap_or(0) == 0 {
-        return Err("The downloaded clip is empty.".to_string());
+        return Err("The downloaded file is empty.".to_string());
     }
-    Ok(path.display().to_string())
+    Ok(target.display().to_string())
 }
 
 #[tauri::command]
-fn cancel_clip_download(path: String) -> Result<(), String> {
-    let path = resolve_clip_download_path(&path)?;
-    if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|e| format!("Cannot remove incomplete download {}: {e}", path.display()))?;
+fn cancel_file_download(path: String) -> Result<(), String> {
+    let target = resolve_any_download_path(&path)?;
+    if target.exists() {
+        fs::remove_file(&target)
+            .map_err(|error| format!("Cannot remove incomplete download {}: {error}", target.display()))?;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn reveal_clip_download(path: String) -> Result<(), String> {
-    let path = resolve_clip_download_path(&path)?;
+fn reveal_file_download(path: String) -> Result<(), String> {
+    let target = resolve_any_download_path(&path)?;
     Command::new("explorer.exe")
-        .arg(format!("/select,{}", path.display()))
+        .arg(format!("/select,{}", target.display()))
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("Cannot open the download folder: {e}"))
+        .map_err(|error| format!("Cannot reveal downloaded file: {error}"))
 }
 
 #[tauri::command]
@@ -255,13 +502,16 @@ fn check_runtime_blocking() -> Result<bootstrap::BootstrapStatus, String> {
     let local = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| "LOCALAPPDATA not found".to_string())?;
-    let runtime_root = local.join("Clippy").join("runtime");
+    let install_root = local.join("Clippy");
+    let runtime_root = install_root.join("runtime");
+    let data_root = data_storage::configured_data_directory(&install_root)?;
 
     // The manifest belongs to the per-user installation, never the developer checkout.
-    let manifest_path = local.join("Clippy").join("runtime-manifest.json");
+    let manifest_path = install_root.join("runtime-manifest.json");
     let config = bootstrap::BootstrapConfig {
         runtime_root,
         manifest_path,
+        data_root,
     };
 
     let bootstrap = Bootstrap::new(config);
@@ -682,11 +932,14 @@ pub fn run() {
             install_app_payload,
             setup_runtime,
             open_external_url,
-            begin_clip_download,
-            append_clip_download_chunk,
-            finish_clip_download,
-            cancel_clip_download,
-            reveal_clip_download
+            choose_data_directory,
+            move_data_directory,
+            reveal_library_path,
+            begin_file_download,
+            append_file_download_chunk,
+            finish_file_download,
+            cancel_file_download,
+            reveal_file_download
         ])
         .build(tauri::generate_context!())
         .expect("error while building Clippy desktop application")

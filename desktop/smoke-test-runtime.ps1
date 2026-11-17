@@ -33,7 +33,7 @@ $originalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $originalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 $originalForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME
 $originalEnvironment = @{}
-foreach ($key in @('PATH','OUTPUT_DIR','UPLOAD_DIR','REFERENCE_TEMPLATES_DIR','CLIPPY_SETTINGS_PATH','PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { $originalEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
+foreach ($key in @('PATH','OUTPUT_DIR','UPLOAD_DIR','REFERENCE_TEMPLATES_DIR','CLIPPY_SETTINGS_PATH','CLIPPY_DATA_DIR','CLIPPY_LIBRARY_DIR','CLIPPY_MODELS_DIR','HF_HOME','TORCH_HOME','PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { $originalEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 if ([string]::IsNullOrWhiteSpace($originalLocalAppData)) {
     throw "The first-run smoke test requires the Windows LOCALAPPDATA environment variable."
 }
@@ -76,9 +76,24 @@ try {
     $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = [IO.Path]::GetFullPath($CpuRuntimeChecksum)
     $env:CLIPPY_FORCE_CPU_RUNTIME = "1"
 
-    $appDirectory = Join-Path $smokeLocalAppData "Clippy\app\current"
+    $root = Join-Path $smokeLocalAppData "Clippy"
+    $appDirectory = Join-Path $root "app\current"
     New-Item -ItemType Directory -Path $appDirectory -Force | Out-Null
     [IO.Compression.ZipFile]::ExtractToDirectory([IO.Path]::GetFullPath($PayloadArchive), $appDirectory)
+
+    # Exercise the persisted external-data-root path without touching the
+    # runner's real LOCALAPPDATA or creating data under the app installation.
+    $dataRoot = Join-Path $smokeRoot "external-clippy-data"
+    New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+    $storageLocation = @{
+        schema_version = 1
+        data_directory = [IO.Path]::GetFullPath($dataRoot)
+    } | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText(
+        (Join-Path $root "storage-location.json"),
+        $storageLocation,
+        [Text.UTF8Encoding]::new($false)
+    )
 
     foreach ($required in @(
         "setup-runtime.ps1",
@@ -210,21 +225,37 @@ Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
     }
 
     foreach ($key in @('PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
-    $env:OUTPUT_DIR = Join-Path $root 'data\output'
-    $env:UPLOAD_DIR = Join-Path $root 'data\uploads'
-    $env:REFERENCE_TEMPLATES_DIR = Join-Path $root 'data\reference_templates'
+    $env:CLIPPY_DATA_DIR = $dataRoot
+    $env:OUTPUT_DIR = Join-Path $dataRoot 'output'
+    $env:UPLOAD_DIR = Join-Path $dataRoot 'uploads'
+    $env:CLIPPY_LIBRARY_DIR = Join-Path $dataRoot 'library'
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $dataRoot 'reference_templates'
+    $env:CLIPPY_MODELS_DIR = Join-Path $dataRoot 'models'
+    $env:HF_HOME = Join-Path $dataRoot 'models\huggingface'
+    $env:TORCH_HOME = Join-Path $dataRoot 'models\torch'
     $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
     & $pythonExe -c "import sys,pathlib,app,torch,fastapi,faster_whisper; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(); assert torch.version.cuda is None; print('Packaged backend imports and CPU runtime OK:', torch.__version__)" $appDirectory
     if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
+    if (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'output') -PathType Container)) {
+        throw "The relocated output directory was not created under the configured data root."
+    }
+    if (Test-Path -LiteralPath (Join-Path $root 'data') -PathType Container) {
+        throw "The runtime smoke test unexpectedly created a default data folder under the application root."
+    }
     & $nodeExe --version
     if ($LASTEXITCODE -ne 0) { throw "Managed Node.js executable smoke test failed." }
     & $ffmpegExe -version *> $null
     if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg executable smoke test failed." }
 
     # Match the supervisor's private environment for the post-setup checks.
-    $env:OUTPUT_DIR = Join-Path $root 'data\output'
-    $env:UPLOAD_DIR = Join-Path $root 'data\uploads'
-    $env:REFERENCE_TEMPLATES_DIR = Join-Path $root 'data\reference_templates'
+    $env:CLIPPY_DATA_DIR = $dataRoot
+    $env:OUTPUT_DIR = Join-Path $dataRoot 'output'
+    $env:UPLOAD_DIR = Join-Path $dataRoot 'uploads'
+    $env:CLIPPY_LIBRARY_DIR = Join-Path $dataRoot 'library'
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $dataRoot 'reference_templates'
+    $env:CLIPPY_MODELS_DIR = Join-Path $dataRoot 'models'
+    $env:HF_HOME = Join-Path $dataRoot 'models\huggingface'
+    $env:TORCH_HOME = Join-Path $dataRoot 'models\torch'
     $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
     $env:PATH = (Split-Path $nodeExe -Parent) + ';' + (Split-Path $ffmpegExe -Parent) + ';' + "$env:SystemRoot\System32"
     $fixture = Join-Path $smokeRoot 'fixture.mp4'

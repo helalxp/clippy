@@ -185,7 +185,10 @@ fn file_digest(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub fn preserve_references(root: &Path) -> Result<(), String> {
-    let destination = root.join("data").join("reference_templates");
+    // Keep legacy in-payload reference files with the configured user data
+    // directory after it has been relocated away from the default install path.
+    let destination = crate::data_storage::configured_data_directory(root)?
+        .join("reference_templates");
     // current wins; any disagreement with an interrupted upgrade is surfaced,
     // never resolved by deleting or silently overwriting either copy.
     for payload in ["current", "current.previous"] {
@@ -218,6 +221,26 @@ mod tests {
                 .as_nanos()
         ))
     }
+    #[test]
+    fn references_follow_the_configured_data_directory() {
+        let root = temp_root();
+        let data_root = root.join("external-data");
+        fs::create_dir_all(&data_root).unwrap();
+        crate::data_storage::write_config(&root, &data_root).unwrap();
+
+        let source = root.join("app/current/reference_templates/ref_example");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("reference.mp4"), b"saved video").unwrap();
+
+        preserve_references(&root).unwrap();
+
+        let target = data_root.join("reference_templates/ref_example/reference.mp4");
+        assert_eq!(fs::read(&target).unwrap(), b"saved video");
+        assert!(!source.exists());
+        assert!(!root.join("data/reference_templates").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn references_survive_upgrade_and_migration_retries() {
         let root = temp_root();

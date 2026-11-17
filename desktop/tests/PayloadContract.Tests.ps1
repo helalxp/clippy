@@ -39,6 +39,7 @@ Describe "Assembled Clippy application payload contract" {
     It "contains every native-shell and first-run service entry point" {
         foreach ($entry in @(
             "app.py",
+            "local_library.py",
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
             "remotion/src/index.ts",
@@ -56,6 +57,26 @@ Describe "Assembled Clippy application payload contract" {
             $source = Get-Content (Join-Path $PSScriptRoot "../$relative") -Raw
             $packaged | Should -Be $source -Because "$relative must be the exact source tested for this installer"
         }
+    }
+
+    It "uses the persisted data directory for all user-data components" {
+        $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
+        $setupSource | Should -Match 'storage-location\.json'
+        $setupSource | Should -Match '\$DataRoot = \[IO\.Path\]::GetFullPath'
+        foreach ($component in @("output", "uploads", "models")) {
+            $pattern = 'Join-Path \$DataRoot "' + [regex]::Escape($component) + '"'
+            $setupSource | Should -Match $pattern
+        }
+        $setupSource | Should -Match 'Join-Path \$DataRoot ''reference_templates'''
+        $setupSource | Should -Not -Match 'Join-Path \$Root "data\\(output|uploads|models|reference_templates)"'
+    }
+
+    It "smoke-tests runtime setup with a relocated data directory" {
+        $smokeSource = Get-Content (Join-Path $PSScriptRoot "../smoke-test-runtime.ps1") -Raw
+        $smokeSource | Should -Match 'external-clippy-data'
+        $smokeSource | Should -Match 'storage-location\.json'
+        $smokeSource | Should -Match '\$env:CLIPPY_DATA_DIR = \$dataRoot'
+        $smokeSource | Should -Match 'unexpectedly created a default data folder'
     }
 
     It "packages the helper scripts next to setup-runtime.ps1" {

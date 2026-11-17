@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, FolderOpen, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import LocalModelSettings from './components/LocalModelSettings';
 import MediaInput from './components/MediaInput';
@@ -353,6 +353,8 @@ function App() {
   // within a clip's subtitle modal via "apply to all").
   const [bulkSub, setBulkSub] = useState({ running: false, current: 0, total: 0, errors: 0 });
   const [downloadingAll, setDownloadingAll] = useState(false);
+  const [downloadAllProgress, setDownloadAllProgress] = useState(null);
+  const [downloadAllPath, setDownloadAllPath] = useState('');
   // Pre-flight quality gate: { info: {max_height, min_height, cookies_invalid}, data }
   const [qualityGate, setQualityGate] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -646,21 +648,67 @@ function App() {
   };
 
   const handleDownloadAll = async () => {
-    if (!jobId) return;
+    if (!jobId || downloadingAll) return;
     setDownloadingAll(true);
+    setDownloadAllProgress(0);
+    setDownloadAllPath('');
+    let target = null;
+    const nativeInvoke = window.__TAURI__?.core?.invoke;
     try {
       const res = await apiFetch(`/api/jobs/${jobId}/download-all`);
-      if (!res.ok) throw new Error(await res.text());
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `openshorts_clips_${(jobId || '').slice(0, 8)}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || `Download failed (HTTP ${res.status}).`);
+      }
+
+      const filename = `Clippy-clips-${jobId.slice(0, 8)}.zip`;
+      const total = Number(res.headers.get('content-length')) || 0;
+      if (typeof nativeInvoke === 'function') {
+        target = await nativeInvoke('begin_file_download', { filename });
+        let received = 0;
+        const writeChunk = async (chunk) => {
+          for (let offset = 0; offset < chunk.length; offset += 256 * 1024) {
+            const part = chunk.subarray(offset, Math.min(offset + 256 * 1024, chunk.length));
+            await nativeInvoke('append_file_download_chunk', { path: target.path, bytes: Array.from(part) });
+            received += part.length;
+            setDownloadAllProgress(total ? Math.min(99, Math.round(received / total * 100)) : null);
+          }
+        };
+        if (res.body?.getReader) {
+          const reader = res.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            await writeChunk(value);
+          }
+        } else {
+          await writeChunk(new Uint8Array(await res.arrayBuffer()));
+        }
+        if (total && received !== total) {
+          throw new Error(`The ZIP transfer was incomplete (${received} of ${total} bytes).`);
+        }
+        const savedPath = await nativeInvoke('finish_file_download', { path: target.path });
+        setDownloadAllPath(savedPath);
+        setDownloadAllProgress(100);
+      } else {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // WebViews may consume the object URL asynchronously after click.
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        setDownloadAllPath('your browser Downloads folder');
+        setDownloadAllProgress(100);
+      }
     } catch (e) {
+      if (target?.path && typeof nativeInvoke === 'function') {
+        await nativeInvoke('cancel_file_download', { path: target.path }).catch(() => {});
+      }
+      setDownloadAllProgress(null);
       alert(`Download failed: ${e.message}`);
     } finally {
       setDownloadingAll(false);
@@ -1207,13 +1255,23 @@ function App() {
     handleProcessRef.current(pending.data);
   }, [billingEnabled, isSignedIn]);
 
-  const handleReset = () => {
-    // Flush any pending edit-state sync before dropping the project: the clips
-    // themselves are already archived to R2 as they were edited.
+  const handleReset = async () => {
+    // Save the latest local rendered versions before clearing the active job.
+    // If the sync fails, keep the project open so the user can retry safely.
+    if (!billingEnabled && jobId && status === 'complete') {
+      try {
+        await apiJson(`/api/library/projects/${jobId}/sync`, { method: 'POST' });
+      } catch (error) {
+        alert(`Could not save this project to the Library. Your current project is still open.\n\n${error.message}`);
+        return;
+      }
+    }
     flushClipState();
     setStatus('idle');
     setJobId(null);
     setResults(null);
+    setDownloadAllPath('');
+    setDownloadAllProgress(null);
     setLogs([]);
     setLogTimes([]);
     setProcessingMedia(null);
@@ -1256,8 +1314,17 @@ function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [navOpen]);
 
-  const goToTab = (id) => {
+  const goToTab = async (id) => {
     if (tutorialLock && id !== 'dashboard') return;
+    // Flush the current local job's latest rendered versions into permanent
+    // Library storage before the user leaves the project workspace.
+    if (id === 'history' && !billingEnabled && jobId && status === 'complete') {
+      try {
+        await apiJson(`/api/library/projects/${jobId}/sync`, { method: 'POST' });
+      } catch (error) {
+        alert(`Library sync failed. Your current project remains available in the workspace and its Library record is preserved for recovery.\n\n${error.message}`);
+      }
+    }
     setActiveTab(id);
     setNavOpen(false);
   };
@@ -2033,7 +2100,7 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} />
+                <HistoryTab onReopenProject={restoreProject} localMode={!billingEnabled} />
               </div>
             </div>
           )}
@@ -2267,9 +2334,23 @@ function App() {
                         title="Download all clips as a ZIP"
                       >
                         {downloadingAll
-                          ? <><Loader2 size={14} className="animate-spin" />zipping…</>
+                          ? <><Loader2 size={14} className="animate-spin" />{downloadAllProgress == null ? 'saving…' : `saving ${downloadAllProgress}%`}</>
                           : <><Download size={14} />download all</>}
                       </button>
+                      {downloadAllPath && downloadAllPath !== 'your browser Downloads folder' && (
+                        <button
+                          onClick={() => {
+                            const invoke = window.__TAURI__?.core?.invoke;
+                            if (downloadAllPath !== 'your browser Downloads folder' && typeof invoke === 'function') {
+                              invoke('reveal_file_download', { path: downloadAllPath }).catch((error) => alert(error.message));
+                            }
+                          }}
+                          className="text-xs text-brass hover:text-ink flex items-center gap-1"
+                          title={downloadAllPath}
+                        >
+                          <FolderOpen size={13} /> show downloaded ZIP
+                        </button>
+                      )}
                       {results.clips.length > 1 && (
                         <button
                           onClick={() => setShowScheduleWeek(true)}
@@ -2365,8 +2446,8 @@ function App() {
                         here they really are gone once the retention sweep runs. */}
                     {!billingEnabled && jobRetentionSeconds > 0 && (
                       <div className="px-3 py-2.5 rounded-input bg-paper3 border border-paper3 text-sm">
-                        <span className="text-ink">Clips are kept for {formatRetention(jobRetentionSeconds)}, then deleted.</span>{' '}
-                        <span className="text-muted">Download what you want to keep, or raise JOB_RETENTION_SECONDS in your env.</span>
+                        <span className="text-ink">Temporary working files are kept for {formatRetention(jobRetentionSeconds)}.</span>{' '}
+                        <span className="text-muted">Completed clips and captions are archived in your local Library. Original footage is retained only when you enable it in Library settings.</span>
                       </div>
                     )}
                   </div>

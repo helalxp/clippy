@@ -39,6 +39,26 @@ $Root = Join-Path $env:LOCALAPPDATA "Clippy"
 $App = Join-Path $Root "app\current"
 $Runtime = Join-Path $Root "runtime"
 $Downloads = Join-Path $Root "downloads"
+$DataRoot = Join-Path $Root "data"
+$StorageLocationPath = Join-Path $Root "storage-location.json"
+if (Test-Path -LiteralPath $StorageLocationPath -PathType Leaf) {
+    try {
+        $StorageLocation = Get-Content -LiteralPath $StorageLocationPath -Raw | ConvertFrom-Json
+        $ConfiguredDataRoot = [string]$StorageLocation.data_directory
+        if ($StorageLocation.schema_version -ne 1 -or [string]::IsNullOrWhiteSpace($ConfiguredDataRoot)) {
+            throw "Storage location configuration is incomplete or unsupported."
+        }
+        $DataRoot = [IO.Path]::GetFullPath($ConfiguredDataRoot)
+        if ($DataRoot -notmatch '^[A-Za-z]:\\|^\\\\') {
+            throw "Configured Clippy data directory must be an absolute Windows path."
+        }
+        if (-not (Test-Path -LiteralPath $DataRoot -PathType Container)) {
+            throw "Configured Clippy data directory is unavailable: $DataRoot"
+        }
+    } catch {
+        throw "Cannot load Clippy's configured data directory: $($_.Exception.Message)"
+    }
+}
 $PythonDir = Join-Path $Runtime "python"
 $NodeDir = Join-Path $Runtime "node"
 $FfmpegDir = Join-Path $Runtime "ffmpeg\bin"
@@ -391,11 +411,12 @@ if (Test-Path $ManifestPath) {
             }
             Push-Location $App
             try {
-                $env:OUTPUT_DIR = Join-Path $Root "data\output"
-                $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
+                $env:CLIPPY_DATA_DIR = $DataRoot
+                $env:OUTPUT_DIR = Join-Path $DataRoot "output"
+                $env:UPLOAD_DIR = Join-Path $DataRoot "uploads"
                 $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
-                $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
-                $env:REFERENCE_TEMPLATES_DIR = Join-Path $Root 'data\reference_templates'
+                $env:CLIPPY_MODELS_DIR = Join-Path $DataRoot "models"
+                $env:REFERENCE_TEMPLATES_DIR = Join-Path $DataRoot 'reference_templates'
                 $PythonHealthScript = "import app, torch, faster_whisper"
                 if ($TorchVariant -eq "cuda") {
                     $PythonHealthScript += "; import ctranslate2; assert torch.version.cuda and torch.version.cuda.startswith('12.8'); assert torch.cuda.is_available(); x=torch.ones((64,64),device='cuda'); y=x @ x; torch.cuda.synchronize(); assert float(y[0,0].item()) == 64.0; assert ctranslate2.get_cuda_device_count() > 0"
@@ -697,11 +718,12 @@ if ($TorchVariant -eq "cuda") {
 Write-Stage "Verifying backend imports..."
 Push-Location $App
 try {
-    $env:OUTPUT_DIR = Join-Path $Root "data\output"
-    $env:UPLOAD_DIR = Join-Path $Root "data\uploads"
+    $env:CLIPPY_DATA_DIR = $DataRoot
+    $env:OUTPUT_DIR = Join-Path $DataRoot "output"
+    $env:UPLOAD_DIR = Join-Path $DataRoot "uploads"
     $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
-    $env:CLIPPY_MODELS_DIR = Join-Path $Root "data\models"
-    $env:REFERENCE_TEMPLATES_DIR = Join-Path $Root 'data\reference_templates'
+    $env:CLIPPY_MODELS_DIR = Join-Path $DataRoot "models"
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $DataRoot 'reference_templates'
     & $PythonExe -c "import app; import torch; import faster_whisper; import ctranslate2; print('Backend imports OK; torch CUDA:', torch.cuda.is_available())"
     if ($LASTEXITCODE -ne 0) { throw "Backend import verification failed. Check the Python dependency log." }
     if ($TorchVariant -eq "cuda") {
