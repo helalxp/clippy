@@ -798,6 +798,7 @@ mod managed_path_tests {
             browser_executable: PathBuf::from("browser/headless-shell/chrome-headless-shell.exe"),
             output: root.join("data").join("output"),
             uploads: root.join("data").join("uploads"),
+            library: root.join("data").join("library"),
             models: root.join("data").join("models"),
             settings_file: root.join("settings.json"),
             references: root.join("data/reference_templates"),
