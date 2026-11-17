@@ -103,12 +103,25 @@ def validate_whisper_model_path(value: str) -> Path:
     candidate = candidate.resolve()
     if not candidate.is_dir():
         raise ValueError("The selected Whisper model folder does not exist.")
-    required = ("model.bin", "config.json", "tokenizer.json", "vocabulary.json")
+    required = ("model.bin", "config.json", "tokenizer.json")
     missing = [name for name in required if not (candidate / name).is_file()]
+    # faster-whisper model repositories use either vocabulary.txt (Systran's
+    # standard conversions) or vocabulary.json (some newer conversions).
+    # CTranslate2 supports both; requiring only .json rejects valid downloads.
+    vocabulary_files = ("vocabulary.txt", "vocabulary.json")
+    if not any((candidate / name).is_file() for name in vocabulary_files):
+        missing.append("vocabulary.txt or vocabulary.json")
     if missing:
         raise ValueError(
             "This folder is not a complete faster-whisper model. Missing: "
             + ", ".join(missing)
+        )
+    empty = [name for name in (*required, *vocabulary_files)
+             if (candidate / name).is_file() and (candidate / name).stat().st_size == 0]
+    if empty:
+        raise ValueError(
+            "This faster-whisper model contains empty required files: "
+            + ", ".join(empty)
         )
     return candidate
 
@@ -233,7 +246,11 @@ def save_whisper_selection(*, model_size: str | None = None,
 
 
 def verify_whisper_model_load() -> dict[str, Any]:
-    """Explicitly load the selected local weights on CPU to verify CTranslate2 compatibility."""
+    """Load the selected model and execute a real, short CPU transcription pass."""
+    import math
+    import wave
+    from array import array
+
     selection = get_whisper_selection()
     if not selection.get("installed"):
         raise FileNotFoundError(
@@ -245,23 +262,77 @@ def verify_whisper_model_load() -> dict[str, Any]:
 
     # Verification and production transcription must load the same resolved source.
     model_path = whisper_model_argument(selection)
-    # CPU int8 is a conservative compatibility probe. It avoids depending on
-    # the user's CUDA driver and does not run inference or alter GPU settings.
-    model = WhisperModel(
-        model_path,
-        device="cpu",
-        compute_type="int8",
-        cpu_threads=2,
-        num_workers=1,
-        local_files_only=True,
-    )
-    del model
-    return {
-        "ok": True,
-        "model_size": selection["model_size"],
-        "model_path": model_path,
-        "message": "The selected Whisper model loaded successfully with faster-whisper (CPU int8).",
-    }
+    # CPU int8 keeps this diagnostic independent of CUDA availability and does
+    # not modify the user's selected production device/compute preferences.
+    audio_path = None
+    model = None
+    load_started = time.perf_counter()
+    try:
+        with tempfile.NamedTemporaryFile(prefix="clippy-whisper-test-", suffix=".wav", delete=False) as audio_file:
+            audio_path = Path(audio_file.name)
+
+        # A short deterministic tone exercises the packaged PyAV decoder and
+        # the actual CTranslate2 encoder/decoder without needing a user file.
+        sample_rate = 16_000
+        duration_seconds = 2
+        samples = array(
+            "h",
+            (
+                int(2500 * math.sin(2.0 * math.pi * 440.0 * index / sample_rate))
+                for index in range(sample_rate * duration_seconds)
+            ),
+        )
+        with wave.open(str(audio_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(samples.tobytes())
+
+        model = WhisperModel(
+            model_path,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=2,
+            num_workers=1,
+            local_files_only=True,
+        )
+        load_seconds = time.perf_counter() - load_started
+
+        inference_started = time.perf_counter()
+        segments, info = model.transcribe(
+            str(audio_path),
+            language="en",
+            beam_size=1,
+            best_of=1,
+            temperature=0.0,
+            vad_filter=False,
+        )
+        # faster-whisper is lazy: iterating is required to execute inference.
+        list(segments)
+        inference_seconds = time.perf_counter() - inference_started
+        if not getattr(info, "duration", None):
+            raise RuntimeError("The test audio was not decoded by faster-whisper.")
+
+        return {
+            "ok": True,
+            "model_size": selection["model_size"],
+            "model_path": model_path,
+            "load_seconds": round(load_seconds, 2),
+            "inference_seconds": round(inference_seconds, 2),
+            "test_audio_seconds": duration_seconds,
+            "message": (
+                "The model loaded and completed a real faster-whisper transcription "
+                "pass on 2 seconds of test audio (CPU int8)."
+            ),
+        }
+    finally:
+        if model is not None:
+            del model
+        if audio_path is not None:
+            try:
+                audio_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:

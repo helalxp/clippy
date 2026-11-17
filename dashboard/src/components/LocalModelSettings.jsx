@@ -311,7 +311,7 @@ export default function LocalModelSettings() {
           >
             {verifying
               ? <><Loader2 size={14} className="animate-spin" /> Testing model…</>
-              : <><CheckCircle2 size={14} /> Test model load</>}
+              : <><CheckCircle2 size={14} /> Test model load &amp; inference</>}
           </button>
         </div>
       </div>
@@ -368,8 +368,9 @@ export default function LocalModelSettings() {
 
       {verification?.ok && (
         <div className="rounded-input border border-ok/30 bg-paper2 p-3 text-xs text-ok space-y-1">
-          <div className="flex items-center gap-2 font-medium"><CheckCircle2 size={14} /> Model loaded successfully</div>
+          <div className="flex items-center gap-2 font-medium"><CheckCircle2 size={14} /> Model load &amp; inference test passed</div>
           <p>{verification.message}</p>
+          <p className="text-muted">Load: {verification.load_seconds}s · Inference: {verification.inference_seconds}s</p>
           <p className="break-all text-muted">{verification.model_path}</p>
         </div>
       )}

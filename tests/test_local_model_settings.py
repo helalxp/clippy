@@ -5,12 +5,12 @@ import pytest
 import clippy_local_models as models
 
 
-def make_model(path):
+def make_model(path, vocabulary_name="vocabulary.txt"):
     path.mkdir(parents=True)
     (path / "model.bin").write_bytes(b"model")
     (path / "config.json").write_text("{}", encoding="utf-8")
     (path / "tokenizer.json").write_text("{}", encoding="utf-8")
-    (path / "vocabulary.json").write_text("{}", encoding="utf-8")
+    (path / vocabulary_name).write_text("test vocabulary", encoding="utf-8")
     return path
 
 
@@ -43,6 +43,18 @@ def test_existing_model_directory_can_be_selected(tmp_path, monkeypatch):
 def test_model_bin_file_path_resolves_to_parent_folder(tmp_path):
     model_dir = make_model(tmp_path / "model")
     assert models.validate_whisper_model_path(str(model_dir / "model.bin")) == model_dir.resolve()
+
+
+def test_model_accepts_vocabulary_json_for_compatible_conversions(tmp_path):
+    model_dir = make_model(tmp_path / "model-json", vocabulary_name="vocabulary.json")
+    assert models.validate_whisper_model_path(str(model_dir)) == model_dir.resolve()
+
+
+def test_model_rejects_folder_missing_both_supported_vocabulary_formats(tmp_path):
+    model_dir = make_model(tmp_path / "model")
+    (model_dir / "vocabulary.txt").unlink()
+    with pytest.raises(ValueError, match="vocabulary.txt or vocabulary.json"):
+        models.validate_whisper_model_path(str(model_dir))
 
 
 def test_incomplete_model_folder_is_rejected(tmp_path):
@@ -252,6 +264,21 @@ def test_verify_whisper_model_load_calls_real_loader_with_safe_cpu_settings(tmp_
             calls["model_path"] = model_path
             calls.update(kwargs)
 
+        def transcribe(self, audio_path, **kwargs):
+            from pathlib import Path
+            import wave
+            calls["audio_path"] = audio_path
+            calls["transcribe_kwargs"] = kwargs
+            with wave.open(audio_path, "rb") as wav_file:
+                calls["audio_frames"] = wav_file.getnframes()
+                calls["audio_rate"] = wav_file.getframerate()
+            # Return a lazy iterator so the test asserts the implementation
+            # consumes it, just as the real faster-whisper API requires.
+            def generated_segments():
+                calls["inference_iterated"] = True
+                yield object()
+            return generated_segments(), type("Info", (), {"duration": 2.0})()
+
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeWhisperModel))
 
     result = models.verify_whisper_model_load()
@@ -261,6 +288,12 @@ def test_verify_whisper_model_load_calls_real_loader_with_safe_cpu_settings(tmp_
     assert calls["device"] == "cpu"
     assert calls["compute_type"] == "int8"
     assert calls["local_files_only"] is True
+    assert calls["audio_frames"] == 32000
+    assert calls["audio_rate"] == 16000
+    assert calls["transcribe_kwargs"]["beam_size"] == 1
+    assert calls["inference_iterated"] is True
+    assert result["inference_seconds"] >= 0
+    assert result["test_audio_seconds"] == 2
 
 
 def test_verify_whisper_model_load_refuses_uninstalled_catalog_model(tmp_path, monkeypatch):
