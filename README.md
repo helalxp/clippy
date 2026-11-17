@@ -1,13 +1,34 @@
-# OpenShorts.app
+# Clippy (OpenShorts desktop fork)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Open Source](https://badges.frapsoft.com/os/v1/open-source.svg?v=103)](https://opensource.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![GitHub stars](https://img.shields.io/github/stars/mutonby/openshorts?style=social)](https://github.com/mutonby/openshorts)
-[![Last Commit](https://img.shields.io/github/last-commit/mutonby/openshorts)](https://github.com/mutonby/openshorts/commits/main)
+[![GitHub stars](https://img.shields.io/github/stars/helalxp/clippy?style=social)](https://github.com/mutonby/openshorts)
+[![Last Commit](https://img.shields.io/github/last-commit/helalxp/clippy)](https://github.com/mutonby/openshorts/commits/main)
+
+## Clippy Windows desktop
+
+**The native Windows desktop installer is published and verified.** The current stable installer is **Clippy v0.2.3**.
+
+- [Download Clippy for Windows (x64)](https://github.com/helalxp/clippy/releases/download/v0.2.3/Clippy_0.2.3_x64-setup.exe)
+- [View the v0.2.3 release and runtime assets](https://github.com/helalxp/clippy/releases/tag/v0.2.3)
+- [Desktop installation and development guide](desktop/README.md)
+- [Release procedure](RELEASING.md)
+- [Windows installer operations and troubleshooting](docs/architecture/windows-installer-operations-runbook.md)
+- [Runtime asset and version contract](docs/architecture/windows-release-versioning-and-runtime-asset-contract.md)
+
+Clippy is the Windows desktop distribution maintained in this fork. It retains the OpenShorts clip-generation pipeline while adding a native Tauri/NSIS desktop shell, a managed first-run runtime, and a verified release-asset pipeline. The installed app does **not** use Docker, Docker Desktop, WSL2, or a system Python/Node installation.
+
+The installer extracts the application payload under `%LOCALAPPDATA%\\Clippy\\app\\current`. On first launch, Clippy provisions its private Python runtime (CPU or supported NVIDIA/CUDA), Node.js, FFmpeg/FFprobe, renderer dependencies, and the Remotion headless browser. Runtime archives are downloaded from the exact matching GitHub Release and verified before activation. First-run setup requires an internet connection.
+
+AI model weights are separate from the core runtime. Whisper models are downloaded or selected in the app and stored in Clippy's persistent model directory; they are not bundled into the installer.
+
+**Validation record:** release CI for v0.2.3 passed CPU and CUDA runtime builds, payload and manifest verification, PowerShell contract tests, the clean first-run setup and rendering smoke test, Rust tests, and draft-release asset verification. The installer was also installed and exercised on a Windows machine through the editing workflow. A Whisper model-selection hiccup remains a separate follow-up and is not being represented as resolved.
 
 **Open source AI video platform** with 3 tools in one: **Clip Generator**, **AI Shorts (UGC videos with AI actors)**, and **YouTube Studio**.
+
+The Docker/self-hosted instructions below remain available for the server workflow; they are separate from the native Windows desktop installer.
 
 ![Your podcast, and the vertical clip OpenShorts makes of it: both speakers stacked, captions on the seam](screenshots/split-before-after.gif)
 
@@ -203,7 +224,7 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 
 ### 1. Clone
 ```bash
-git clone https://github.com/mutonby/openshorts.git
+git clone https://github.com/helalxp/clippy.git
 cd openshorts
 ```
 
