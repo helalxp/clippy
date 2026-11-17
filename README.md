@@ -20,7 +20,7 @@
 
 Clippy is the Windows desktop distribution maintained in this fork. It retains the OpenShorts clip-generation pipeline while adding a native Tauri/NSIS desktop shell, a managed first-run runtime, and a verified release-asset pipeline. The installed app does **not** use Docker, Docker Desktop, WSL2, or a system Python/Node installation.
 
-The installer extracts the application payload under `%LOCALAPPDATA%\\Clippy\\app\\current`. On first launch, Clippy provisions its private Python runtime (CPU or supported NVIDIA/CUDA), Node.js, FFmpeg/FFprobe, renderer dependencies, and the Remotion headless browser. Runtime archives are downloaded from the exact matching GitHub Release and verified before activation. First-run setup requires an internet connection.
+The installer extracts the application payload under `%LOCALAPPDATA%\Clippy\app\current`. On first launch, Clippy provisions its private Python runtime (CPU or supported NVIDIA/CUDA), Node.js, FFmpeg/FFprobe, renderer dependencies, and the Remotion headless browser. Runtime archives are downloaded from the exact matching GitHub Release and verified before activation. First-run setup requires an internet connection.
 
 AI model weights are separate from the core runtime. Whisper models are downloaded or selected in the app and stored in Clippy's persistent model directory; they are not bundled into the installer.
 

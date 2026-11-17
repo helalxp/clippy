@@ -78,7 +78,7 @@ A successful installer build is not proof that the runtime download is available
 
 This was true during the initial audit, before v0.2.3 was published. It is now resolved: [Clippy v0.2.3](https://github.com/helalxp/clippy/releases/tag/v0.2.3) was published on 2026-11-17 and contains the installer, checksums, CPU runtime assets, CUDA manifest, and both CUDA runtime parts. The release workflow verifies the expected asset names and exact sizes before publication.
 
-### 5.2 Confirmed: the installed application version differs from the audited source version
+### 5.2 Historical audit finding: installed application version differed from the audited source version
 
 The user's installed setup log reports a local download/cache filename:
 
@@ -97,7 +97,7 @@ Current 0.2.3 (manifest):     /releases/download/v0.2.3/clippy-python-cuda.manif
 
 This was a historical version mismatch observed during the pre-release audit. It was resolved by publishing v0.2.3 from the validated source commit. The installed payload now embeds its own canonical version and constructs runtime URLs from that exact version; it must never fall back to a moving `latest` release.
 
-The next installer must be built from the intended release commit, and its embedded payload version must be checked before distribution.
+For every future release, build the installer from the accepted release commit and verify that its embedded payload version matches the tag before distribution.
 
 ### 5.3 Confirmed: current version consistency checks are useful but do not publish releases
 

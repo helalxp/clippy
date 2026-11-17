@@ -17,22 +17,22 @@ Customers should download the installer only. The matching release contains the 
 The managed root is:
 
 ```text
-%LOCALAPPDATA%\\Clippy\\
-  app\\current\\                 # replaceable application payload
-  runtime\\
-    python\\                       # managed Python and pinned packages
-    node\\                         # managed Node.js
-    ffmpeg\\                       # FFmpeg and FFprobe
-  browser\\headless-shell\\       # persistent Remotion browser
-  data\\
-    output\\                       # generated outputs
-    uploads\\                      # uploaded source media
-    models\\whisper\\             # separately managed Whisper models
-    models\\huggingface\\         # Hugging Face cache
-    reference_templates\\
+%LOCALAPPDATA%\Clippy\
+  app\current\                 # replaceable application payload
+  runtime\
+    python\                       # managed Python and pinned packages
+    node\                         # managed Node.js
+    ffmpeg\                       # FFmpeg and FFprobe
+  browser\headless-shell\       # persistent Remotion browser
+  data\
+    output\                       # generated outputs
+    uploads\                      # uploaded source media
+    models\whisper\             # separately managed Whisper models
+    models\huggingface\         # Hugging Face cache
+    reference_templates\
   settings.json
   runtime-manifest.json
-  logs\\
+  logs\
 ```
 
 The app payload and runtime components are managed separately from user data. Settings, uploads, generated output, reference templates, caches, and model weights must survive normal application upgrades and runtime repair. Model weights are not bundled into the installer.
@@ -42,10 +42,10 @@ The app payload and runtime components are managed separately from user data. Se
 The first place to look after a setup or launch failure is:
 
 ```text
-%LOCALAPPDATA%\\Clippy\\logs\\runtime-setup.log
+%LOCALAPPDATA%\Clippy\logs\runtime-setup.log
 ```
 
-The desktop shell also records native setup and supervisor diagnostics in the same Clippy logs directory. Preserve the complete log when reporting a problem; include the release version, Windows version, CPU/GPU model, NVIDIA driver version when relevant, and the exact step that failed. Do not delete the whole `%LOCALAPPDATA%\\Clippy` directory as a first troubleshooting step: it contains user settings, generated media, downloads, and model weights.
+The desktop shell also records native setup and supervisor diagnostics in the same Clippy logs directory. Preserve the complete log when reporting a problem; include the release version, Windows version, CPU/GPU model, NVIDIA driver version when relevant, and the exact step that failed. Do not delete the whole `%LOCALAPPDATA%\Clippy` directory as a first troubleshooting step: it contains user settings, generated media, downloads, and model weights.
 
 The release smoke test intentionally launches Windows PowerShell 5.1 from a PowerShell 7 CI host. Both the application launcher and smoke-test launcher remove the inherited `PSModulePath` before creating that child process, allowing Windows PowerShell to initialize its own compatible module path. The smoke test has a preflight that checks the host edition/version and verifies that `Get-FileHash` and `ConvertFrom-Json` resolve before first-run setup begins. Keep this boundary covered if process-launch code changes.
 
@@ -69,7 +69,7 @@ From the repository root:
 The build script resolves paths relative to itself, builds the desktop dashboard, prepares the backend and renderer payload, and produces an NSIS installer under:
 
 ```text
-desktop\\src-tauri\\target\\release\\bundle\\nsis
+desktop\src-tauri\target\release\bundle\nsis
 ```
 
 To run the native desktop app during development, install the prerequisites above and run:

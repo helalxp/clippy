@@ -78,12 +78,12 @@ Do not "fix" this by changing the product to PowerShell 7, removing all environm
 The primary per-user setup log is:
 
 ```text
-%LOCALAPPDATA%\\Clippy\\logs\\runtime-setup.log
+%LOCALAPPDATA%\Clippy\logs\runtime-setup.log
 ```
 
 Collect that file together with any native desktop logs in the same directory. Record the application version, Windows version, machine architecture, GPU and driver details when relevant, and the failing setup stage.
 
-Do not delete `%LOCALAPPDATA%\\Clippy` to clear an error. It contains user settings, uploads, generated videos, caches, and model weights. Investigate the specific failed component and preserve user data.
+Do not delete `%LOCALAPPDATA%\Clippy` to clear an error. It contains user settings, uploads, generated videos, caches, and model weights. Investigate the specific failed component and preserve user data.
 
 ## Release asset contract
 
