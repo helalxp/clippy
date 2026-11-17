@@ -483,6 +483,7 @@ impl Supervisor {
             .env("UPLOAD_DIR", &paths.uploads)
             .env("CLIPPY_MODELS_DIR", &paths.models)
             .env("CLIPPY_SETTINGS_PATH", &paths.settings_file)
+            .env("CLIPPY_DESKTOP_MODE", "1")
             .env("REFERENCE_TEMPLATES_DIR", &paths.references)
             .env("CLIPPY_NODE_EXE", &paths.node)
             .env("HF_HOME", paths.models.join("huggingface"))
