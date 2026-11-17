@@ -308,7 +308,7 @@ function Expand-ArchiveFast([string]$Archive, [string]$Destination) {
 }
 
 function Assert-Sha256([string]$Path, [string]$Expected) {
-    $Actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Actual = Get-ClippyFileSha256 -Path $Path
     if ($Actual -ne $Expected.ToLowerInvariant()) {
         throw "SHA-256 verification failed for $Path. Expected $Expected, got $Actual"
     }
@@ -327,7 +327,7 @@ foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runt
     }
 }
 
-$RequirementsHash = (Get-FileHash (Join-Path $App "requirements.txt") -Algorithm SHA256).Hash.ToLowerInvariant()
+$RequirementsHash = Get-ClippyFileSha256 -Path (Join-Path $App "requirements.txt")
 $RemotionPackagePath = Join-Path $App "render-service\node_modules\@remotion\renderer\package.json"
 if (-not (Test-Path -LiteralPath $RemotionPackagePath -PathType Leaf)) {
     throw "Remotion renderer package is missing from the application payload: $RemotionPackagePath"
@@ -365,7 +365,7 @@ if (Test-Path $ManifestPath) {
             ($Existing.requirementsSha256 -eq $RequirementsHash) -and
             ($Existing.browserSha256 -match "^[a-fA-F0-9]{64}$") -and
             ($Existing.browserSha256 -eq $Contract.browserSha256) -and
-            ($Existing.browserSha256 -eq (Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant())
+            ($Existing.browserSha256 -eq Get-ClippyFileSha256 -Path $BrowserExecutable)
         if ($Existing.state -eq $ExpectedState -and $RuntimeFilesPresent -and $ManifestComponentsHealthy) {
             Write-Stage "Verifying installed Python, Node.js, FFmpeg, backend, and Remotion dependencies..."
             $PythonVersionHealthy = Test-ClippyExecutable $PythonExe '--version' "Python $PythonVersion"
@@ -719,7 +719,7 @@ Write-Stage "Verifying the persistent Remotion browser runtime..."
 $InstalledBrowserVersion = if (Test-Path -LiteralPath $BrowserVersionFile) { (Get-Content -LiteralPath $BrowserVersionFile -Raw).Trim() } else { "" }
 $BrowserNeedsInstall = -not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf) -or $InstalledBrowserVersion -ne $RemotionVersion
 if (-not $BrowserNeedsInstall) {
-    $BrowserNeedsInstall = ((Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Contract.browserSha256) -or -not (Test-ClippyExecutable $BrowserExecutable '--headless --disable-gpu --dump-dom about:blank')
+    $BrowserNeedsInstall = (Get-ClippyFileSha256 -Path $BrowserExecutable -ne $Contract.browserSha256) -or -not (Test-ClippyExecutable $BrowserExecutable '--headless --disable-gpu --dump-dom about:blank')
 }
 if ($BrowserNeedsInstall) {
     Write-Stage "Installing or repairing the Remotion browser for renderer version $RemotionVersion..."
@@ -742,7 +742,7 @@ if ($BrowserNeedsInstall) {
     Install-ClippyComponent $BrowserStage $BrowserDir {
         param($dir)
         $exe = Join-Path $dir 'chrome-headless-shell.exe'
-        ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant() -eq $Contract.browserSha256) -and (Test-ClippyExecutable $exe '--headless --disable-gpu --dump-dom about:blank')
+        (Get-ClippyFileSha256 -Path $exe -eq $Contract.browserSha256) -and (Test-ClippyExecutable $exe '--headless --disable-gpu --dump-dom about:blank')
     }
     Remove-Item -LiteralPath $BrowserExtract -Recurse -Force
     [System.IO.File]::WriteAllText($BrowserVersionFile, $RemotionVersion, [System.Text.UTF8Encoding]::new($false))
@@ -754,7 +754,7 @@ if (-not (Test-Path -LiteralPath $BrowserExecutable -PathType Leaf)) {
     throw "Persistent Remotion browser executable is missing: $BrowserExecutable"
 }
 Assert-Sha256 $BrowserExecutable $Contract.browserSha256
-$BrowserSha256 = (Get-FileHash -LiteralPath $BrowserExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+$BrowserSha256 = Get-ClippyFileSha256 -Path $BrowserExecutable
 $env:REMOTION_BROWSER_EXECUTABLE = $BrowserExecutable
 $BrowserValidation = "import('@remotion/renderer').then(async m => { await m.ensureBrowser({browserExecutable: process.env.REMOTION_BROWSER_EXECUTABLE}); console.log('Persistent Remotion browser ready'); }).catch(e => { console.error(e); process.exit(1); });"
 Push-Location (Join-Path $App "render-service")
