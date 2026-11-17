@@ -231,7 +231,7 @@ def verify_whisper_model_load() -> dict[str, Any]:
     from faster_whisper import WhisperModel
 
     # Verification and production transcription must load the same resolved source.
-    model_path = whisper_model_argument()
+    model_path = whisper_model_argument(selection)
     # CPU int8 is a conservative compatibility probe. It avoids depending on
     # the user's CUDA driver and does not run inference or alter GPU settings.
     model = WhisperModel(
@@ -251,8 +251,8 @@ def verify_whisper_model_load() -> dict[str, Any]:
     }
 
 
-def whisper_model_argument() -> str:
-    selection = get_whisper_selection()
+def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
+    selection = selection or get_whisper_selection()
 
     # A downloaded catalog model must resolve to Clippy's managed directory,
     # not back to a Hub identifier (which can trigger a duplicate download).
