@@ -70,7 +70,7 @@ try:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(16000)
-        wav.writeframes(b"\\x00\\x00" * 16000)
+        wav.writeframes(b"\x00\x00" * 16000)
     audio = decode_audio(path)
     assert len(audio) == 16000, f"Unexpected decoded sample count: {len(audio)}"
     print(f"faster-whisper audio decoder OK with PyAV {av.__version__}")
