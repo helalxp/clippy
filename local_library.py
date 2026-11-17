@@ -757,7 +757,7 @@ class LocalLibrary:
         project["title"] = _safe_title(title)
         project["title_source"] = "user"
         project["updated_at"] = _now()
-        project.pop("storage_path", None)
+        self._strip_presentation(project)
         project["storage_size_bytes"] = self.project_size(project_id)
         _atomic_json(folder / "project.json", project)
         return self.get_project(project_id)
@@ -799,7 +799,7 @@ class LocalLibrary:
         existing["updated_at"] = _now()
         _atomic_json(caption_path, existing)
         project["updated_at"] = _now()
-        project.pop("storage_path", None)
+        self._strip_presentation(project)
         project["storage_size_bytes"] = self.project_size(project_id)
         _atomic_json(folder / "project.json", project)
         return existing
