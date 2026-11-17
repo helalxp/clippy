@@ -457,10 +457,13 @@ class LocalLibrary:
                     shutil.copytree(item, target, dirs_exist_ok=True)
 
             if keep_source:
-                retained_source = (source_dir / source_name) if source_name else None
+                # Prefer the original user/upload input over the pipeline's
+                # working copy. URL jobs without a source_path fall back to
+                # the source file stored alongside the generation metadata.
+                candidate = (job_data or {}).get("source_path")
+                retained_source = Path(candidate).expanduser() if candidate else None
                 if not retained_source or not retained_source.is_file():
-                    candidate = (job_data or {}).get("source_path")
-                    retained_source = Path(candidate).expanduser() if candidate else None
+                    retained_source = (source_dir / source_name) if source_name else None
                 if (not retained_source or not retained_source.is_file()) and existing_project:
                     old_source = (project_dir / "source").resolve()
                     if old_source.is_dir() and old_source.parent == project_dir:
