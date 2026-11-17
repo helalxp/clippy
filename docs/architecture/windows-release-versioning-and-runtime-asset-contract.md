@@ -45,7 +45,7 @@ A release must not be published if the tag does not match the canonical `VERSION
 `desktop/prepare-payload.ps1` copies the root `VERSION` file into the staged application payload. The runtime setup engine reads:
 
 ```text
-%LOCALAPPDATA%\\Clippy\\app\\current\\VERSION
+%LOCALAPPDATA%\Clippy\app\current\VERSION
 ```
 
 That value determines which GitHub Release the installed app will use for its runtime download.
