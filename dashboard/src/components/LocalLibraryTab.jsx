@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Archive, ChevronLeft, Download, Film, FolderOpen, Loader2, Pencil, Save, Trash2, X } from 'lucide-react';
+import { Archive, ArrowRightLeft, ChevronLeft, Download, Film, FolderOpen, HardDrive, Loader2, Pencil, Save, Trash2, X } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
 
@@ -82,15 +82,52 @@ export default function LocalLibraryTab() {
   const [downloadPath, setDownloadPath] = useState('');
   const [keepSourceDefault, setKeepSourceDefault] = useState(false);
   const [savingRetention, setSavingRetention] = useState(false);
+  const [dataDirectory, setDataDirectory] = useState('');
+  const [destinationDirectory, setDestinationDirectory] = useState('');
+  const [movingData, setMovingData] = useState(false);
+  const [moveProgress, setMoveProgress] = useState(null);
+  const [reloadRequired, setReloadRequired] = useState(false);
+
+  useEffect(() => {
+    try {
+      const savedNotice = sessionStorage.getItem('clippy-storage-move-notice');
+      if (savedNotice) {
+        setNotice(savedNotice);
+        sessionStorage.removeItem('clippy-storage-move-notice');
+      }
+    } catch {
+      // The Library remains usable when browser session storage is unavailable.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktop() || typeof window.__TAURI__?.event?.listen !== 'function') return undefined;
+    let disposed = false;
+    let unlisten;
+    window.__TAURI__.event.listen('clippy://data-move-progress', (event) => {
+      if (!disposed) setMoveProgress(event.payload || null);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch((err) => {
+      console.warn('Could not subscribe to Clippy data move progress:', err);
+    });
+    return () => {
+      disposed = true;
+      if (typeof unlisten === 'function') unlisten();
+    };
+  }, []);
 
   const loadProjects = useCallback(async () => {
     setError('');
     try {
-      const [data, settings] = await Promise.all([
+      const [data, settings, storage] = await Promise.all([
         apiJson('/api/library/projects'),
         apiJson('/api/library/settings').catch(() => ({ keep_source_default: false })),
+        apiJson('/api/library/storage'),
       ]);
       setProjects(data.projects || []);
+      setDataDirectory(storage.data_directory || data.data_directory || '');
       setKeepSourceDefault(!!settings.keep_source_default);
     } catch (err) {
       setError(err?.message || 'Could not load the local Library.');
@@ -99,6 +136,45 @@ export default function LocalLibraryTab() {
   }, []);
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  const browseDataDirectory = async () => {
+    setError('');
+    try {
+      const selectedPath = await invoke('choose_data_directory', { currentPath: dataDirectory });
+      if (selectedPath) setDestinationDirectory(selectedPath);
+    } catch (err) {
+      setError(err?.message || 'Could not open the folder picker.');
+    }
+  };
+
+  const moveDataDirectory = async () => {
+    if (!destinationDirectory || movingData) return;
+    const confirmed = window.confirm(
+      'Move all Clippy data to this folder? This includes generated output, your Library projects, uploads, cached Whisper models, and reference templates. The app and managed runtimes stay where they are. Keep the destination drive connected whenever you use Clippy.'
+    );
+    if (!confirmed) return;
+
+    setMovingData(true);
+    setMoveProgress({ stage: 'preparing', progress: 0, copied_bytes: 0, total_bytes: 0 });
+    setError('');
+    try {
+      const result = await invoke('move_data_directory', { destination: destinationDirectory });
+      const message = result?.previous_location_removed === false
+        ? 'Clippy data moved and the new location is working. The previous data folder could not be removed, so it remains as a backup.'
+        : 'Clippy data folder moved successfully.';
+      try {
+        sessionStorage.setItem('clippy-storage-move-notice', message);
+      } catch {
+        // The data move succeeded; do not treat an unavailable notice store as a move failure.
+      }
+      window.location.reload();
+    } catch (err) {
+      setError(err?.message || 'Could not move the Clippy data folder.');
+      setReloadRequired(true);
+    } finally {
+      setMovingData(false);
+    }
+  };
 
   const updateSourceRetention = async (enabled) => {
     const previous = keepSourceDefault;
@@ -391,17 +467,68 @@ export default function LocalLibraryTab() {
           <h1 className="font-display lowercase text-2xl text-ink">your library</h1>
           <p className="text-muted text-sm mt-1">Your projects, clips and platform captions. Stored on this device.</p>
         </div>
-        <button onClick={loadProjects} className="btn-ghost px-3 py-2 text-xs">refresh</button>
+        <button onClick={loadProjects} disabled={movingData} className="btn-ghost px-3 py-2 text-xs">refresh</button>
       </div>
       {error && <p className="text-danger text-sm my-4">{error}</p>}
       {notice && <p className="text-brass text-sm my-4">{notice}</p>}
+      {reloadRequired && (
+        <div className="flex flex-wrap items-center gap-3 text-sm my-4">
+          <span className="text-muted">The data move ended with an error. Reconnect to Clippy before trying again.</span>
+          <button onClick={() => window.location.reload()} className="btn-ghost px-3 py-2 text-xs">reconnect Clippy</button>
+        </div>
+      )}
+      {isDesktop() && (
+        <section className="card p-4 mt-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <HardDrive size={16} className="text-brass" />
+            <p className="text-sm text-ink font-medium">Clippy data location</p>
+          </div>
+          <p className="text-xs text-muted">
+            Current location: <span className="break-all text-ink">{dataDirectory || 'Loading location…'}</span>
+          </p>
+          <p className="text-xs text-muted">
+            Move the complete data folder, including generation output, your permanent Library, uploads, cached models, and reference templates. Clippy's app and managed runtimes stay in their current installation location. Choose an empty folder on a drive that remains connected while using Clippy.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              value={destinationDirectory}
+              readOnly
+              placeholder="Choose a new empty destination folder"
+              className="min-w-0 flex-1 bg-paper3 border border-rule rounded-input px-3 py-2 text-xs text-ink"
+            />
+            <button onClick={browseDataDirectory} disabled={movingData} className="btn-ghost px-3 py-2 text-xs">
+              <FolderOpen size={14} /> browse
+            </button>
+            <button onClick={moveDataDirectory} disabled={movingData || !destinationDirectory || !dataDirectory || destinationDirectory === dataDirectory} className="btn-primary px-3 py-2 text-xs">
+              {movingData ? <Loader2 size={14} className="animate-spin" /> : <ArrowRightLeft size={14} />}
+              {movingData ? 'moving…' : 'move data'}
+            </button>
+          </div>
+          {movingData && (
+            <div className="space-y-2" role="status" aria-live="polite">
+              <div className="flex justify-between gap-3 text-xs text-muted">
+                <span>{moveProgress?.stage === 'starting' ? 'Starting Clippy from the new location…' : 'Copying and verifying your data…'}</span>
+                <span className="tabular-nums">{Math.round(moveProgress?.progress || 0)}%</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-paper3 overflow-hidden">
+                <div className="h-full bg-brass transition-[width]" style={{ width: `${Math.max(0, Math.min(100, moveProgress?.progress || 0))}%` }} />
+              </div>
+              {!!moveProgress?.total_bytes && (
+                <p className="text-[11px] text-muted tabular-nums">
+                  {prettySize(moveProgress.copied_bytes || 0)} of {prettySize(moveProgress.total_bytes)}
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+      )}
       <div className="card p-4 mt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm text-ink font-medium">Keep original footage for future re-editing</p>
           <p className="text-xs text-muted mt-1">Off by default. When enabled, Clippy copies the source into each new project's Library folder. Your original file is never moved or deleted. Uses additional disk space.</p>
         </div>
         <label className="flex items-center gap-2 text-xs text-ink shrink-0">
-          <input type="checkbox" checked={keepSourceDefault} disabled={savingRetention} onChange={(e) => updateSourceRetention(e.target.checked)} />
+          <input type="checkbox" checked={keepSourceDefault} disabled={savingRetention || movingData} onChange={(e) => updateSourceRetention(e.target.checked)} />
           {savingRetention ? 'saving…' : keepSourceDefault ? 'enabled for new projects' : 'disabled'}
         </label>
       </div>

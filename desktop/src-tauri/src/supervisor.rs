@@ -251,6 +251,7 @@ struct RuntimePaths {
     ffmpeg: PathBuf,
     bgutil_script: PathBuf,
     browser_executable: PathBuf,
+    data_root: PathBuf,
     output: PathBuf,
     uploads: PathBuf,
     library: PathBuf,
@@ -282,6 +283,7 @@ impl RuntimePaths {
         let root = local.join("Clippy");
         let app = root.join("app").join("current");
         let runtime = root.join("runtime");
+        let data_root = crate::data_storage::configured_data_directory(&root)?;
         // These executable paths are owned by the installation. Do not let
         // ambient environment overrides redirect Clippy to system Python/Node.
         let python = runtime.join("python").join("python.exe");
@@ -296,12 +298,12 @@ impl RuntimePaths {
             .join("browser")
             .join("headless-shell")
             .join("chrome-headless-shell.exe");
-        let output = root.join("data").join("output");
-        let uploads = root.join("data").join("uploads");
-        let library = root.join("data").join("library");
-        let models = root.join("data").join("models");
+        let output = data_root.join("output");
+        let uploads = data_root.join("uploads");
+        let library = data_root.join("library");
+        let models = data_root.join("models");
         let settings_file = root.join("settings.json");
-        let references = root.join("data").join("reference_templates");
+        let references = data_root.join("reference_templates");
         let logs = root.join("logs");
         Ok(Self {
             root: app,
@@ -310,6 +312,7 @@ impl RuntimePaths {
             ffmpeg,
             bgutil_script,
             browser_executable,
+            data_root,
             output,
             uploads,
             library,
@@ -484,6 +487,7 @@ impl Supervisor {
             .env("PYTHONNOUSERSITE", "1")
             .env("PYTHONUNBUFFERED", "1")
             .env("PYTHONUTF8", "1")
+            .env("CLIPPY_DATA_DIR", &paths.data_root)
             .env("OUTPUT_DIR", &paths.output)
             .env("UPLOAD_DIR", &paths.uploads)
             .env("CLIPPY_LIBRARY_DIR", &paths.library)
@@ -605,6 +609,40 @@ impl Supervisor {
         self.renderer_port = renderer_port;
         self.api_token = Some(api_token);
         self.status()
+    }
+
+    pub fn data_directory(&self) -> Result<PathBuf, String> {
+        self.paths
+            .as_ref()
+            .map(|paths| paths.data_root.clone())
+            .ok_or_else(|| "Clippy data directory is unavailable because services are not running.".to_string())
+    }
+
+    pub fn prepare_data_move(&self) -> Result<(), String> {
+        if self.backend_port == 0 {
+            return Err("Clippy services must be running before data can be moved.".into());
+        }
+        let token = self.api_token.as_deref()
+            .ok_or_else(|| "Clippy's local API token is unavailable.".to_string())?;
+        let url = format!("http://{BACKEND_HOST}:{}/api/library/storage/prepare-move", self.backend_port);
+        match ureq::post(&url)
+            .timeout(Duration::from_secs(65))
+            .set("X-Clippy-Token", token)
+            .call()
+        {
+            Ok(response) if response.status() == 200 => Ok(()),
+            Ok(response) => {
+                let body = response.into_string().unwrap_or_default();
+                Err(format!("Clippy refused the data move: {body}"))
+            }
+            Err(ureq::Error::Status(status, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                Err(format!("Clippy refused the data move (HTTP {status}): {body}"))
+            }
+            Err(ureq::Error::Transport(error)) => {
+                Err(format!("Could not check whether Clippy is idle: {error}"))
+            }
+        }
     }
 
     pub fn api_token(&self) -> Result<String, String> {
@@ -796,6 +834,7 @@ mod managed_path_tests {
             ffmpeg: root.join("runtime").join("ffmpeg").join("bin"),
             bgutil_script: PathBuf::from("bgutil-provider/server/build/generate_once.js"),
             browser_executable: PathBuf::from("browser/headless-shell/chrome-headless-shell.exe"),
+            data_root: root.join("data"),
             output: root.join("data").join("output"),
             uploads: root.join("data").join("uploads"),
             library: root.join("data").join("library"),

@@ -1,4 +1,5 @@
 mod bootstrap;
+mod data_storage;
 mod installation;
 mod supervisor;
 
@@ -16,10 +17,244 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 use supervisor::{ServiceStatus, Supervisor};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+
+
+#[derive(Clone, serde::Serialize)]
+struct StorageMoveProgress {
+    stage: String,
+    progress: f64,
+    copied_bytes: u64,
+    total_bytes: u64,
+}
+
+#[derive(serde::Serialize)]
+struct StorageMoveResult {
+    data_directory: String,
+    previous_location_removed: bool,
+}
+
+fn emit_storage_move_progress(
+    app: &tauri::AppHandle,
+    stage: &str,
+    copied_bytes: u64,
+    total_bytes: u64,
+) {
+    let progress = if total_bytes == 0 {
+        if matches!(stage, "starting" | "complete") { 100.0 } else { 0.0 }
+    } else {
+        (copied_bytes as f64 / total_bytes as f64 * 100.0).clamp(0.0, 100.0)
+    };
+    let _ = app.emit(
+        "clippy://data-move-progress",
+        StorageMoveProgress {
+            stage: stage.to_string(),
+            progress,
+            copied_bytes,
+            total_bytes,
+        },
+    );
+}
+
+#[tauri::command]
+async fn choose_data_directory(current_path: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || choose_data_directory_blocking(current_path))
+        .await
+        .map_err(|error| format!("Folder picker worker failed: {error}"))?
+}
+
+fn choose_data_directory_blocking(current_path: Option<String>) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let initial = current_path
+            .map(PathBuf::from)
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_default()
+            .to_string_lossy()
+            .replace('\'', "''");
+        let script = format!(
+            r#"
+            [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+            Add-Type -AssemblyName System.Windows.Forms
+            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            $dialog.Description = 'Choose an empty folder for Clippy data'
+            $dialog.ShowNewFolderButton = $true
+            $dialog.SelectedPath = '{initial}'
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+                [Console]::WriteLine($dialog.SelectedPath)
+            }}
+            "#
+        );
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let output = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("Could not open the Windows folder picker: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "The Windows folder picker failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            return Ok(None);
+        }
+        let path = PathBuf::from(selected);
+        if !path.is_absolute() {
+            return Err("The selected destination must be an absolute Windows path.".into());
+        }
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = current_path;
+        Err("Changing the Clippy data location is currently supported on Windows desktop only.".into())
+    }
+}
+
+#[tauri::command]
+async fn move_data_directory(
+    app: tauri::AppHandle,
+    destination: String,
+) -> Result<StorageMoveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        move_data_directory_blocking(app, destination)
+    })
+    .await
+    .map_err(|error| format!("Storage move worker failed: {error}"))?
+}
+
+fn move_data_directory_blocking(
+    app: tauri::AppHandle,
+    destination: String,
+) -> Result<StorageMoveResult, String> {
+    let _operation = INSTALL_OPERATION
+        .lock()
+        .map_err(|_| "Installation worker unavailable")?;
+    let install_root = installation::user_root()?;
+    let _installation = installation::InstallationLock::acquire(&install_root, "Install", 300_000)?;
+
+    let state = app.state::<Mutex<Supervisor>>();
+    let mut supervisor = state
+        .lock()
+        .map_err(|_| "Service supervisor is unavailable")?;
+    let current = supervisor.data_directory()?;
+    let (source, destination) =
+        data_storage::validate_destination(&current, Path::new(destination.trim()))?;
+    let staging = data_storage::staging_path(&destination)?;
+
+    // The backend atomically rejects new mutations and refuses this handshake
+    // while any generation job or upload is still active.
+    supervisor.prepare_data_move()?;
+    supervisor.stop()?;
+
+    emit_storage_move_progress(&app, "copying", 0, 0);
+    let mut last_reported_percent = 0u64;
+    let mut last_reported_at = std::time::Instant::now();
+    if let Err(error) = data_storage::copy_tree_verified(
+        &source,
+        &staging,
+        |copied_bytes, total_bytes| {
+            let percent = if total_bytes == 0 {
+                0
+            } else {
+                (copied_bytes.saturating_mul(100) / total_bytes).min(100)
+            };
+            if percent > last_reported_percent
+                || last_reported_at.elapsed() >= std::time::Duration::from_millis(250)
+                || copied_bytes == total_bytes
+            {
+                emit_storage_move_progress(&app, "copying", copied_bytes, total_bytes);
+                last_reported_percent = percent;
+                last_reported_at = std::time::Instant::now();
+            }
+        },
+    ) {
+        let _ = data_storage::remove_tree(&staging);
+        let restart = supervisor.start();
+        return Err(match restart {
+            Ok(_) => format!("Data move was cancelled safely: {error}"),
+            Err(restart_error) => format!(
+                "Data move failed: {error}. Clippy could not restart from the original location: {restart_error}"
+            ),
+        });
+    }
+
+    if let Err(error) = data_storage::activate_staged_directory(&staging, &destination) {
+        let _ = data_storage::remove_tree(&staging);
+        let restart = supervisor.start();
+        return Err(match restart {
+            Ok(_) => format!("Data move was not activated: {error}"),
+            Err(restart_error) => format!(
+                "Data move was not activated: {error}. Clippy could not restart from the original location: {restart_error}"
+            ),
+        });
+    }
+
+    if let Err(error) = data_storage::write_config(&install_root, &destination) {
+        // Keep the verified destination copy as a recovery copy. The original
+        // configuration remains active because the config write is atomic.
+        let restart = supervisor.start();
+        return Err(match restart {
+            Ok(_) => format!(
+                "Could not save the new data location: {error}. The original location remains active and the complete copy is preserved at {}.",
+                destination.display()
+            ),
+            Err(restart_error) => format!(
+                "Could not save the new data location: {error}. The complete copy is preserved at {}. Clippy could not restart from the original location: {restart_error}",
+                destination.display()
+            ),
+        });
+    }
+
+    emit_storage_move_progress(&app, "starting", 100, 100);
+    if let Err(error) = supervisor.start() {
+        let _ = supervisor.stop();
+        let restore_config = data_storage::write_config(&install_root, &source);
+        let restore_services = supervisor.start();
+        let rollback_details = match (restore_config, restore_services) {
+            (Ok(()), Ok(_)) => "The previous location has been restored and Clippy services restarted.".to_string(),
+            (config, services) => format!(
+                "Rollback needs attention (configuration: {}; services: {}). The original data was not deleted.",
+                config.err().unwrap_or_else(|| "restored".into()),
+                services.err().unwrap_or_else(|| "running".into())
+            ),
+        };
+        return Err(format!("Clippy could not start from the new data location: {error}. {rollback_details}"));
+    }
+
+    // Only remove the old copy after the backend and renderer are healthy from
+    // the new location. A cleanup failure leaves a harmless duplicate, never a
+    // partially moved Library.
+    let previous_location_removed = data_storage::remove_tree(&source).is_ok();
+    emit_storage_move_progress(&app, "complete", 100, 100);
+    Ok(StorageMoveResult {
+        data_directory: destination.to_string_lossy().into_owned(),
+        previous_location_removed,
+    })
+}
+
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
@@ -61,13 +296,9 @@ fn clip_download_root() -> Result<PathBuf, String> {
 }
 
 fn library_root() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("CLIPPY_LIBRARY_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    let local = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .ok_or_else(|| "Windows local application data directory is unavailable".to_string())?;
-    Ok(local.join("Clippy").join("data").join("library"))
+    let install_root = installation::user_root()?;
+    let data_root = data_storage::configured_data_directory(&install_root)?;
+    Ok(data_root.join("library"))
 }
 
 fn resolve_library_path(raw: &str) -> Result<PathBuf, String> {
@@ -700,6 +931,8 @@ pub fn run() {
             install_app_payload,
             setup_runtime,
             open_external_url,
+            choose_data_directory,
+            move_data_directory,
             reveal_library_path,
             begin_file_download,
             append_file_download_chunk,

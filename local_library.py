@@ -701,6 +701,79 @@ class LocalLibrary:
         _atomic_json(self.root / "library_settings.json", data)
         return self.get_settings()
 
+    def _ensure_project_thumbnails(self, project_id: str, include_all: bool) -> dict[str, Any] | None:
+        """Backfill missing derived thumbnails for projects archived by older builds."""
+        folder = self._project_dir(project_id)
+        project_file = folder / "project.json"
+        with _LOCK:
+            if self.is_deleted(project_id) or not project_file.is_file():
+                return None
+            try:
+                project = json.loads(project_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if not isinstance(project, dict):
+                return None
+
+            changed = False
+            first_thumbnail = None
+            for index, clip in enumerate(project.get("clips", [])):
+                if not isinstance(clip, dict):
+                    continue
+                clip_id = str(clip.get("clip_id") or "")
+                clip_dir = (folder / "clips" / clip_id).resolve()
+                if not clip_dir.is_relative_to((folder / "clips").resolve()):
+                    continue
+
+                relative = clip.get("thumbnail_path")
+                thumbnail = (folder / relative).resolve() if isinstance(relative, str) and relative else None
+                thumbnail_valid = bool(
+                    thumbnail and thumbnail.is_relative_to(folder) and thumbnail.is_file()
+                )
+                if not thumbnail_valid:
+                    thumbnail = clip_dir / "thumbnail.jpg"
+                    video_path = (folder / str(clip.get("video_path") or "")).resolve()
+                    if (
+                        video_path.is_relative_to(folder)
+                        and video_path.is_file()
+                        and self._create_thumbnail(video_path, thumbnail)
+                    ):
+                        clip["thumbnail_path"] = f"clips/{clip_id}/thumbnail.jpg"
+                        changed = True
+                        thumbnail_valid = True
+                    else:
+                        thumbnail = None
+
+                if thumbnail_valid and thumbnail and first_thumbnail is None:
+                    first_thumbnail = thumbnail
+
+                # The project cover is generated from the first available clip.
+                # List views only need one thumbnail; project detail backfills all.
+                if not include_all and first_thumbnail is not None:
+                    break
+
+            cover_path = folder / "thumbnail.jpg"
+            cover_valid = isinstance(project.get("thumbnail_path"), str) and (folder / project["thumbnail_path"]).resolve().is_relative_to(folder) and (folder / project["thumbnail_path"]).resolve().is_file()
+            if not cover_valid and first_thumbnail is not None:
+                try:
+                    _copy_verified(first_thumbnail, cover_path)
+                    project["thumbnail_path"] = "thumbnail.jpg"
+                    changed = True
+                except OSError as thumbnail_error:
+                    logger.warning("Could not restore project thumbnail for %s: %s", project_id, thumbnail_error)
+            elif not cover_valid and project.get("thumbnail_path") is not None:
+                project["thumbnail_path"] = None
+                changed = True
+
+            if changed:
+                project["storage_size_bytes"] = sum(
+                    item.stat().st_size for item in folder.rglob("*")
+                    if item.is_file() and not item.is_symlink()
+                )
+                self._strip_presentation(project)
+                _atomic_json(project_file, project)
+            return project
+
     def _present_project(self, project: dict[str, Any]) -> dict[str, Any]:
         folder = self._project_dir(project["project_id"])
         project["storage_path"] = str(folder)
@@ -734,6 +807,7 @@ class LocalLibrary:
                 if self.is_deleted(folder.name):
                     continue
                 project = json.loads((folder / "project.json").read_text(encoding="utf-8"))
+                project = self._ensure_project_thumbnails(project["project_id"], include_all=False) or project
                 project = self._present_project(project)
                 project["storage_size_bytes"] = int(project.get("storage_size_bytes") or 0)
                 projects.append(project)
@@ -748,7 +822,9 @@ class LocalLibrary:
         project_file = folder / "project.json"
         if not project_file.is_file():
             raise FileNotFoundError("Project not found.")
-        project = json.loads(project_file.read_text(encoding="utf-8"))
+        project = self._ensure_project_thumbnails(project_id, include_all=True) or json.loads(
+            project_file.read_text(encoding="utf-8")
+        )
         return self._present_project(project)
 
     @_serialized

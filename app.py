@@ -49,7 +49,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Permanent local Library storage is deliberately outside OUTPUT_DIR. The
 # latter is a bounded, temporary generation workspace and is swept by cleanup.
 from local_library import LocalLibrary
-LIBRARY_DIR = os.getenv("CLIPPY_LIBRARY_DIR", str(Path(OUTPUT_DIR).resolve().parent / "library"))
+DATA_DIR = os.getenv("CLIPPY_DATA_DIR", str(Path(OUTPUT_DIR).resolve().parent))
+LIBRARY_DIR = os.getenv("CLIPPY_LIBRARY_DIR", str(Path(DATA_DIR) / "library"))
 local_library = LocalLibrary(LIBRARY_DIR)
 
 
@@ -2543,6 +2544,19 @@ app.include_router(_free_tools.router)
 # secret is injected by the native supervisor and required on every request
 # except health probes and CORS preflight. This also protects /mcp.
 _DESKTOP_API_TOKEN = os.environ.get("CLIPPY_API_TOKEN", "").strip()
+_DATA_MOVE_LOCK = threading.Lock()
+_DATA_MOVE_PENDING = False
+_DATA_MOVE_ACTIVE_REQUESTS = 0
+_LIBRARY_MEDIA_PATH_RE = re.compile(
+    r"^/api/library/projects/[0-9a-f-]{36}/(?:thumbnail|clips/[0-9a-f-]+/(?:thumbnail|video))$",
+    re.IGNORECASE,
+)
+
+
+def _assert_data_storage_available() -> None:
+    if _DATA_MOVE_PENDING:
+        raise HTTPException(status_code=503, detail="Clippy data is being relocated. Try again after the app restarts.")
+
 
 @app.middleware("http")
 async def require_desktop_api_token(request: Request, call_next):
@@ -2552,13 +2566,70 @@ async def require_desktop_api_token(request: Request, call_next):
         return await call_next(request)
     supplied = request.headers.get("X-Clippy-Token", "")
     # Native <video>/<img> requests cannot attach custom headers. Permit the
-    # session token in the query string only for read-only static media routes.
+    # session token in the query string only for exact read-only Library media routes.
     media_paths = ("/videos/", "/thumbnails/", "/reference-templates-media/")
-    if not supplied and request.method in ("GET", "HEAD") and request.url.path.startswith(media_paths):
+    library_media = _LIBRARY_MEDIA_PATH_RE.fullmatch(request.url.path) is not None
+    if not supplied and request.method in ("GET", "HEAD") and (
+        request.url.path.startswith(media_paths) or library_media
+    ):
         supplied = request.query_params.get("token", "")
     if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
         return JSONResponse({"detail": "This local Clippy API requires its active desktop session token."}, status_code=401)
     return await call_next(request)
+
+
+class _DataMoveQuiescenceMiddleware:
+    """Drain complete ASGI responses before allowing the data directory to move."""
+
+    def __init__(self, app):
+        self.downstream = app
+
+    async def __call__(self, scope, receive, send):
+        global _DATA_MOVE_ACTIVE_REQUESTS
+        if scope.get("type") != "http":
+            await self.downstream(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        method = scope.get("method", "GET")
+        is_exempt = (
+            method == "OPTIONS"
+            or path in ("/health", "/health/ready")
+            or path == "/api/library/storage/prepare-move"
+        )
+        counted = not is_exempt
+        reject_request = False
+        if counted:
+            with _DATA_MOVE_LOCK:
+                if _DATA_MOVE_PENDING:
+                    reject_request = True
+                else:
+                    _DATA_MOVE_ACTIVE_REQUESTS += 1
+        if reject_request:
+            body = b'{"detail":"Clippy data is being relocated. Try again after the app restarts."}'
+            await send({
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+
+        try:
+            # Await the full ASGI response, including streamed file bodies and
+            # response background tasks such as temporary ZIP cleanup.
+            await self.downstream(scope, receive, send)
+        finally:
+            if counted:
+                with _DATA_MOVE_LOCK:
+                    _DATA_MOVE_ACTIVE_REQUESTS = max(0, _DATA_MOVE_ACTIVE_REQUESTS - 1)
+
+
+
+app.add_middleware(_DataMoveQuiescenceMiddleware)
 
 # Cloud mode uses its configured web origins. The installed desktop build only
 # accepts its own Tauri origins; the Vite origin is allowed for native dev.
@@ -3484,6 +3555,7 @@ async def process_endpoint(
     caption_spec: Optional[str] = Form(None),
     hook_spec: Optional[str] = Form(None),
 ):
+    _assert_data_storage_available()
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
         # Self-host with an OpenAI-compatible server configured needs no
@@ -3589,6 +3661,7 @@ async def process_endpoint(
                    else "url" if url else "file"),
     }
 
+    _assert_data_storage_available()
     job_id = str(uuid.uuid4())
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
@@ -4088,6 +4161,67 @@ async def get_source_video(job_id: str, request: Request,
     return FileResponse(source_path, media_type="video/mp4")
 
 
+@app.get("/api/library/storage")
+async def get_local_library_storage():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    return {
+        "data_directory": str(Path(DATA_DIR).expanduser().resolve()),
+        "output_directory": str(Path(OUTPUT_DIR).expanduser().resolve()),
+        "library_directory": str(local_library.root),
+    }
+
+
+@app.post("/api/library/storage/prepare-move")
+async def prepare_local_library_storage_move():
+    global _DATA_MOVE_PENDING
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    with _DATA_MOVE_LOCK:
+        if _DATA_MOVE_PENDING:
+            raise HTTPException(status_code=409, detail="A Clippy data relocation is already in progress.")
+        _DATA_MOVE_PENDING = True
+
+    handoff_ready = False
+    try:
+        # Stop admitting API requests first, then drain requests already in flight.
+        # This also waits for active video/ZIP streams and background model downloads.
+        deadline = time.monotonic() + 60
+        while True:
+            with _DATA_MOVE_LOCK:
+                active_requests = _DATA_MOVE_ACTIVE_REQUESTS
+            if active_requests == 0:
+                break
+            if time.monotonic() >= deadline:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Clippy is still handling another request. Wait for it to finish, then retry the data move.",
+                )
+            await asyncio.sleep(0.05)
+
+        active_jobs = sum(
+            1 for job in jobs.values()
+            if isinstance(job, dict) and job.get("status") in {"queued", "processing"}
+        )
+        active_uploads = sum(
+            1 for slot in pending_uploads.values()
+            if isinstance(slot, dict) and not slot.get("complete")
+        )
+        if active_jobs or active_uploads:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Finish or cancel active work before moving Clippy data ({active_jobs} active jobs, {active_uploads} incomplete uploads).",
+            )
+        handoff_ready = True
+        return {"ready": True}
+    finally:
+        # On rejection, timeout, or cancellation, leave the still-running
+        # backend usable. On success the native shell stops this process next.
+        if not handoff_ready:
+            with _DATA_MOVE_LOCK:
+                _DATA_MOVE_PENDING = False
+
+
 @app.get("/api/library/settings")
 async def get_local_library_settings():
     if BILLING_ENABLED:
@@ -4130,7 +4264,11 @@ async def local_library_projects():
                 local_library.archive_job(job_id, output_dir, job, job.get("result"))
         except (ValueError, OSError, FileNotFoundError) as error:
             print(f"⚠️ Could not import existing job {job_id} into Library: {error}")
-    return {"projects": local_library.list_projects(), "storage_root": str(local_library.root)}
+    return {
+        "projects": local_library.list_projects(),
+        "storage_root": str(local_library.root),
+        "data_directory": str(Path(DATA_DIR).expanduser().resolve()),
+    }
 
 
 @app.post("/api/library/projects/{project_id}/sync")

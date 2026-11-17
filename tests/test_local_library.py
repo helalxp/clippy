@@ -377,6 +377,30 @@ def test_project_and_clip_thumbnails_are_generated_and_exposed(tmp_path, monkeyp
     assert library.clip_thumbnail_path(JOB_ID, clip["clip_id"]).read_bytes() == b"jpeg-preview"
 
 
+def test_missing_legacy_thumbnails_are_backfilled_on_library_reads(tmp_path, monkeypatch):
+    output, result = make_job(tmp_path)
+    library = LocalLibrary(tmp_path / "library")
+    monkeypatch.setattr(library, "_create_thumbnail", lambda source, destination: False)
+    archived = library.archive_job(JOB_ID, output, {}, result)
+    assert archived["clips"][0].get("thumbnail_url") is None
+
+    calls = []
+    def fake_thumbnail(source, destination):
+        calls.append((source, destination))
+        destination.write_bytes(b"regenerated-jpeg")
+        return True
+    monkeypatch.setattr(library, "_create_thumbnail", fake_thumbnail)
+
+    listed = library.list_projects()[0]
+    assert listed["thumbnail_url"] == f"/api/library/projects/{JOB_ID}/thumbnail"
+    assert listed["clips"][0]["thumbnail_url"] == f"/api/library/projects/{JOB_ID}/clips/{JOB_ID}-001/thumbnail"
+    assert (library._project_dir(JOB_ID) / "thumbnail.jpg").read_bytes() == b"regenerated-jpeg"
+
+    # Existing derived files are reused rather than repeatedly re-encoded.
+    library.list_projects()
+    assert len(calls) == 1
+
+
 def test_thumbnail_failure_does_not_fail_archive(tmp_path, monkeypatch):
     output, result = make_job(tmp_path)
     library = LocalLibrary(tmp_path / "library")

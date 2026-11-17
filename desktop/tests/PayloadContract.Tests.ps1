@@ -59,6 +59,18 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
+    It "uses the persisted data directory for all user-data components" {
+        $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
+        $setupSource | Should -Match 'storage-location\.json'
+        $setupSource | Should -Match '\$DataRoot = \[IO\.Path\]::GetFullPath'
+        foreach ($component in @("output", "uploads", "models")) {
+            $pattern = 'Join-Path \$DataRoot "' + [regex]::Escape($component) + '"'
+            $setupSource | Should -Match $pattern
+        }
+        $setupSource | Should -Match 'Join-Path \$DataRoot ''reference_templates'''
+        $setupSource | Should -Not -Match 'Join-Path \$Root "data\\(output|uploads|models|reference_templates)"'
+    }
+
     It "packages the helper scripts next to setup-runtime.ps1" {
         $setupEntry = Get-PayloadZipEntry "setup-runtime.ps1"
         $stream = $setupEntry.Open()

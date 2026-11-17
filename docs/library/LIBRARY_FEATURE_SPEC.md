@@ -34,6 +34,14 @@ The Library is Clippy's durable, on-device home for generated projects. It is se
 
 The Library is separate from temporary `data/output` and `data/uploads`. Original footage is copied, never moved. Source retention is off by default.
 
+## Managed data location
+
+The desktop can relocate the complete Clippy data directory to an existing empty folder on another local or removable drive. The move includes temporary generation output, uploads, the permanent Library, cached models, and reference templates. The installed application, managed Python/Node/FFmpeg runtimes, Remotion browser, settings, and logs remain in the per-user installation root.
+
+The selected destination must be separate from and outside the current data folder, and must have enough free space for the copied data plus a safety margin. Clippy refuses the move while generation jobs or incomplete uploads are active, blocks new API work and drains active responses (including downloads) during the handover, copies into a staging directory, verifies every copied file with SHA-256, activates the new location, and restarts both local services against it. Internal file symlinks are copied as ordinary files; directory junctions and links that point outside the data root are rejected. The old folder is removed only after the new services report healthy. A failed copy or startup retains the original data and attempts to restart from it. The selected drive or location must remain connected whenever Clippy is used.
+
+The active data path is persisted separately in `%LOCALAPPDATA%/Clippy/storage-location.json`, so updating the application payload or repairing managed runtimes does not silently move data back to the default location. If a configured data directory is missing or invalid, startup reports the problem instead of silently creating an empty Library elsewhere.
+
 ## Source retention semantics
 
 The setting applies to **new projects only**. The setting is sampled atomically when a new project is reserved. Changing the default never changes the retention decision for an existing project. Legacy projects without an explicit snapshot default to their existing retained state, or false when no source was previously retained.
@@ -41,6 +49,10 @@ The setting applies to **new projects only**. The setting is sampled atomically 
 ## Thumbnails
 
 A JPEG thumbnail is generated for every archived clip using the FFmpeg already managed by Clippy. The first successful clip thumbnail becomes the project cover. Extraction failure is non-fatal: successful clips still archive and the UI uses its placeholder. Thumbnails are served through validated project/clip API endpoints; the frontend never treats local filesystem paths as image URLs.
+
+When an older project has a missing thumbnail, Library reads backfill the missing clip preview and project cover from the archived MP4. This repairs projects created before thumbnail generation or media authentication was corrected. Thumbnail generation remains derived data and does not change a project's user-visible update timestamp.
+
+The desktop shell cannot attach the local API session header to native `img` and `video` requests. It therefore appends the current session token only to the exact read-only Library thumbnail and clip-video routes. Other API routes continue to require the normal authenticated header.
 
 ## Archive lifecycle and concurrency
 
@@ -58,4 +70,4 @@ Browse projects with cover thumbnails; preview archived clips; edit platform cap
 
 ## Non-goals
 
-Cloud synchronization, collaboration, nested folders, Library drive relocation, reconstruction of a full editable timeline, and a separate generation-run entity are outside v1.
+Cloud synchronization, collaboration, nested folders, reconstruction of a full editable timeline, and a separate generation-run entity are outside v1.
