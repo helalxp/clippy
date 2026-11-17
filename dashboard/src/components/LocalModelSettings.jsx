@@ -50,7 +50,7 @@ export default function LocalModelSettings() {
     (a, b) => taskTimestamp(b) - taskTimestamp(a),
   );
   const activeDownload = downloadTasks.find(
-    (task) => ['queued', 'downloading', 'verifying'].includes(task.status),
+    (task) => ['queued', 'downloading', 'validating'].includes(task.status),
   );
   const latestFinishedDownload = downloadTasks.find(
     (task) => ['complete', 'failed'].includes(task.status),
@@ -323,12 +323,12 @@ export default function LocalModelSettings() {
             <strong className="text-xs text-ink">
               Whisper {modelLabel(data?.models, activeDownload.model_size)} · {
                 activeDownload.status === 'queued' ? 'Queued'
-                  : activeDownload.status === 'verifying' ? 'Verifying files'
+                  : activeDownload.status === 'validating' ? 'Checking files'
                     : 'Downloading'
               }
             </strong>
             <span className="ml-auto text-[10px] text-muted">
-              {activeDownload.status === 'verifying' ? 'Final check' : 'In progress'}
+              {activeDownload.status === 'validating' ? 'Final check' : 'In progress'}
             </span>
           </div>
           <p className="text-xs text-muted leading-relaxed">
@@ -337,7 +337,7 @@ export default function LocalModelSettings() {
           </p>
           <div className="h-1.5 rounded-full bg-paper3 overflow-hidden">
             <div className={`h-full rounded-full bg-brass transition-all ${
-              activeDownload.status === 'verifying' ? 'w-full' : 'w-2/5 animate-pulse'
+              activeDownload.status === 'validating' ? 'w-full' : 'w-2/5 animate-pulse'
             }`} />
           </div>
         </div>
@@ -347,7 +347,7 @@ export default function LocalModelSettings() {
         <div className="rounded-input border border-ok/25 bg-paper2 p-3 text-xs space-y-1" aria-live="polite">
           <div className="flex items-center gap-2 text-ok font-medium">
             <CheckCircle2 size={14} />
-            Whisper {latestFinishedDownload.model_size} downloaded and verified
+            Whisper {latestFinishedDownload.model_size} downloaded · files validated
           </div>
           <p className="text-muted">
             {latestFinishedDownload.activated
