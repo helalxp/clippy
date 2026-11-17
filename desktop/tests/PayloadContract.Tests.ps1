@@ -39,6 +39,7 @@ Describe "Assembled Clippy application payload contract" {
     It "contains every native-shell and first-run service entry point" {
         foreach ($entry in @(
             "app.py",
+            "local_library.py",
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
             "remotion/src/index.ts",
