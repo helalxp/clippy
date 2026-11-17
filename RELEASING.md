@@ -8,16 +8,22 @@ Clippy uses semantic versioning. The canonical application version is stored in 
 - Minor (for example, `0.3.0`): backwards-compatible features and improvements.
 - Major (for example, `1.0.0`): intentional breaking changes or a first stable public contract.
 
-Before a release, update `VERSION` and keep these files synchronized:
+Before a release, use the version-bump script from the repository root. It updates the canonical version and all application package/build manifests together:
 
 - `desktop/src-tauri/tauri.conf.json`
 - `desktop/src-tauri/Cargo.toml` and the `clippy-desktop` entry in `desktop/src-tauri/Cargo.lock`
 - `dashboard/package.json` and the root package entry in `dashboard/package-lock.json`
 
-Run the consistency check:
+For example, to prepare the next release candidate:
 
 ```powershell
-./desktop/validate-version.ps1
+./desktop/set-version.ps1 -Version 0.2.4-rc.4
+```
+
+The script validates SemVer, updates `VERSION`, Tauri, Cargo, Cargo.lock, the dashboard package and npm lockfile, then runs the consistency check. It does not change third-party dependency versions or create/push a Git tag. Run the check independently before building or tagging:
+
+```powershell
+./desktop/validate-version.ps1 -ExpectedVersion v0.2.4-rc.4
 ```
 
 The installer build runs this check automatically. The payload builder copies the canonical `VERSION` into the installed application payload.
