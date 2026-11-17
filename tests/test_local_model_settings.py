@@ -158,6 +158,13 @@ def test_catalog_verification_uses_the_same_resolved_path_as_transcription(
             calls["model_path"] = model_path
             calls.update(kwargs)
 
+        def transcribe(self, audio_path, **kwargs):
+            calls["transcribe_kwargs"] = kwargs
+            def generated_segments():
+                calls["inference_iterated"] = True
+                yield object()
+            return generated_segments(), type("Info", (), {"duration": 2.0})()
+
     monkeypatch.setitem(
         sys.modules, "faster_whisper",
         types.SimpleNamespace(WhisperModel=FakeWhisperModel),
@@ -165,9 +172,11 @@ def test_catalog_verification_uses_the_same_resolved_path_as_transcription(
 
     result = models.verify_whisper_model_load()
 
+    assert result["ok"] is True
     assert result["model_path"] == str(model_dir.resolve())
     assert calls["model_path"] == models.whisper_model_argument()
     assert calls["model_path"] == str(model_dir.resolve())
+    assert calls["inference_iterated"] is True
 
 
 def test_saving_catalog_selection_preserves_other_whisper_preferences(
