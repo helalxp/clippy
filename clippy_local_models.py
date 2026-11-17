@@ -69,9 +69,9 @@ def _write_settings(value: dict[str, Any]) -> None:
             prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
         )
         try:
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\\n") as stream:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
                 json.dump(value, stream, indent=2)
-                stream.write("\\n")
+                stream.write("\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary_name, path)
