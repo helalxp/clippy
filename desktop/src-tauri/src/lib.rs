@@ -73,23 +73,20 @@ fn choose_data_directory_blocking(current_path: Option<String>) -> Result<Option
         let initial = current_path
             .map(PathBuf::from)
             .and_then(|path| path.parent().map(Path::to_path_buf))
-            .unwrap_or_default()
-            .to_string_lossy()
-            .replace('\'', "''");
-        let script = format!(
-            r#"
+            .unwrap_or_default();
+        let script = r#"
             [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
             Add-Type -AssemblyName System.Windows.Forms
             $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
             $dialog.Description = 'Choose an empty folder for Clippy data'
             $dialog.ShowNewFolderButton = $true
-            $dialog.SelectedPath = '{initial}'
-            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+            $dialog.SelectedPath = $env:CLIPPY_PICKER_INITIAL
+            if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
                 [Console]::WriteLine($dialog.SelectedPath)
-            }}
-            "#
-        );
+            }
+        "#;
         let mut command = Command::new("powershell.exe");
+        command.env("CLIPPY_PICKER_INITIAL", initial);
         command.args([
             "-NoLogo",
             "-NoProfile",
@@ -97,7 +94,7 @@ fn choose_data_directory_blocking(current_path: Option<String>) -> Result<Option
             "-WindowStyle",
             "Hidden",
             "-Command",
-            &script,
+            script,
         ]);
         #[cfg(windows)]
         {
