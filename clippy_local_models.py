@@ -127,9 +127,22 @@ def inspect_whisper_model() -> dict[str, Any]:
     if not isinstance(size, str) or size not in WHISPER_MODELS:
         size = "small"
     custom_path = saved.get("model_path")
-    source = "local" if custom_path else "catalog"
-    configured = bool(custom_path or saved.get("model_size") in WHISPER_MODELS)
-    candidate = Path(str(custom_path)).expanduser() if custom_path else _catalog_model_dir(size)
+    source = "catalog"
+    if custom_path:
+        supplied_path = Path(str(custom_path)).expanduser()
+        try:
+            # Downloads from Clippy's catalog are also stored with an absolute
+            # model_path for compatibility with older settings. Recognize that
+            # managed directory as a catalog model, not a user-supplied folder.
+            if supplied_path.resolve() != _catalog_model_dir(size).resolve():
+                source = "local"
+            else:
+                custom_path = None
+        except (OSError, RuntimeError):
+            source = "local"
+
+    configured = bool(saved.get("model_path") or saved.get("model_size") in WHISPER_MODELS)
+    candidate = Path(str(custom_path)).expanduser() if source == "local" else _catalog_model_dir(size)
 
     try:
         resolved = validate_whisper_model_path(str(candidate))
@@ -316,7 +329,10 @@ def _activate_download_if_selection_is_unchanged(
         updated = dict(previous)
         updated.update({
             "model_size": model_size,
-            "model_path": str(model_dir),
+            # The catalog path is deterministic from the model size. Keeping
+            # model_path empty preserves the catalog identity in the UI and
+            # lets the shared resolver discover the managed folder.
+            "model_path": None,
             "selection_revision": current_revision + 1,
         })
         settings["whisper"] = updated
