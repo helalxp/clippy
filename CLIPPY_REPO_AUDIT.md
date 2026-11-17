@@ -1,10 +1,11 @@
 # Clippy Repository Audit & Agent Handover
 
-> **Inspection date:** 2026-11-09  
+> **Original audit snapshot:** 2026-11-09  
+> **Current state refresh:** 2026-11-17  
 > **Repository:** https://github.com/helalxp/clippy  
 > **Default branch:** `main`  
 > **Purpose:** Shared technical orientation and audit ledger for Claude Code, Codex, Gemini CLI, Hermes, and other engineering agents.  
-> **Status:** Expanded repository audit in progress. This document is the canonical agent handover and audit ledger. It is **not yet a certified line-by-line audit of every tracked source file or every branch**, and no local runtime/build was executed in this inspection. Verified CI results and targeted findings are recorded below; the coverage ledger must remain explicit.
+> **Status:** This is a continuing engineering handover, not a certified line-by-line audit of every tracked source file or every branch. The sections based on the November 9 snapshot are historical unless explicitly revalidated. The current Windows installer state and verified release/promotion evidence are recorded immediately below; source, tests, Git history, and current CI remain authoritative.
 
 ## Current Windows installer release status (2026-11-17)
 
@@ -15,13 +16,28 @@ This addendum supersedes older branch-status and installer-readiness statements 
 - **Windows desktop validation:** [run #360](https://github.com/helalxp/clippy/actions/runs/44062955499), passed on that implementation commit.
 - **Full release workflow:** [run #5](https://github.com/helalxp/clippy/actions/runs/44066693854), passed CPU and CUDA runtime builds, archive/manifest validation, payload and PowerShell contract checks, clean first-run setup, packaged rendering, Rust tests, draft asset verification, and publication.
 - **Manual Windows test:** the installer was installed and exercised through the editing workflow. A Whisper model-selection hiccup was noted and remains a separate unresolved follow-up; do not report it as fixed by the installer work.
-- **Integration promotion:** `windows-installer-hardening` was merged into `windows-installer-release` by PR [#14](https://github.com/helalxp/clippy/pull/14), merge commit `b2086ea27b9237c0a85d0638a24952336b77fcc7`. The integration branch is being merged with the current `main` history; record the resulting merge SHA and validation run here after that promotion completes.
+- **First promotion:** PR [#14](https://github.com/helalxp/clippy/pull/14) merged `windows-installer-hardening` into `windows-installer-release` on 2026-11-17; merge commit `b2086ea27b9237c0a85d0638a24952336b77fcc7`.
+- **Main promotion:** PR [#3](https://github.com/helalxp/clippy/pull/3) merged `windows-installer-release` into `main` on 2026-11-17; merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4`.
+- **Post-merge integration validation:** [Windows desktop validation run #368](https://github.com/helalxp/clippy/actions/runs/44086793620) and [general CI](https://github.com/helalxp/clippy/actions/runs/44086795898) both passed on integration head `6873f5dcc101f8af804481d2434cdf05900e95a5`. The Windows run passed the CPU and CUDA runtime builds, PowerShell contract tests, payload preparation, Rust checks/tests, and NSIS installer build.
+- **Current branch roles:** `main` is the primary branch and now includes the v0.2.3 Windows desktop implementation; `windows-installer-release` is the integration branch; `windows-installer-hardening` is the focused installer/runtime development branch. `windows-native-migration` is the earlier migration/scaffold line, not the current installer source of truth.
 
 ### Resolved first-run smoke-test incident
 
 The repeated `Get-FileHash is not recognized` failure occurred because a PowerShell 7 smoke-test host launched the product's Windows PowerShell 5.1 process with an inherited `PSModulePath`. The child could then try to auto-load modules from the wrong PowerShell installation. The stable fix removes inherited `PSModulePath` at both process boundaries: the native Tauri launcher and the smoke-test child launcher. The smoke test now checks that Windows PowerShell 5.1 resolves `Get-FileHash` and `ConvertFrom-Json` before running first-run setup.
 
 See [the Windows installer operations runbook](./docs/architecture/windows-installer-operations-runbook.md) for the incident analysis, smoke-test contract, diagnostic log location, and release recovery procedure.
+
+
+## Current verified branch and release state (2026-11-17)
+
+- `main` includes the native Windows desktop installer and updated installer documentation. The main promotion commit was `e238e92c599c7f34357d2093db0b95dae102a7e4`.
+- `windows-installer-release` contains the reconciled installer integration at `6873f5dcc101f8af804481d2434cdf05900e95a5`.
+- `windows-installer-hardening` retains the tested implementation and focused hardening history at `cfe6e3f2878d97d5c8b4c472e55e14f9c70caae0`.
+- PR #14 promoted hardening to the integration branch; PR #3 promoted the integration branch to main. Both are merged.
+- The v0.2.3 tag remains the published installer baseline; the two branch promotions did not move or rewrite the published tag.
+- The v0.2.3 release workflow and the post-integration Windows validation/general CI are linked above. This evidence applies to the tested commit and release, not automatically to future commits.
+- The user completed a manual Windows installation and exercised the app through the editing workflow. Whisper model selection had a small hiccup and remains a separate unresolved item. Keep it out of installer lifecycle changes until it receives its own investigation and test.
+
 
 
 ---
@@ -34,7 +50,7 @@ The audit grew through multiple append-only review passes. Repeated IDs were amb
 
 1. Read this file before engineering work, then read branch-specific `AGENTS.md` / `CLAUDE.md` and platform contracts if present.
 2. Confirm the actual checkout: `git status --short`, `git branch --show-current`, `git branch -avv`, `git remote -v`, `git log --oneline --decorate -12`.
-3. Never assume the current checkout is `main`. The native Windows migration is on `windows-native-migration`, not in main.
+3. Never assume the current checkout or its feature set from the branch name alone. The v0.2.3 native Windows installer is now included in `main`; `windows-installer-hardening` and `windows-installer-release` remain the focused development/integration branches. `windows-native-migration` is an earlier historical scaffold branch.
 4. Source, tests, configuration, and Git history outrank this document. If this document conflicts with checked-out code, trust the code and update this document.
 5. Preserve user work and data. Do not run destructive Git commands, force-push, reset, clean, delete, overwrite, or merge without explicit authorization.
 6. Do not apply stored `.patch` files without first running `git apply --check` and examining the target files and local diffs.
@@ -49,11 +65,11 @@ Clippy is a Windows-first desktop product evolving from the OpenShorts codebase.
 
 **Product direction from the project guide:** a normal Windows desktop app that launches its own local backend and renderer; end users should not need Docker Desktop, WSL2, Python, Node.js, Rust, Git, or a terminal. First-run setup should provision/verify runtimes. Model weights are managed separately. User settings, models, jobs, logs, and output must survive upgrades.
 
-**Critical reality check:** this product direction is not the same thing as implementation status. The default `main` branch remains Docker-oriented. The separate `windows-native-migration` branch contains a Tauri/Rust desktop scaffold and Windows-native adaptations. The desktop installer must not be described as production-ready without build, install, upgrade, clean-machine, and runtime tests.
+**Current implementation status (2026-11-17):** the repository ships both the Docker-oriented development/self-hosted stack and a native Windows Tauri/NSIS desktop installer. Clippy v0.2.3 is published and the release pipeline, clean first-run setup, packaged rendering smoke test, and Windows desktop validation passed. The installer was also manually installed and exercised through the editing workflow. The older statements below describing `main` as Docker-only and `windows-native-migration` as the only desktop implementation are historical findings from the November 9 audit snapshot; they were superseded by the Windows installer promotion documented above. The Docker workflow remains in the repository and retains its own security/reliability findings.
 
 ## 2. Repository snapshot and branches
 
-Repository metadata refreshed through GitHub on 2026-11-09:
+Historical repository snapshot captured through GitHub on 2026-11-09. The branch tips and file counts below are not current; see the current-state addendum at the top of this document:
 - Public repository: `helalxp/clippy`
 - Default branch: `main`
 - Current main HEAD: `04d049485590e839e15704d9fa6c51570d254751`
@@ -258,7 +274,7 @@ Do not create a second auth path or duplicate business logic for MCP. Existing a
 Observed documentation:
 - Root `CLIPPY_MASTER.md` was consolidated into this file and removed from main. The native migration branch still has its own branch-specific copy.
 - `CLAUDE.md` (main) and `AGENTS.md` (Windows migration): short agent startup rules.
-- `README.md`: current Clippy project overview. It distinguishes the Docker-oriented main development stack from the unfinished Windows-native migration branch.
+- `README.md`: current Clippy project overview. It documents both the published Windows desktop installer and the separate Docker development/self-hosted stack.
 - `docs/architecture/*.md`: subsystem architecture notes.
 - Historical root reports (`STATUS.md`, `CHANGES_COMPLETE.md`, `FINAL_SUMMARY.md`, `IMPLEMENTATION_PLAN.md`, `QUALITY_ISSUES_ANALYSIS.md`) were read, superseded, and removed from main after their durable context was migrated into this audit.
 
@@ -269,10 +285,10 @@ Observed documentation:
 These are evidence-based review observations, not a final security certification.
 
 ### R-01: Main README/product identity was stale — resolved
-The legacy OpenShorts README was replaced with a Clippy-specific overview in commit `1f4e2e02e95c2429f7e6a1364525d2126c6d0569`. The new README accurately states that main remains Docker-oriented and the Windows-native branch is still a scaffold. Upstream attribution and the repository's `LICENSE` / `NOTICE` were retained.
+The legacy OpenShorts README was first replaced with a Clippy-specific overview in commit `1f4e2e02e95c2429f7e6a1364525d2126c6d0569`. That November 9 version accurately described the then-current Docker-only main branch and the early Windows scaffold. It was superseded during the v0.2.3 promotion: the current README documents both the published Windows installer and the Docker development/self-hosted stack. Upstream attribution and the repository's `LICENSE` / `NOTICE` remain retained.
 
-### R-02: Windows-native implementation is branch-only — high, confirmed
-Main does not contain `desktop/`, `platform_compat.py`, `runtime-manifest.json`, or the native local-model settings present in `windows-native-migration`. The migration branch diverges from main (14 ahead / 26 behind at the `ff879df` source snapshot). Do not implement native-only fixes on main assuming they will be present in the desktop app. Establish an explicit integration strategy.
+### R-02: Windows-native implementation was branch-only — resolved by v0.2.3 promotion
+This was a confirmed finding at the November 9 audit snapshot. The installer implementation was subsequently completed, validated, released as v0.2.3, and merged through `windows-installer-release` into `main` on 2026-11-17 (PR #14 then PR #3). The current native desktop source and its release contracts are now present in main. The old comparison against `windows-native-migration` is historical and should not be used to decide where new installer fixes belong.
 
 ### R-03: Main includes a large tracked GIF — medium, confirmed
 `churchil_queen_vertical.gif` is 65,384,963 bytes (~62.4 MiB), above GitHub's recommended 50 MB warning threshold. Consider Git LFS or an external asset if the file is needed, but first check references and preserve attribution/licensing. Do not remove it blindly.
