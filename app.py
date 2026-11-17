@@ -66,22 +66,14 @@ def is_first_run() -> bool:
 
 def mark_first_run_complete(model_size: str, gpu_mode: bool):
     global _FIRST_RUN, _USER_MODEL_SIZE, _USER_GPU_MODE
+    # Keep the legacy first-run endpoint on the same locked, atomic settings
+    # writer as the model manager so the two paths cannot overwrite each other.
+    from clippy_local_models import update_whisper_preferences
+
+    update_whisper_preferences(model_size=model_size, gpu_mode=gpu_mode)
     _FIRST_RUN = False
     _USER_MODEL_SIZE = model_size
     _USER_GPU_MODE = gpu_mode
-    # Save settings
-    import json
-    settings_path = _settings_file_path()
-    if not settings_path.parent.exists():
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-    if settings_path.exists():
-        existing = json.loads(settings_path.read_text(encoding="utf-8"))
-    else:
-        existing = {}
-    existing["whisper"] = existing.get("whisper", {})
-    existing["whisper"]["model_size"] = model_size
-    existing["whisper"]["gpu_mode"] = gpu_mode
-    settings_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 def get_user_model_size() -> str:
     if _USER_MODEL_SIZE:
@@ -99,7 +91,7 @@ def get_user_model_size() -> str:
 def get_user_gpu_mode() -> bool:
     if _USER_GPU_MODE is not None:
         return _USER_GPU_MODE
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if settings_path.exists():
         try:
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
