@@ -1,4 +1,36 @@
 # Shared by setup and regression checks; no installation side effects on import.
+# Hash files with .NET directly. This deliberately avoids Get-FileHash so the
+# bootstrap does not depend on PowerShell module auto-loading or PSModulePath.
+function Get-ClippyFileSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Cannot calculate SHA-256 because the file does not exist: $Path"
+    }
+
+    $stream = $null
+    $sha = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read
+        )
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $digest = $sha.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        if ($sha) { $sha.Dispose() }
+    }
+}
+
 function Test-ClippyExecutable([string]$Path, [string]$Arguments, [string]$Expected = "", [int]$TimeoutSeconds = 30) {
     $process = $null
     try {
