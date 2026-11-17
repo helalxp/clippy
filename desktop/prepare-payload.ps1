@@ -127,6 +127,7 @@ Get-ChildItem $stageRoot -Directory -Recurse -Force |
 # the native shell and first-run setup will require on a customer machine.
 $requiredPayloadFiles = @(
     "app.py",
+    "local_library.py",
     "requirements.txt",
     "VERSION",
     "setup-runtime.ps1",
