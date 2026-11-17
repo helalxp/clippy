@@ -1,22 +1,29 @@
 # Clippy
 
-Clippy is a Windows-first video repurposing application in development. It is built from the OpenShorts codebase and is intended to turn long-form video into short-form clips that users can refine and prepare for publishing.
+Clippy is a Windows-first video repurposing application built from the OpenShorts codebase. It turns long-form video into short-form clips that users can edit and prepare for publishing.
 
-> **Repository status:** the default `main` branch currently contains the Docker-oriented development stack. The Windows-native desktop implementation is on the separate `windows-native-migration` branch and is still a scaffold, not a production-ready installer.
+## Windows desktop installer
 
-## Current repository layout
+**Clippy v0.2.3 is the published, verified Windows x64 installer baseline.**
 
-- `app.py`, `main.py`: FastAPI backend and video-processing pipeline.
-- `dashboard/`: React + Vite interface.
-- `render-service/`, `remotion/`: Node.js rendering service and video compositions.
-- `cloud/`: optional hosted accounts, billing, metering, storage, and agent services.
-- `tests/`: backend regression and security tests.
-- `docs/`: subsystem architecture, compliance, and operational documentation.
-- `CLIPPY_REPO_AUDIT.md`: canonical engineering handover, architecture map, branch status, verified findings, and audit coverage ledger.
+- [Download the Windows installer](https://github.com/helalxp/clippy/releases/download/v0.2.3/Clippy_0.2.3_x64-setup.exe)
+- [View the v0.2.3 release and runtime assets](https://github.com/helalxp/clippy/releases/tag/v0.2.3)
+- [Desktop installation, build and troubleshooting guide](desktop/README.md)
+- [Windows installer operations runbook](docs/architecture/windows-installer-operations-runbook.md)
+- [Windows release procedure](RELEASING.md)
+- [Runtime version and asset contract](docs/architecture/windows-release-versioning-and-runtime-asset-contract.md)
 
-## Run the current main-branch development stack
+The installer is a per-user Tauri/NSIS application. It does not require Docker Desktop, WSL2, system Python, or system Node.js. First launch requires an internet connection and provisions Clippy-managed Python (CPU or supported NVIDIA/CUDA), Node.js, FFmpeg/FFprobe, renderer dependencies, and the Remotion headless browser. Runtime downloads come from the exact versioned GitHub Release and are checked before activation.
 
-Requirements: Docker Desktop with Docker Compose.
+User settings, uploads, generated videos, caches, and downloaded AI model weights live outside the replaceable application payload. Whisper models are managed separately and are not bundled in the installer.
+
+**Verified v0.2.3 baseline:** [Windows desktop validation](https://github.com/helalxp/clippy/actions/runs/44062955499) and [the full release workflow](https://github.com/helalxp/clippy/actions/runs/44066693854) passed. The release checks covered CPU and CUDA runtime packaging, manifests and multipart archive reconstruction, PowerShell contract tests, clean first-run setup, packaged rendering, Rust tests, and pre-publication asset verification. The installer was also manually installed and exercised through the editing workflow on Windows. A Whisper model-selection hiccup remains a separate follow-up and is not claimed as resolved.
+
+## Docker development and self-hosted stack
+
+The repository also retains the Docker-oriented development/self-hosted workflow. This is separate from the native Windows installer.
+
+Requirements: Docker Desktop with Docker Compose, plus the API keys needed by the features being used.
 
 1. Copy `.env.example` to `.env` and configure the providers/features you intend to use.
 2. From the repository root, run:
@@ -27,8 +34,6 @@ Requirements: Docker Desktop with Docker Compose.
 
 3. Open the dashboard at [http://localhost:5175](http://localhost:5175).
 
-Main-branch service endpoints:
-
 | Service | Address |
 |---|---|
 | Dashboard | `http://localhost:5175` |
@@ -36,17 +41,24 @@ Main-branch service endpoints:
 | Backend readiness | `http://localhost:8000/health/ready` |
 | Renderer | `http://localhost:13100` |
 
-**Security note:** do not expose the renderer port or this development stack to an untrusted network. The current main-branch renderer needs an authorization and private-media exposure hardening pass. See the security findings in the audit document.
+**Security note:** do not expose the renderer port or this development stack to an untrusted network. The Docker-oriented renderer still has authorization and private-media exposure hardening work recorded in the repository audit.
 
-## Windows desktop direction
+## Repository layout
 
-The `windows-native-migration` branch contains the Tauri shell, local process supervisor, Windows compatibility work, and first-run setup contracts. Its own documentation identifies it as an early scaffold. Runtime provisioning, signed/checksummed downloads, packaging, clean-machine installation, upgrades, and full end-to-end validation remain required before it can be treated as a normal end-user installer.
+- `app.py`, `main.py`: FastAPI backend and video-processing pipeline.
+- `dashboard/`: React + Vite interface.
+- `desktop/`: Tauri shell, Windows installer, managed runtime setup and release tests.
+- `render-service/`, `remotion/`: Node.js rendering service and video compositions.
+- `cloud/`: optional hosted accounts, billing, metering, storage, and agent services.
+- `tests/`: backend regression and security tests.
+- `docs/`: architecture, platform contracts and operational runbooks.
+- `CLIPPY_REPO_AUDIT.md`: engineering handover, architecture map, verified findings and audit coverage ledger.
 
-## Engineering reference
+## Engineering references
 
-Start with [CLIPPY_REPO_AUDIT.md](./CLIPPY_REPO_AUDIT.md) before changing code. It records the current architecture, branch-specific implementation boundaries, security/reliability findings, CI status, and what has and has not been inspected. Source code, tests, configuration, and Git history remain authoritative when they disagree with the audit.
+Start with [CLIPPY_REPO_AUDIT.md](./CLIPPY_REPO_AUDIT.md) before engineering work. For Windows installer changes, also read [the first-run setup contract](desktop/FIRST_RUN_SETUP_CONTRACT.md), [the operations runbook](docs/architecture/windows-installer-operations-runbook.md), and [RELEASING.md](RELEASING.md).
 
-Focused subsystem documents under `docs/architecture/`, compliance documents, CLI documentation, skills, and operational runbooks are retained where they describe a specific active subsystem or workflow.
+Source code, tests, configuration, Git history, and current CI results outrank older audit snapshots. Update the relevant docs whenever a verified product or release fact changes.
 
 ## License and attribution
 

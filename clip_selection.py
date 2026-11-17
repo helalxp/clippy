@@ -183,7 +183,7 @@ def clip_duration_bounds():
     hi = _read("CLIP_MAX_SECONDS", 60.0)
     lo = min(max(lo, 5.0), 175.0)
     hi = min(max(hi, 10.0), 180.0)
-    if hi < lo + 15.0:  # keep a real band: degenerate ranges starve the model
+    if hi < lo + 5.0:  # keep at least a five-second band without overriding valid user ranges
         hi = min(180.0, lo + 5.0)
     return round(lo, 3), round(hi, 3)
 

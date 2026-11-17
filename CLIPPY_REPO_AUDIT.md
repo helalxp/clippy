@@ -6,6 +6,24 @@
 > **Purpose:** Shared technical orientation and audit ledger for Claude Code, Codex, Gemini CLI, Hermes, and other engineering agents.  
 > **Status:** Expanded repository audit in progress. This document is the canonical agent handover and audit ledger. It is **not yet a certified line-by-line audit of every tracked source file or every branch**, and no local runtime/build was executed in this inspection. Verified CI results and targeted findings are recorded below; the coverage ledger must remain explicit.
 
+## Current Windows installer release status (2026-11-17)
+
+This addendum supersedes older branch-status and installer-readiness statements below where they conflict. The older audit snapshots are retained as historical findings; they must not be treated as the current release state.
+
+- **Published Windows release:** [Clippy v0.2.3](https://github.com/helalxp/clippy/releases/tag/v0.2.3), published 2026-11-17. The release contains the NSIS installer and checksum, CPU runtime ZIP/manifest/checksums, and the CUDA manifest, two ordered archive parts, and part checksums.
+- **Verified source implementation:** `9454c5eb485cc75c0ee14a00d11bd405d9a320aa`.
+- **Windows desktop validation:** [run #360](https://github.com/helalxp/clippy/actions/runs/44062955499), passed on that implementation commit.
+- **Full release workflow:** [run #5](https://github.com/helalxp/clippy/actions/runs/44066693854), passed CPU and CUDA runtime builds, archive/manifest validation, payload and PowerShell contract checks, clean first-run setup, packaged rendering, Rust tests, draft asset verification, and publication.
+- **Manual Windows test:** the installer was installed and exercised through the editing workflow. A Whisper model-selection hiccup was noted and remains a separate unresolved follow-up; do not report it as fixed by the installer work.
+- **Integration promotion:** `windows-installer-hardening` was merged into `windows-installer-release` by PR [#14](https://github.com/helalxp/clippy/pull/14), merge commit `b2086ea27b9237c0a85d0638a24952336b77fcc7`. The integration branch is being merged with the current `main` history; record the resulting merge SHA and validation run here after that promotion completes.
+
+### Resolved first-run smoke-test incident
+
+The repeated `Get-FileHash is not recognized` failure occurred because a PowerShell 7 smoke-test host launched the product's Windows PowerShell 5.1 process with an inherited `PSModulePath`. The child could then try to auto-load modules from the wrong PowerShell installation. The stable fix removes inherited `PSModulePath` at both process boundaries: the native Tauri launcher and the smoke-test child launcher. The smoke test now checks that Windows PowerShell 5.1 resolves `Get-FileHash` and `ConvertFrom-Json` before running first-run setup.
+
+See [the Windows installer operations runbook](./docs/architecture/windows-installer-operations-runbook.md) for the incident analysis, smoke-test contract, diagnostic log location, and release recovery procedure.
+
+
 ---
 
 ## Finding ID integrity note

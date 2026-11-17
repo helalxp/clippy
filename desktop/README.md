@@ -1,66 +1,93 @@
-# Clippy native desktop (Stage 3A)
+# Clippy native Windows desktop
 
-This is the first native desktop shell and local-process supervisor. It is a
-separate production target; Docker Compose remains a developer-only workflow
-and is not invoked by this application.
+Clippy is the native Windows desktop distribution maintained in this repository. The desktop app is separate from the Docker Compose workflow documented in the repository root.
 
-## Current scope
+## Download and install
 
-- Tauri 2 Windows desktop shell using the existing dashboard build.
-- Desktop dashboard build sets `VITE_API_URL` to the loopback FastAPI service.
-- Rust commands expose start, stop, and status for the backend and renderer.
-- Services bind to `127.0.0.1`; logs are written under `%LOCALAPPDATA%\Clippy\logs`.
-- Runtime files, application payload, and user output are separated under
-  `%LOCALAPPDATA%\Clippy`.
-- Startup refuses to launch when the managed runtime or application payload is
-  incomplete. It does not silently use a system Python or Node installation.
+**Current stable release: [Clippy v0.2.3](https://github.com/helalxp/clippy/releases/tag/v0.2.3)**
 
-## Deliberate limitation in Stage 3A
+Download and run the [x64 NSIS installer](https://github.com/helalxp/clippy/releases/download/v0.2.3/Clippy_0.2.3_x64-setup.exe). The installer is per-user and installs without requiring Docker Desktop, WSL2, system Python, or system Node.js.
 
-The downloader, signed/checksummed runtime manifest, resumable installer UI,
-application payload updater, and production NSIS packaging pipeline are not
-implemented yet. `start_services` is therefore an integration scaffold and
-will report that setup is required until Stage 3B installs the expected files.
-No claim is made that this stage is already a usable end-user installer.
+The first launch requires an internet connection. Clippy extracts its application payload and runs the managed runtime setup. It selects the CPU Python package by default, or the CUDA 12.8 package when the NVIDIA driver and GPU compute capability meet the supported checks. It then provisions the remaining private components, verifies them, and writes the runtime manifest only after health checks pass.
 
-## Developer prerequisites
+Customers should download the installer only. The matching release contains the CPU and CUDA runtime archives/manifests/parts that setup retrieves automatically from the exact application version. Do not manually download, rename, recompress, or combine those runtime assets.
 
-For desktop development only, install the Rust stable toolchain, the Tauri 2
-Windows prerequisites (including WebView2), and the Node.js toolchain. These
-are build-machine requirements, not end-user requirements.
+## What is installed and where
 
-From `desktop/src-tauri`:
-
-```powershell
-cargo install tauri-cli --version "^2"
-cargo tauri dev
-```
-
-Build the Windows installer with:
-
-```powershell
-cargo tauri build
-```
-
-The Tauri build invokes `dashboard`'s `build:desktop` script. The dashboard
-uses `http://127.0.0.1:8000` for API requests in the desktop build; the normal
-Vite development build retains its proxy-based relative API behavior.
-
-## Managed directory layout (target)
+The managed root is:
 
 ```text
 %LOCALAPPDATA%\Clippy\
-  app\current\                 # versioned Clippy application payload
-    app.py
-    render-service\dist\server.js
-    remotion\src\index.ts
+  app\current\                 # replaceable application payload
   runtime\
-    python\python.exe
-    node\node.exe
-  data\output\                 # projects and generated media
-  models\                      # independently managed AI model weights
+    python\                       # managed Python and pinned packages
+    node\                         # managed Node.js
+    ffmpeg\                       # FFmpeg and FFprobe
+  browser\headless-shell\       # persistent Remotion browser
+  data\
+    output\                       # generated outputs
+    uploads\                      # uploaded source media
+    models\whisper\             # separately managed Whisper models
+    models\huggingface\         # Hugging Face cache
+    reference_templates\
+  settings.json
+  runtime-manifest.json
   logs\
 ```
 
-The Whisper model manager remains separate from core runtime setup. Model
-weights are not part of the core dependency manifest.
+The app payload and runtime components are managed separately from user data. Settings, uploads, generated output, reference templates, caches, and model weights must survive normal application upgrades and runtime repair. Model weights are not bundled into the installer.
+
+## Troubleshooting and diagnostics
+
+The first place to look after a setup or launch failure is:
+
+```text
+%LOCALAPPDATA%\Clippy\logs\runtime-setup.log
+```
+
+The desktop shell also records native setup and supervisor diagnostics in the same Clippy logs directory. Preserve the complete log when reporting a problem; include the release version, Windows version, CPU/GPU model, NVIDIA driver version when relevant, and the exact step that failed. Do not delete the whole `%LOCALAPPDATA%\Clippy` directory as a first troubleshooting step: it contains user settings, generated media, downloads, and model weights.
+
+The release smoke test intentionally launches Windows PowerShell 5.1 from a PowerShell 7 CI host. Both the application launcher and smoke-test launcher remove the inherited `PSModulePath` before creating that child process, allowing Windows PowerShell to initialize its own compatible module path. The smoke test has a preflight that checks the host edition/version and verifies that `Get-FileHash` and `ConvertFrom-Json` resolve before first-run setup begins. Keep this boundary covered if process-launch code changes.
+
+## Build the Windows installer from source
+
+Use a Windows x64 build machine with:
+
+- Rust stable and the Tauri 2 Windows build prerequisites.
+- WebView2 runtime/developer prerequisites.
+- Node.js 22 and npm.
+- Python 3.12.10 for runtime packaging.
+- NSIS and PowerShell 7 (the CI workflow uses `pwsh`); Pester 5 for the PowerShell tests.
+
+From the repository root:
+
+```powershell
+./desktop/validate-version.ps1
+./desktop/build.ps1
+```
+
+The build script resolves paths relative to itself, builds the desktop dashboard, prepares the backend and renderer payload, and produces an NSIS installer under:
+
+```text
+desktop\src-tauri\target\release\bundle\nsis
+```
+
+To run the native desktop app during development, install the prerequisites above and run:
+
+```powershell
+cd desktop/src-tauri
+cargo tauri dev
+```
+
+The packaged dashboard receives its backend URL and per-launch API token from the desktop supervisor. The regular web/Docker development build continues to use the Vite proxy.
+
+## CI and release gates
+
+Two GitHub Actions workflows protect this path:
+
+- `.github/workflows/windows-desktop-validation.yml` validates version synchronization, builds the dashboard and payload, runs PowerShell contract tests, checks Python syntax, runs Rust checks/tests, and builds the complete NSIS installer.
+- `.github/workflows/release-windows.yml` runs backend/frontend validation, builds CPU and CUDA runtime packages, checks manifests and reconstructed archives, builds the installer, runs the clean first-run/runtime/render smoke test, runs Rust tests, creates a draft release, verifies all expected asset names and sizes, and only then publishes.
+
+The smoke test is deliberately stronger than a script syntax test. It extracts the exact packaged payload into an isolated `LOCALAPPDATA`, runs the real first-run setup using the CPU runtime, verifies the managed runtime manifest and backend imports, renders a fixture through the packaged Remotion browser, and reruns setup to verify that a healthy install is reused without downloads.
+
+See [RELEASING.md](../RELEASING.md), the [first-run setup contract](FIRST_RUN_SETUP_CONTRACT.md), and the [Windows installer operations runbook](../docs/architecture/windows-installer-operations-runbook.md) before changing packaging or release logic.

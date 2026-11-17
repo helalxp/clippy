@@ -1,10 +1,12 @@
 $ErrorActionPreference = 'Stop'
-Set-Location $PSScriptRoot
-
-# Keep the public web build untouched. Only the Tauri desktop bundle receives
-# the loopback API origin because the packaged UI is not served by Vite's proxy.
-$env:VITE_API_URL = 'http://127.0.0.1:8000'
-npm run build
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+$previousApiUrl = $env:VITE_API_URL
+Push-Location $PSScriptRoot
+try {
+    # The supervisor supplies the allocated API address before mounting the UI.
+    $env:VITE_API_URL = ''
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Desktop dashboard build failed (exit $LASTEXITCODE)." }
+} finally {
+    $env:VITE_API_URL = $previousApiUrl
+    Pop-Location
 }

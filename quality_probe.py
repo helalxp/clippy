@@ -86,6 +86,9 @@ def main() -> int:
             # yt-dlp walks the whole list (see cloud/metering.py).
             'noplaylist': True,
         }
+        if os.environ.get('CLIPPY_NODE_EXE'):
+            base_opts['js_runtimes'] = {'node': {'path': os.environ['CLIPPY_NODE_EXE']}}
+
         # yt-dlp's default player clients (tv_downgraded/web_safari with
         # cookies, android_vr/web_safari anonymous) are the ones that still
         # serve HD without PO tokens — never override them here.

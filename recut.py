@@ -323,9 +323,10 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 for r in layout_ranges.remap(layout_ranges.read(input_path), segments)])
 
         if watermark:
-            (watermarker or _main_attr("apply_watermark"))(out_path,
-                backdrop_type=os.environ.get("BACKDROP_TYPE", "blurred"),
-                backdrop_color=os.environ.get("BACKDROP_COLOR", None))
+            # apply_watermark overlays the brand mark only. Backdrop options
+            # belong to the reframe renderer, not this watermark function.
+            # Keep the one-argument hook contract used by main.py and callers.
+            (watermarker or _main_attr("apply_watermark"))(out_path)
 
         served_name = out_name
         if captions_transcript and captions_transcript.get("segments"):

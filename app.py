@@ -19,6 +19,7 @@ import asyncio
 import signal
 import socket
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from dotenv import load_dotenv
 from typing import Any, Dict, Optional, List
 from contextlib import asynccontextmanager
@@ -49,6 +50,16 @@ _FIRST_RUN = True
 _USER_MODEL_SIZE = None
 _USER_GPU_MODE = None
 
+
+def _settings_file_path() -> Path:
+    explicit = os.environ.get("CLIPPY_SETTINGS_PATH")
+    if explicit:
+        return Path(explicit).expanduser()
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "Clippy" / "settings.json"
+    return Path("Clippy") / "settings.json"
+
 def is_first_run() -> bool:
     global _FIRST_RUN
     return _FIRST_RUN
@@ -60,8 +71,7 @@ def mark_first_run_complete(model_size: str, gpu_mode: bool):
     _USER_GPU_MODE = gpu_mode
     # Save settings
     import json
-    from pathlib import Path
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if not settings_path.parent.exists():
         settings_path.parent.mkdir(parents=True, exist_ok=True)
     if settings_path.exists():
@@ -77,7 +87,7 @@ def get_user_model_size() -> str:
     if _USER_MODEL_SIZE:
         return _USER_MODEL_SIZE
     # Check saved settings
-    settings_path = Path(os.environ.get("CLIPPY_SETTINGS_PATH", "")) / "Clippy" / "settings.json"
+    settings_path = _settings_file_path()
     if settings_path.exists():
         try:
             saved = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -2506,11 +2516,46 @@ app.include_router(_mcp_server.router)
 import free_tools as _free_tools
 app.include_router(_free_tools.router)
 
-# Enable CORS for frontend. Cloud mode locks this down to the configured origins;
-# self-host keeps the permissive wildcard it has always used.
+# Desktop mode is a loopback service, not a public web API. A per-launch
+# secret is injected by the native supervisor and required on every request
+# except health probes and CORS preflight. This also protects /mcp.
+_DESKTOP_API_TOKEN = os.environ.get("CLIPPY_API_TOKEN", "").strip()
+
+@app.middleware("http")
+async def require_desktop_api_token(request: Request, call_next):
+    if not _DESKTOP_API_TOKEN:
+        return await call_next(request)
+    if request.method == "OPTIONS" or request.url.path in ("/health", "/health/ready"):
+        return await call_next(request)
+    supplied = request.headers.get("X-Clippy-Token", "")
+    # Native <video>/<img> requests cannot attach custom headers. Permit the
+    # session token in the query string only for read-only static media routes.
+    media_paths = ("/videos/", "/thumbnails/", "/reference-templates-media/")
+    if not supplied and request.method in ("GET", "HEAD") and request.url.path.startswith(media_paths):
+        supplied = request.query_params.get("token", "")
+    if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
+        return JSONResponse({"detail": "This local Clippy API requires its active desktop session token."}, status_code=401)
+    return await call_next(request)
+
+# Cloud mode uses its configured web origins. The installed desktop build only
+# accepts its own Tauri origins; the Vite origin is allowed for native dev.
+if BILLING_ENABLED:
+    _allowed_frontend_origins = cloud.settings.allowed_origins
+elif _DESKTOP_API_TOKEN:
+    _allowed_frontend_origins = [
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ]
+else:
+    # Preserve the existing standalone self-host/web development behavior.
+    _allowed_frontend_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cloud.settings.allowed_origins if BILLING_ENABLED else ["*"],
+    allow_origins=_allowed_frontend_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -2851,6 +2896,8 @@ async def get_local_whisper_model():
             "label": details["label"],
             "description": details["description"],
             "downloaded": downloaded,
+            "selected": selected.get("selected", False) and selected.get("source") == "catalog" and selected.get("model_size") == key,
+            "status": "ready" if downloaded else "not_downloaded",
         })
     return {
         "selection": selected,
@@ -2881,6 +2928,21 @@ async def select_local_whisper_model(request: Request):
         return {"ok": True, "selection": selection}
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/local-models/whisper/verify")
+async def verify_local_whisper_model():
+    """Load the saved model once on CPU to verify the actual runtime and weights."""
+    from clippy_local_models import verify_whisper_model_load
+
+    try:
+        return verify_whisper_model_load()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        # Surface a useful diagnostic to the settings UI. The exception is
+        # bounded to avoid returning an unbounded native stack trace.
+        raise HTTPException(status_code=422, detail=f"Whisper model verification failed: {str(exc)[:700]}")
 
 
 @app.post("/api/local-models/whisper/download")
@@ -5411,7 +5473,9 @@ async def proxy_render(request: Request):
         request, render_minutes, str(uuid.uuid4()), "render")
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(f"{RENDER_SERVICE_URL}/render", json=body)
+            renderer_headers = {"X-Clippy-Token": _DESKTOP_API_TOKEN} if _DESKTOP_API_TOKEN else {}
+            resp = await client.post(f"{RENDER_SERVICE_URL}/render", json=body, headers=renderer_headers)
+            resp.raise_for_status()
         result = resp.json()
         if isinstance(result, dict) and result.get("renderId"):
             _render_owners[str(result["renderId"])] = await _owner_id(request)
@@ -5439,7 +5503,9 @@ async def proxy_render_status(render_id: str, request: Request):
         await _assert_job_owner(request, {"user_id": _render_owners[render_id]})
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{RENDER_SERVICE_URL}/render/{render_id}")
+            renderer_headers = {"X-Clippy-Token": _DESKTOP_API_TOKEN} if _DESKTOP_API_TOKEN else {}
+            resp = await client.get(f"{RENDER_SERVICE_URL}/render/{render_id}", headers=renderer_headers)
+            resp.raise_for_status()
             return resp.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Render service unavailable: {e}")

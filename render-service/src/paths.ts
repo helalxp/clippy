@@ -64,6 +64,7 @@ function safePathSegments(rawPath: string): string[] | null {
 export function resolveRendererVideoUrl(
   input: string,
   publicUrl: string,
+  accessToken?: string,
 ): string {
   let parsed: URL;
   try {
@@ -79,6 +80,8 @@ export function resolveRendererVideoUrl(
 
   const target = new URL(`/output/${segments.map(encodeURIComponent).join("/")}`, `${publicUrl}/`);
   target.search = parsed.search;
+  // Remotion Chromium fetches source media directly; scope its URL to this launch.
+  if (accessToken) target.searchParams.set("token", accessToken);
   return target.toString();
 }
 
