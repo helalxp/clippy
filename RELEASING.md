@@ -33,46 +33,49 @@ A runtime below the configured 1.75 GiB part target remains one ZIP asset. Large
 
 Do not rename, replace, or recompress a runtime part manually. Regenerate the manifest and checksums by rebuilding the runtime.
 
-## Branch promotion model
+## Branch and promotion model
 
-Use this promotion path:
+`main` is the single authoritative branch. The former `windows-installer-hardening` and `windows-installer-release` branches completed the v0.2.3 migration and are no longer part of the ongoing release process.
+
+Use this flow for every new feature or fix:
 
 ```text
-windows-installer-hardening
-        |
-        | tested implementation and fix branch
-        v
-windows-installer-release
-        |
-        | integration branch; validate again after merge
-        v
 main
-        |
-        | release tags are cut from the accepted commit
-        v
-v< VERSION >
+ |
+ | create a short-lived feature/fix branch
+ v
+feature/<name> or fix/<name>
+ |
+ | pull request, focused review and required CI
+ v
+main
+ |
+ | accepted, validated commit
+ v
+v<VERSION> release tag
 ```
 
-- `windows-installer-hardening` is the working branch for installer/runtime hardening and its focused CI.
-- `windows-installer-release` is the integration branch for accepted Windows installer work.
-- `main` is the repository's primary branch. Promote the integration branch to main only after the first merge and post-merge validation are complete.
-
-Use pull requests for both promotions. Review the file diff and compare commit ranges before merging. Do not merge unrelated open feature PRs as part of this promotion. In particular, a separate Whisper/model-selection change should remain separate until it is independently investigated and tested.
+- Create each branch from the latest `main`.
+- Keep one feature or root-cause fix per branch where practical.
+- Open the pull request against `main`, not an old installer integration branch.
+- Review the complete diff and commit range. Reconcile with the latest main before merge.
+- Require the relevant CI on the exact PR head. Installer/runtime changes additionally require Windows validation and packaged setup/render checks.
+- Do not merge unrelated open feature PRs or combine Whisper/model-selection changes with installer lifecycle work.
+- Do not delete, reset, or force-update branches unless explicitly authorized. A completed PR can be closed/merged while the branch is cleaned up separately.
 
 ## Release sequence
 
-1. Finish the implementation on `windows-installer-hardening`. Commit the code and the related docs/runbooks together.
-2. Confirm the branch validation workflow is green. This includes runtime package builds, version validation, PowerShell contract tests, Rust checks/tests, payload preparation and NSIS installer build.
-3. Install and exercise the produced installer on a real Windows machine. Check first-run setup, app launch, the main video workflow, runtime reuse, and user-data preservation. Record any follow-up issue separately; do not mark an untested feature as verified.
-4. Open and merge a PR from `windows-installer-hardening` into `windows-installer-release`.
-5. Wait for the Windows validation workflow on `windows-installer-release` to pass after the merge.
-6. Update or open the PR from `windows-installer-release` into `main`. Review the final comparison against main, including changes that originated on the long-lived installer branch, then merge it.
-7. After the accepted code is on the intended release source branch, update the canonical version and mirrored manifests for a new release if required. Run `desktop/validate-version.ps1 -ExpectedVersion "vX.Y.Z"` (the release workflow supplies the tag automatically).
+1. Start from a clean checkout of the latest `main`, then create a short-lived feature/fix branch.
+2. Implement the scoped change and add regression tests for the reproduced behavior.
+3. Run focused tests locally where available. Push the branch and open a PR against `main`.
+4. Confirm all required CI is green on the exact PR head. For Windows installer/runtime changes, run the Windows desktop validation workflow, runtime package checks, payload/PowerShell contracts, Rust checks/tests, installer build, and first-run/render smoke tests.
+5. Exercise the relevant packaged application flow on a real Windows machine when the change affects installation, runtime setup, hardware selection, or user-facing desktop behavior. Record any remaining limitation rather than claiming it is verified.
+6. Merge the PR into `main` only after review and validation. Re-run affected checks if the merge result differs from the tested PR head.
+7. For a release, update the canonical version and synchronized manifests only after the accepted code is on `main`. Run `desktop/validate-version.ps1 -ExpectedVersion "vX.Y.Z"` (the release workflow supplies the tag automatically).
 8. Push a new annotated tag named exactly `v<VERSION>`. A tag push triggers `Clippy Windows Release`; do not cut a release tag from an unvalidated commit.
 9. The workflow builds CPU and CUDA runtime packages, verifies their manifests and reconstructed archives, runs backend/frontend and PowerShell/Rust tests, builds the NSIS installer, and runs the clean first-run/runtime/render smoke test.
 10. The workflow creates a draft GitHub Release, uploads the installer, checksum, runtime manifests and assets, verifies all expected asset names and exact sizes, and publishes only after verification succeeds.
-11. Verify the published release page and the manifest URL used by the installer. Confirm CPU and CUDA assets are all present and that the installer checksum sidecar matches the uploaded installer.
-
+11. Verify the published release page and manifest URLs. Confirm CPU and CUDA assets are all present and the installer checksum sidecar matches the uploaded installer.
 The workflow rejects a tag whose version does not match `VERSION`. Runtime downloads use the exact embedded application version, not the moving `latest` release.
 
 **Do not force-move an already published release tag.** If a tag-triggered run fails before publication, diagnose the failed step, fix the source, validate again, and only retarget an unpublished/rejected tag when the team deliberately chooses to reuse that version. Once a release has been published, use a new version for corrections.
@@ -114,8 +117,4 @@ release tag was not moved or rewritten during promotion.
 | Main push CI | [Run after merge](https://github.com/helalxp/clippy/actions/runs/44090057236), passed on merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4` |
 | Main docs-refresh CI | [Run #44090278204](https://github.com/helalxp/clippy/actions/runs/44090278204), passed on audit-refresh commit `0062eaf12e8d2ff0e22c67cd9cfa8f4d64ad1a49` |
 
-The current `main` branch includes the Windows installer and its documentation.
-The integration branch remains available for installer promotion/revalidation;
-the hardening branch remains the focused development branch. Keep Whisper
-model-selection work separate. The user-reported model-selection hiccup is
-not resolved by this installer release and must not be described as fixed.
+The current `main` branch is the authoritative source and includes the Windows installer and its documentation. The former hardening and integration branches completed their v0.2.3 promotion; use short-lived feature/fix branches from `main` for all subsequent work. Whisper model-selection remains a separate unresolved issue and must be investigated from a fresh branch, not by reviving the superseded PR #13 patch series.

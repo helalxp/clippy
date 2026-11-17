@@ -15,14 +15,11 @@
 
 ## Branches and promotion
 
-```text
-windows-installer-hardening -> windows-installer-release -> main
-```
+`main` is the single authoritative branch. The former hardening and release integration branches completed the v0.2.3 installer migration and are not ongoing development lanes.
 
-The hardening branch is where installer/runtime changes are developed and validated. The release branch is the integration point. Main receives the accepted integration state. Use pull requests for both merges and rerun the Windows validation workflow after merging into the release branch. A tag must come from the accepted, validated release commit.
+For subsequent work, create a short-lived feature/fix branch from the latest `main`, open a pull request back to `main`, and run the checks relevant to the changed subsystem on the exact PR head. Installer/runtime changes require Windows desktop validation and packaged setup/render checks. Keep Whisper model-selection changes isolated from installer lifecycle work.
 
-Do not include unrelated Whisper/model-selection changes in an installer promotion unless they have their own review and tests. Model weights are outside the installer runtime package and are downloaded/selected separately.
-
+The previous Whisper/runtime PR #13 was closed without merging. Its `windows-installer-module-path-fix` head is not an accepted implementation. The next model-selection investigation must start from current `main` with a new, narrowly scoped branch and regression tests; do not reuse or cherry-pick the superseded patch series by default. Model weights remain outside the core installer runtime package and are managed separately.
 ## Completed v0.2.3 promotion
 
 The verified v0.2.3 installer is now part of `main`.

@@ -14,7 +14,7 @@ Out of scope for this migration: accounts, billing, cloud authorization, and bra
 6. Installation and update operations are staged, verified, recoverable, and observable.
 7. The existing video pipeline and exported media behavior remain unchanged.
 
-## Current hardening implementation (under validation on windows-installer-hardening)
+## Shipped v0.2.3 implementation (validated and integrated into main)
 
 - Tauri 2 builds an NSIS installer.
 - `prepare-payload.ps1` stages Python source, requirements, assets, renderer output, Remotion source, and production Node dependencies into `app-payload.zip`.

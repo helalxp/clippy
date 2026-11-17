@@ -10,12 +10,12 @@ Read **[CLIPPY_REPO_AUDIT.md](./CLIPPY_REPO_AUDIT.md)** before engineering work.
 6. Do not reset, clean, force-push, overwrite local changes, or delete operational/legal documentation without explicit approval.
 
 
-## Windows installer release rules
+## Branch and Windows release rules
 
-- `main` is the primary branch. `windows-installer-release` is the Windows installer integration branch. `windows-installer-hardening` is the focused installer/runtime development branch.
-- Promote changes with pull requests: hardening -> installer release -> main. Review the full compare, preserve both branch histories, and validate the target branch after every merge.
+- `main` is the single authoritative branch. Create short-lived feature/fix branches from its latest commit and open pull requests back to `main`; do not use permanent installer hardening or release integration branches.
+- For installer/runtime changes, run the Windows desktop validation workflow and the relevant runtime/package smoke tests on the pull-request head. Revalidate after any merge conflict resolution or source change.
 - Do not force-push, force-merge, or force-move a published release tag to bypass conflicts.
-- Keep Whisper model-selection changes separate from installer lifecycle changes unless they are deliberately included and independently tested.
+- Keep Whisper model-selection changes separate from installer lifecycle changes. The superseded PR #13 was closed without merging; restart that investigation from current `main` with a narrow branch and tests based on a reproduced symptom.
 - Do not delete `%LOCALAPPDATA%\Clippy` as a troubleshooting shortcut. It contains user settings, output, uploads, caches, and model weights.
 - Windows PowerShell 5.1 is the product setup host. When spawning it from a PowerShell 7 environment, remove inherited `PSModulePath` at the process boundary as implemented in the Rust launcher and smoke test.
 - v0.2.3 is the verified release baseline. The full release and Windows validation runs are linked from the runtime contract and operations runbook. Do not infer that future commits are tested just because this release was.

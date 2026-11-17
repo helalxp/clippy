@@ -19,7 +19,7 @@ This addendum supersedes older branch-status and installer-readiness statements 
 - **First promotion:** PR [#14](https://github.com/helalxp/clippy/pull/14) merged `windows-installer-hardening` into `windows-installer-release` on 2026-11-17; merge commit `b2086ea27b9237c0a85d0638a24952336b77fcc7`.
 - **Main promotion:** PR [#3](https://github.com/helalxp/clippy/pull/3) merged `windows-installer-release` into `main` on 2026-11-17; merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4`.
 - **Post-merge integration validation:** [Windows desktop validation run #368](https://github.com/helalxp/clippy/actions/runs/44086793620) and [general CI](https://github.com/helalxp/clippy/actions/runs/44086795898) both passed on integration head `6873f5dcc101f8af804481d2434cdf05900e95a5`. The Windows run passed the CPU and CUDA runtime builds, PowerShell contract tests, payload preparation, Rust checks/tests, and NSIS installer build.
-- **Current branch roles:** `main` is the primary branch and now includes the v0.2.3 Windows desktop implementation; `windows-installer-release` is the integration branch; `windows-installer-hardening` is the focused installer/runtime development branch. `windows-native-migration` is the earlier migration/scaffold line, not the current installer source of truth.
+- **Current branch roles:** `main` is the single authoritative branch. Feature work uses short-lived branches created from current `main` and returns through a pull request to `main`; the former installer hardening/release branches are completed migration history, not permanent development lanes. See the refreshed branch inventory below.
 
 ### Resolved first-run smoke-test incident
 
@@ -30,14 +30,41 @@ See [the Windows installer operations runbook](./docs/architecture/windows-insta
 
 ## Current verified branch and release state (2026-11-17)
 
-- `main` includes the native Windows desktop installer and updated installer documentation. The main promotion commit was `e238e92c599c7f34357d2093db0b95dae102a7e4`.
-- `windows-installer-release` contains the reconciled installer integration at `6873f5dcc101f8af804481d2434cdf05900e95a5`.
-- `windows-installer-hardening` retains the tested implementation and focused hardening history at `cfe6e3f2878d97d5c8b4c472e55e14f9c70caae0`.
-- PR #14 promoted hardening to the integration branch; PR #3 promoted the integration branch to main. Both are merged.
-- The v0.2.3 tag remains the published installer baseline; the two branch promotions did not move or rewrite the published tag.
-- The v0.2.3 release workflow and the post-integration Windows validation/general CI are linked above. This evidence applies to the tested commit and release, not automatically to future commits.
-- The user completed a manual Windows installation and exercised the app through the editing workflow. Whisper model selection had a small hiccup and remains a separate unresolved item. Keep it out of installer lifecycle changes until it receives its own investigation and test.
+- `main` is the single authoritative branch and includes the v0.2.3 Windows installer implementation. Current main HEAD at this refresh: `68a04b02e1f560bff946a0baabc5d09940679208`.
+- The installer promotion is complete: PR #14 merged hardening into the former integration branch, and PR #3 merged that integration state into `main`. Post-merge Windows validation and general CI passed; the published `v0.2.3` tag was not moved.
+- Do not retain permanent `windows-installer-hardening` or `windows-installer-release` roles. New Windows installer changes should use a short-lived feature/fix branch from current `main` and return through a PR to `main`.
+- `feature/library-history` remains active work. PR #9 is now retargeted to `main` and remains draft; the feature branch needs reconciliation with current main and fresh Windows/CUDA validation before merge.
+- `feature/template-reference-system-clean` is the active Template Reference System line for PR #6. It remains draft and has known incomplete integration/test gates; do not merge the full feature wholesale before those gates are addressed.
+- The earlier `feature/template-reference-system` line is a legacy iteration. Comparing both directions against `feature/template-reference-system-clean` shows the clean branch has the evolved adapters, asset/package lifecycle, and broader tests. The older line's extra Tauri generated schemas and payload checksum are generated artifacts, not a reason to continue both development lines. Keep the clean branch as the sole template workstream.
+- PR #13 (Whisper/runtime mixed patch series) was closed without merging on 2026-11-17. Its head `windows-installer-module-path-fix` is not an accepted fix. Restart Whisper model-selection work from a fresh branch created from current `main`, after the user supplies the reproduction and intended starting point.
+- `codex/new-ui` and `codex/reference-templates` both point to the same old commit already contained in main and have no unique commits. They are stale duplicate refs.
 
+### Live branch inventory (2026-11-17)
+
+All ahead/behind counts below compare each remote branch tip with `main` at `68a04b0`. These are Git-history comparisons, not proof that an open feature is ready to merge.
+
+| Branch | HEAD (short) | Ahead / behind | Current disposition |
+|---|---:|---:|---|
+| `main` | `68a04b0` | primary | Keep; authoritative baseline |
+| `feature/library-history` | `9abbc9c` | 5 / 290 | Keep; PR #9 draft retargeted to main |
+| `feature/template-reference-system-clean` | `bc7f7b7` | 127 / 264 | Keep; PR #6 draft; active template line |
+| `feature/template-reference-system` | `0fc3433` | 205 / 264 | Legacy iteration; clean branch supersedes it; retire after any desired archive |
+| `windows-installer-module-path-fix` | `802db5c` | 41 / 158 | PR #13 closed as superseded; delete branch; do not reuse as the fix |
+| `windows-installer-hardening` | `cfe6e3f` | 0 / 146 | Installer changes already promoted; delete branch |
+| `windows-installer-release` | `6873f5d` | 0 / 3 | Main contains it; PR #9 retargeted and PR #13 closed; delete branch |
+| `codex/new-ui` | `9639d8a` | 0 / 249 | Stale duplicate; delete branch |
+| `codex/reference-templates` | `9639d8a` | 0 / 249 | Same tip as codex/new-ui; delete branch |
+
+### Pull-request housekeeping and cleanup status
+
+- PR #9 was retargeted from `windows-installer-release` to `main` on 2026-11-17. It remains a draft with 5 feature commits and must be reconciled/tested before merge.
+- PR #13 was closed without merging on 2026-11-17 and explicitly marked superseded. The next Whisper fix must not import or cherry-pick this 41-commit patch series by default.
+- PR #6 remains a draft on `feature/template-reference-system-clean`; preserve its active branch while the template feature is developed.
+- Branch retirement has been authorized for `codex/new-ui`, `codex/reference-templates`, `windows-installer-hardening`, `windows-installer-release`, and `windows-installer-module-path-fix`. The remote refs must not be reported as deleted until a GitHub branch-delete operation succeeds. The older `feature/template-reference-system` is a separate legacy cleanup candidate; preserve the clean branch and its PR as the active implementation.
+
+### Fresh Whisper investigation boundary
+
+Start from the current `main` HEAD, not PR #13 or its branch. First reproduce the user's model-selection symptom and capture the exact UI action, saved setting, selected model, installed model files, expected device, actual device, and error/log output. Then trace the selection end-to-end through frontend state, settings persistence, desktop environment/configuration, backend Whisper configuration, model availability/loading, and faster-whisper/CTranslate2 device detection. Add targeted tests for the reproduced failure before changing runtime or installer behavior. Keep the fix narrowly scoped so it can ship as a patch release if the regression is confirmed.
 
 
 ---
@@ -50,7 +77,7 @@ The audit grew through multiple append-only review passes. Repeated IDs were amb
 
 1. Read this file before engineering work, then read branch-specific `AGENTS.md` / `CLAUDE.md` and platform contracts if present.
 2. Confirm the actual checkout: `git status --short`, `git branch --show-current`, `git branch -avv`, `git remote -v`, `git log --oneline --decorate -12`.
-3. Never assume the current checkout or its feature set from the branch name alone. The v0.2.3 native Windows installer is now included in `main`; `windows-installer-hardening` and `windows-installer-release` remain the focused development/integration branches. `windows-native-migration` is an earlier historical scaffold branch.
+3. Never assume the current checkout or its feature set from the branch name alone. The v0.2.3 native Windows installer is included in `main`. `main` is the single authoritative baseline; create feature/fix branches from its current head and target pull requests back to `main`. The installer hardening/release branches are completed historical promotion branches, not ongoing integration lanes.
 4. Source, tests, configuration, and Git history outrank this document. If this document conflicts with checked-out code, trust the code and update this document.
 5. Preserve user work and data. Do not run destructive Git commands, force-push, reset, clean, delete, overwrite, or merge without explicit authorization.
 6. Do not apply stored `.patch` files without first running `git apply --check` and examining the target files and local diffs.
