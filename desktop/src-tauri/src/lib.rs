@@ -501,13 +501,16 @@ fn check_runtime_blocking() -> Result<bootstrap::BootstrapStatus, String> {
     let local = std::env::var_os("LOCALAPPDATA")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| "LOCALAPPDATA not found".to_string())?;
-    let runtime_root = local.join("Clippy").join("runtime");
+    let install_root = local.join("Clippy");
+    let runtime_root = install_root.join("runtime");
+    let data_root = data_storage::configured_data_directory(&install_root)?;
 
     // The manifest belongs to the per-user installation, never the developer checkout.
-    let manifest_path = local.join("Clippy").join("runtime-manifest.json");
+    let manifest_path = install_root.join("runtime-manifest.json");
     let config = bootstrap::BootstrapConfig {
         runtime_root,
         manifest_path,
+        data_root,
     };
 
     let bootstrap = Bootstrap::new(config);
