@@ -71,6 +71,14 @@ Describe "Assembled Clippy application payload contract" {
         $setupSource | Should -Not -Match 'Join-Path \$Root "data\\(output|uploads|models|reference_templates)"'
     }
 
+    It "smoke-tests runtime setup with a relocated data directory" {
+        $smokeSource = Get-Content (Join-Path $PSScriptRoot "../smoke-test-runtime.ps1") -Raw
+        $smokeSource | Should -Match 'external-clippy-data'
+        $smokeSource | Should -Match 'storage-location\.json'
+        $smokeSource | Should -Match '\$env:CLIPPY_DATA_DIR = \$dataRoot'
+        $smokeSource | Should -Match 'unexpectedly created a default data folder'
+    }
+
     It "packages the helper scripts next to setup-runtime.ps1" {
         $setupEntry = Get-PayloadZipEntry "setup-runtime.ps1"
         $stream = $setupEntry.Open()
