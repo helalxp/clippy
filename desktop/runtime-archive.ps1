@@ -3,7 +3,26 @@
 $script:ClippyRuntimeMaxPartBytes = [long](1.75 * 1GB)
 
 function Get-ClippyFileSha256([string]$Path) {
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Cannot calculate SHA-256 because the file does not exist: $Path"
+    }
+
+    $stream = $null
+    $sha = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read
+        )
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $digest = $sha.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        if ($sha) { $sha.Dispose() }
+    }
 }
 
 function Assert-ClippyRuntimePartName([string]$Name) {

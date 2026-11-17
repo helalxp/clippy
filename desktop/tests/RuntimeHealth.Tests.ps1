@@ -7,7 +7,7 @@ Describe 'Runtime repair regressions' {
 
 Describe 'Runtime SHA-256 helper' {
     BeforeAll {
-        . (Join-Path $PSScriptRoot '../runtime-health.ps1')
+        . (Join-Path $PSScriptRoot '../runtime-archive.ps1')
     }
 
     It 'calculates the standard SHA-256 digest without PowerShell utility cmdlets' {
