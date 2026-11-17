@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Cpu, Download, FolderOpen, HardDrive, RefreshCw,
-  CheckCircle2, AlertCircle, Loader2, CloudDownload,
+  CheckCircle2, AlertCircle, Loader2,
 } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
@@ -122,7 +122,7 @@ export default function LocalModelSettings() {
         setSelectionDirty(false);
         setMessage(`Whisper ${modelSize} was already downloaded and is now selected.`);
       } else {
-        const result = await apiJson('/api/local-models/whisper/download', {
+        await apiJson('/api/local-models/whisper/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ model_size: modelSize }),
