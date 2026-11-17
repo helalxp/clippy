@@ -105,6 +105,30 @@ def test_catalog_selection_uses_managed_directory_for_transcription(tmp_path, mo
     assert models.whisper_model_argument() == str(model_dir.resolve())
 
 
+def test_legacy_managed_catalog_path_is_not_misclassified_as_custom(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    model_dir = make_model(tmp_path / "models" / "whisper" / "small")
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps({
+            "whisper": {
+                "model_size": "small",
+                "model_path": str(model_dir.resolve()),
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    selection = models.get_whisper_selection()
+
+    assert selection["source"] == "catalog"
+    assert selection["installed"] is True
+    assert selection["model_path"] == str(model_dir.resolve())
+
+
 def test_catalog_verification_uses_the_same_resolved_path_as_transcription(
     tmp_path, monkeypatch
 ):
@@ -157,10 +181,10 @@ def _install_fake_snapshot_download(monkeypatch):
     import sys
     import types
 
+    from pathlib import Path
+
     def snapshot_download(repo_id, local_dir):
         make_model(Path(local_dir))
-
-    from pathlib import Path
     monkeypatch.setitem(
         sys.modules, "huggingface_hub",
         types.SimpleNamespace(snapshot_download=snapshot_download),
@@ -205,9 +229,11 @@ def test_download_activates_model_when_selection_has_not_changed(
     task = models.list_download_tasks()["download-small"]
 
     assert selection["model_size"] == "small"
-    assert selection["source"] == "local"
+    assert selection["source"] == "catalog"
     assert selection["installed"] is True
-    assert models.whisper_model_argument() == selection["model_path"]
+    expected_path = (tmp_path / "models" / "whisper" / "small").resolve()
+    assert selection["model_path"] == str(expected_path)
+    assert models.whisper_model_argument() == str(expected_path)
     assert task["status"] == "complete"
     assert task["activated"] is True
 
