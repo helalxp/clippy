@@ -176,3 +176,20 @@ The complete release workflow passed on 2026-11-17 for source commit
 - A real Windows install was manually exercised through the editing workflow. Whisper model selection had a small follow-up issue and is outside the installer milestone recorded here.
 
 The PowerShell 7 to Windows PowerShell 5.1 module-path regression is handled at the process boundary. The Tauri Rust launcher removes inherited `PSModulePath` before spawning the legacy PowerShell host; the CI smoke-test launcher applies the same isolation and preflights the standard cmdlets before setup. The actual setup, runtime reuse, and packaged render smoke checks passed.
+
+
+## Completed promotion into main
+
+The v0.2.3 installer implementation has been merged through the planned branch
+sequence. PR #14 merged the hardening branch into `windows-installer-release`
+(commit `b2086ea27b9237c0a85d0638a24952336b77fcc7`). PR #3 then merged the
+integration branch into `main` (commit
+`e238e92c599c7f34357d2093db0b95dae102a7e4`).
+
+The reconciled integration head passed [Windows validation run #368](https://github.com/helalxp/clippy/actions/runs/44086793620) and [general CI](https://github.com/helalxp/clippy/actions/runs/44086795898).
+Main CI passed after the merge and again after the subsequent docs-only audit
+refresh. The published v0.2.3 tag remains on the original release-tested
+commit; it was not moved by branch promotion.
+
+The user-reported Whisper model-selection hiccup remains a separate follow-up.
+It is intentionally outside this installer milestone.

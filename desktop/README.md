@@ -91,3 +91,15 @@ Two GitHub Actions workflows protect this path:
 The smoke test is deliberately stronger than a script syntax test. It extracts the exact packaged payload into an isolated `LOCALAPPDATA`, runs the real first-run setup using the CPU runtime, verifies the managed runtime manifest and backend imports, renders a fixture through the packaged Remotion browser, and reruns setup to verify that a healthy install is reused without downloads.
 
 See [RELEASING.md](../RELEASING.md), the [first-run setup contract](FIRST_RUN_SETUP_CONTRACT.md), and the [Windows installer operations runbook](../docs/architecture/windows-installer-operations-runbook.md) before changing packaging or release logic.
+
+
+## Current merged baseline
+
+The v0.2.3 installer implementation is included in `main`. The two promotion
+PRs are [#14](https://github.com/helalxp/clippy/pull/14) and
+[#3](https://github.com/helalxp/clippy/pull/3). The post-integration Windows
+validation and general CI passed on integration commit
+`6873f5dcc101f8af804481d2434cdf05900e95a5`; main CI also passed after merge.
+See [the release procedure](../RELEASING.md) for exact merge commits and run
+links. Whisper model selection remains a separate issue and is not claimed as
+fixed by v0.2.3.

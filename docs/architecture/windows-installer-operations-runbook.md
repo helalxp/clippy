@@ -23,6 +23,22 @@ The hardening branch is where installer/runtime changes are developed and valida
 
 Do not include unrelated Whisper/model-selection changes in an installer promotion unless they have their own review and tests. Model weights are outside the installer runtime package and are downloaded/selected separately.
 
+## Completed v0.2.3 promotion
+
+The verified v0.2.3 installer is now part of `main`.
+
+- [PR #14](https://github.com/helalxp/clippy/pull/14) merged `windows-installer-hardening` into `windows-installer-release` at `b2086ea27b9237c0a85d0638a24952336b77fcc7`.
+- [PR #3](https://github.com/helalxp/clippy/pull/3) merged `windows-installer-release` into `main` at `e238e92c599c7f34357d2093db0b95dae102a7e4`.
+- [Windows validation run #368](https://github.com/helalxp/clippy/actions/runs/44086793620) passed all Windows validation jobs on integration head `6873f5dcc101f8af804481d2434cdf05900e95a5`, including CPU and CUDA runtime packages and the NSIS installer build.
+- [General PR CI](https://github.com/helalxp/clippy/actions/runs/44086795898) passed backend tests and frontend build on that same head.
+- [Main CI after merge](https://github.com/helalxp/clippy/actions/runs/44090057236) passed on merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4`.
+- The follow-up repository-audit refresh at `0062eaf12e8d2ff0e22c67cd9cfa8f4d64ad1a49` was documentation-only and [main CI passed](https://github.com/helalxp/clippy/actions/runs/44090278204).
+
+The `v0.2.3` release tag was not moved during either merge. The manually observed
+Whisper model-selection hiccup remains separate and unresolved; do not change
+the validated installer/runtime code to address it without a focused diagnosis
+and its own regression test.
+
 ## What the release smoke test proves
 
 `desktop/smoke-test-runtime.ps1` is an end-to-end integration gate, not just a syntax or unit test. It:

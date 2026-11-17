@@ -1,7 +1,7 @@
 # Windows Release Versioning and Runtime Asset Delivery Contract
 
-**Status:** v0.2.3 published; release CI and Windows desktop validation passed; real Windows install exercised through the editing workflow  
-**Implementation branch:** `windows-installer-hardening` (promotion target: `windows-installer-release`, then `main`)  
+**Status:** v0.2.3 published and promoted to `main`; release, integration Windows validation, and main CI passed; real Windows install exercised through the editing workflow  
+**Implementation branch:** `windows-installer-hardening` → `windows-installer-release` → `main`  
 **Application version:** `0.2.3`  
 **Last reviewed:** 2026-11-17
 
@@ -290,4 +290,11 @@ The smoke test launches the actual first-run setup in an isolated `LOCALAPPDATA`
 
 For the PowerShell module-path regression, the native Rust launcher removes inherited `PSModulePath` before launching Windows PowerShell 5.1. The smoke-test process helper performs the same isolation and preflights `Get-FileHash` and `ConvertFrom-Json` before setup. Do not replace this process-boundary fix with broad environment resets or a switch to PowerShell 7 without repeating the compatibility tests.
 
-The v0.2.3 implementation passed the documented CI and manual Windows checks. The promotion sequence for this accepted installer baseline is `windows-installer-hardening` → `windows-installer-release` → `main`; record each merge commit and its post-merge validation here when completed.
+The v0.2.3 implementation has completed both branch promotions:
+
+- `windows-installer-hardening` → `windows-installer-release`: PR [#14](https://github.com/helalxp/clippy/pull/14), merge commit `b2086ea27b9237c0a85d0638a24952336b77fcc7`.
+- `windows-installer-release` → `main`: PR [#3](https://github.com/helalxp/clippy/pull/3), merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4`.
+- The merged integration head passed [Windows validation run #368](https://github.com/helalxp/clippy/actions/runs/44086793620) and [general CI](https://github.com/helalxp/clippy/actions/runs/44086795898).
+- The resulting main merge commit passed [main CI](https://github.com/helalxp/clippy/actions/runs/44090057236). The subsequent audit-refresh commit `0062eaf12e8d2ff0e22c67cd9cfa8f4d64ad1a49` also passed [main CI](https://github.com/helalxp/clippy/actions/runs/44090278204).
+
+The v0.2.3 release tag remains attached to the original tested release source commit. Promotion did not retarget or rewrite that published tag. The user-reported Whisper model-selection hiccup remains a separate open follow-up.

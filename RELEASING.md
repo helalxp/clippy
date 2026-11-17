@@ -99,3 +99,23 @@ The v0.2.3 release was published on 2026-11-17 after all release workflow steps 
 - [Windows desktop validation run #360](https://github.com/helalxp/clippy/actions/runs/44062955499): passed on the same source commit.
 - The release contains 10 assets: installer and checksum, CPU runtime and manifest/checksums, CUDA manifest, two CUDA parts, and CUDA part checksums.
 - The installer was manually installed and exercised on a Windows machine through the editing workflow. A Whisper model-selection hiccup was noted for separate follow-up; it is not described as fixed by this release.
+
+## Completed v0.2.3 branch promotion record
+
+The v0.2.3 installer implementation is now integrated into `main`. The published
+release tag was not moved or rewritten during promotion.
+
+| Promotion/check | Result |
+|---|---|
+| `windows-installer-hardening` → `windows-installer-release` | PR [#14](https://github.com/helalxp/clippy/pull/14), merged 2026-11-17; merge commit `b2086ea27b9237c0a85d0638a24952336b77fcc7` |
+| `windows-installer-release` → `main` | PR [#3](https://github.com/helalxp/clippy/pull/3), merged 2026-11-17; merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4` |
+| Post-merge Windows integration validation | [Run #368](https://github.com/helalxp/clippy/actions/runs/44086793620), passed on integration commit `6873f5dcc101f8af804481d2434cdf05900e95a5`; CPU/CUDA runtime builds and Windows installer validation all passed |
+| Post-merge general CI | [PR CI](https://github.com/helalxp/clippy/actions/runs/44086795898), passed backend tests and frontend build on the same integration commit |
+| Main push CI | [Run after merge](https://github.com/helalxp/clippy/actions/runs/44090057236), passed on merge commit `e238e92c599c7f34357d2093db0b95dae102a7e4` |
+| Main docs-refresh CI | [Run #44090278204](https://github.com/helalxp/clippy/actions/runs/44090278204), passed on audit-refresh commit `0062eaf12e8d2ff0e22c67cd9cfa8f4d64ad1a49` |
+
+The current `main` branch includes the Windows installer and its documentation.
+The integration branch remains available for installer promotion/revalidation;
+the hardening branch remains the focused development branch. Keep Whisper
+model-selection work separate. The user-reported model-selection hiccup is
+not resolved by this installer release and must not be described as fixed.
