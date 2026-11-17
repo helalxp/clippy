@@ -465,3 +465,27 @@ def test_repair_failure_keeps_parakeet_text(monkeypatch):
     t = _drift_transcript()
     assert tb._repair_script_drift(t, "/tmp/x.wav") == 0
     assert t["segments"][1]["text"].startswith("Тудей")
+
+# --- packaged desktop model-selection precedence ----------------------------
+
+def test_desktop_saved_model_selection_ignores_whisper_env_override(tmp_path, monkeypatch):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"whisper": {"model_size": "medium"}}), encoding="utf-8")
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("CLIPPY_DESKTOP_MODE", "1")
+    monkeypatch.setenv("WHISPER_MODEL", "tiny")
+
+    assert tb.get_whisper_config()["model_size"] == "medium"
+
+
+def test_server_whisper_env_override_remains_supported(tmp_path, monkeypatch):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"whisper": {"model_size": "medium"}}), encoding="utf-8")
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.delenv("CLIPPY_DESKTOP_MODE", raising=False)
+    monkeypatch.setenv("WHISPER_MODEL", "tiny")
+
+    assert tb.get_whisper_config()["model_size"] == "tiny"
+
