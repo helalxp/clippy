@@ -156,7 +156,10 @@ pub fn copy_tree_verified(
     let source_root = source.canonicalize().map_err(|error| error.to_string())?;
     let reserve_bytes = (total_bytes / 20).max(64 * 1024 * 1024);
     let required_bytes = total_bytes.saturating_add(reserve_bytes);
-    let available_bytes = available_space(destination)?;
+    let capacity_path = destination
+        .parent()
+        .ok_or_else(|| "The selected destination has no parent folder.".to_string())?;
+    let available_bytes = available_space(capacity_path)?;
     if available_bytes < required_bytes {
         return Err(format!(
             "The selected drive does not have enough free space. Clippy needs about {:.2} GiB including a safety margin, but only {:.2} GiB is available.",
