@@ -98,6 +98,33 @@ try {
     }
 
     $powershell = (Get-Command "powershell.exe" -ErrorAction Stop).Source
+
+    function Start-WindowsPowerShellProcess {
+        param(
+            [Parameter(Mandatory = $true)][string[]]$Arguments,
+            [Parameter(Mandatory = $true)][string]$StandardOutputPath,
+            [Parameter(Mandatory = $true)][string]$StandardErrorPath
+        )
+
+        # The smoke-test host is PowerShell 7, while the product intentionally
+        # uses Windows PowerShell 5.1. Do not let PowerShell 7's module paths
+        # leak into the legacy child process. With PSModulePath absent, Windows
+        # PowerShell reconstructs its own compatible module search path.
+        $hadModulePath = Test-Path Env:PSModulePath
+        $savedModulePath = $env:PSModulePath
+        try {
+            Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+            $child = Start-Process -FilePath $powershell -ArgumentList $Arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $StandardOutputPath -RedirectStandardError $StandardErrorPath
+            return $child
+        } finally {
+            if ($hadModulePath) {
+                $env:PSModulePath = $savedModulePath
+            } else {
+                Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
     $quotedSetupScript = '"' + $setupScript + '"'
     $argumentList = @(
@@ -110,8 +137,42 @@ try {
         $quotedSetupScript
     )
 
+    # Prove that the exact Windows PowerShell host used by Clippy starts with
+    # its own standard modules and can resolve the hash command before setup.
+    $moduleProbeScript = Join-Path $smokeRoot "verify-windows-powershell.ps1"
+    $moduleProbeContent = @'
+$ErrorActionPreference = "Stop"
+if ($PSVersionTable.PSEdition -ne "Desktop" -or $PSVersionTable.PSVersion.Major -ne 5) {
+    throw "Expected Windows PowerShell 5.1; found $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)."
+}
+$hashCommand = Get-Command Get-FileHash -ErrorAction Stop
+$jsonCommand = Get-Command ConvertFrom-Json -ErrorAction Stop
+Write-Output "PSEdition=$($PSVersionTable.PSEdition)"
+Write-Output "PSVersion=$($PSVersionTable.PSVersion)"
+Write-Output "PSModulePath=$env:PSModulePath"
+Write-Output "Get-FileHashModule=$($hashCommand.Source)"
+Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
+'@
+    [IO.File]::WriteAllText($moduleProbeScript, $moduleProbeContent, [Text.UTF8Encoding]::new($false))
+    $probeStdout = Join-Path $smokeRoot "windows-powershell-probe.stdout.log"
+    $probeStderr = Join-Path $smokeRoot "windows-powershell-probe.stderr.log"
+    $probeArguments = @("-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + $moduleProbeScript + '"'))
+    $probeProcess = Start-WindowsPowerShellProcess -Arguments $probeArguments -StandardOutputPath $probeStdout -StandardErrorPath $probeStderr
+    if ($probeProcess.ExitCode -ne 0) {
+        $probeDetails = @()
+        foreach ($logPath in @($probeStdout, $probeStderr)) {
+            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+                $probeDetails += "===== $logPath ====="
+                $probeDetails += Get-Content -LiteralPath $logPath -Tail 40
+            }
+        }
+        throw ("Windows PowerShell 5.1 module preflight failed with exit code $($probeProcess.ExitCode)." + [Environment]::NewLine + ($probeDetails -join [Environment]::NewLine))
+    }
+    Write-Host "Windows PowerShell 5.1 module preflight passed:"
+    Get-Content -LiteralPath $probeStdout | ForEach-Object { Write-Host $_ }
+
     Write-Host "Running the actual first-run runtime setup in an isolated LOCALAPPDATA root..."
-    $process = Start-Process -FilePath $powershell -ArgumentList $argumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $setupStdout -RedirectStandardError $setupStderr
+    $process = Start-WindowsPowerShellProcess -Arguments $argumentList -StandardOutputPath $setupStdout -StandardErrorPath $setupStderr
     if ($process.ExitCode -ne 0) {
         $details = @()
         foreach ($logPath in @($setupLog, $setupStdout, $setupStderr)) {
@@ -175,7 +236,7 @@ try {
     Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE,Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue
     $rerunOut = Join-Path $smokeRoot 'rerun.stdout.log'
     $rerunErr = Join-Path $smokeRoot 'rerun.stderr.log'
-    $rerun = Start-Process -FilePath $powershell -ArgumentList $argumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $rerunOut -RedirectStandardError $rerunErr
+    $rerun = Start-WindowsPowerShellProcess -Arguments $argumentList -StandardOutputPath $rerunOut -StandardErrorPath $rerunErr
     if ($rerun.ExitCode -ne 0 -or (Get-Content $rerunOut -Raw) -notmatch 'No downloads needed') { throw 'Healthy setup did not reuse the installed runtime.' }
     Write-Host "Clean first-run runtime and rendering smoke tests passed for Clippy $appVersion."
 } finally {

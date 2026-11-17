@@ -500,6 +500,10 @@ fn setup_runtime_blocking(app: tauri::AppHandle) -> Result<String, String> {
             "-File",
         ])
         .arg(&script)
+        // The desktop app may itself be launched from PowerShell 7. Remove its
+        // module path before starting Windows PowerShell 5.1 so the legacy host
+        // initializes its own compatible modules instead of inheriting PS7 paths.
+        .env_remove("PSModulePath")
         .env("CLIPPY_SETUP_WAIT_STDIN", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
