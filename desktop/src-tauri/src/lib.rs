@@ -216,7 +216,9 @@ fn resolve_any_download_path(raw: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| "Download folder is invalid".to_string())?
         .canonicalize()
         .map_err(|error| format!("Download folder is unavailable: {error}"))?;
-    if parent != clip_download_root()? {
+    let download_root = clip_download_root()?.canonicalize()
+        .map_err(|error| format!("Clippy download folder is unavailable: {error}"))?;
+    if parent != download_root {
         return Err("Downloads can only be written inside the Clippy download folder.".to_string());
     }
     let extension = requested.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
