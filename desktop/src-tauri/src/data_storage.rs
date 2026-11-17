@@ -128,6 +128,26 @@ pub fn validate_destination(source: &Path, destination: &Path) -> Result<(PathBu
     Ok((source, destination))
 }
 
+pub fn validate_destination_outside_install_root(
+    install_root: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    reject_link(install_root)?;
+    reject_link(destination)?;
+    let install_root = install_root
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve the Clippy installation directory: {error}"))?;
+    let destination = destination
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve the selected data location: {error}"))?;
+    if is_within_root(&destination, &install_root) {
+        return Err(
+            "Choose a data folder outside %LOCALAPPDATA%\\Clippy so application updates cannot replace your data.".into(),
+        );
+    }
+    Ok(())
+}
+
 pub fn staging_path(destination: &Path) -> Result<PathBuf, String> {
     let parent = destination
         .parent()
@@ -516,6 +536,21 @@ mod tests {
         assert!(validate_destination(&source, &source.join("nested")).is_err());
         assert!(validate_destination(&source, &root).is_err());
         assert!(validate_destination(&source, &destination).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refuses_a_destination_inside_the_managed_installation() {
+        let root = temp_root();
+        let install_root = root.join("Clippy");
+        let inside_install = install_root.join("app/current/new-data");
+        let external = root.join("external-data");
+        fs::create_dir_all(&inside_install).unwrap();
+        fs::create_dir_all(&external).unwrap();
+
+        assert!(validate_destination_outside_install_root(&install_root, &inside_install).is_err());
+        assert!(validate_destination_outside_install_root(&install_root, &external).is_ok());
+
         fs::remove_dir_all(root).unwrap();
     }
 

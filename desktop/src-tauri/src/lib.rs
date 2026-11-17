@@ -159,6 +159,7 @@ fn move_data_directory_blocking(
     let current = supervisor.data_directory()?;
     let (source, destination) =
         data_storage::validate_destination(&current, Path::new(destination.trim()))?;
+    data_storage::validate_destination_outside_install_root(&install_root, &destination)?;
     let staging = data_storage::staging_path(&destination)?;
 
     // The backend atomically rejects new mutations and refuses this handshake
