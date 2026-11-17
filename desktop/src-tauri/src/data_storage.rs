@@ -481,6 +481,8 @@ mod tests {
         let source = root.join("data");
         let destination = root.join("new-data");
         let staging = root.join(".new-data-staging");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
         fs::create_dir_all(source.join("library/projects/project-a/clips")).unwrap();
         fs::write(source.join("library/projects/project-a/project.json"), b"{\"title\":\"demo\"}").unwrap();
         fs::write(source.join("library/projects/project-a/clips/clip.mp4"), b"video bytes").unwrap();
