@@ -2574,15 +2574,14 @@ _DATA_MOVE_ACTIVE_BACKGROUND_TASKS = 0
 
 
 def _create_data_background_task(coroutine):
-    """Track background work that may read or write under the movable data root."""
+    """Track background work that may read or write under the movable data root.
+
+    A request admitted before relocation may still register its task while the
+    move flag is raised. The move handshake drains that request and then waits
+    for the task, so rejecting it here would interrupt legitimate in-flight work.
+    """
     global _DATA_MOVE_ACTIVE_BACKGROUND_TASKS
     with _DATA_MOVE_LOCK:
-        if _DATA_MOVE_PENDING:
-            coroutine.close()
-            raise HTTPException(
-                status_code=503,
-                detail="Clippy data is being relocated. Try again after the app restarts.",
-            )
         _DATA_MOVE_ACTIVE_BACKGROUND_TASKS += 1
     try:
         task = asyncio.create_task(coroutine)
