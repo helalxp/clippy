@@ -32,6 +32,8 @@ $originalLocalAppData = $env:LOCALAPPDATA
 $originalRuntimeArchive = $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE
 $originalRuntimeChecksum = $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM
 $originalForceCpuRuntime = $env:CLIPPY_FORCE_CPU_RUNTIME
+$originalEnvironment = @{}
+foreach ($key in @('PATH','OUTPUT_DIR','UPLOAD_DIR','REFERENCE_TEMPLATES_DIR','CLIPPY_SETTINGS_PATH','PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { $originalEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process') }
 if ([string]::IsNullOrWhiteSpace($originalLocalAppData)) {
     throw "The first-run smoke test requires the Windows LOCALAPPDATA environment variable."
 }
@@ -48,7 +50,7 @@ try {
     Assert-Sha256 $PayloadArchive $PayloadChecksum "embedded application payload"
     Assert-Sha256 $CpuRuntimeArchive $CpuRuntimeChecksum "CPU Python runtime archive"
 
-    $runtimeManifestPath = Join-Path $PSScriptRoot "runtime-dist\clippy-python-cpu.manifest.json"
+    $runtimeManifestPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($CpuRuntimeArchive))) 'clippy-python-cpu.manifest.json'
     Assert-File $runtimeManifestPath "CPU runtime release manifest"
     $runtimeManifest = Get-Content -LiteralPath $runtimeManifestPath -Raw | ConvertFrom-Json
     $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -82,6 +84,8 @@ try {
         "setup-runtime.ps1",
         "runtime-archive.ps1",
         "runtime-manifest-state.ps1",
+        "runtime-health.ps1",
+        "runtime-contract.json",
         "app.py",
         "requirements.txt",
         "VERSION",
@@ -94,6 +98,33 @@ try {
     }
 
     $powershell = (Get-Command "powershell.exe" -ErrorAction Stop).Source
+
+    function Start-WindowsPowerShellProcess {
+        param(
+            [Parameter(Mandatory = $true)][string[]]$Arguments,
+            [Parameter(Mandatory = $true)][string]$StandardOutputPath,
+            [Parameter(Mandatory = $true)][string]$StandardErrorPath
+        )
+
+        # The smoke-test host is PowerShell 7, while the product intentionally
+        # uses Windows PowerShell 5.1. Do not let PowerShell 7's module paths
+        # leak into the legacy child process. With PSModulePath absent, Windows
+        # PowerShell reconstructs its own compatible module search path.
+        $hadModulePath = Test-Path Env:PSModulePath
+        $savedModulePath = $env:PSModulePath
+        try {
+            Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+            $child = Start-Process -FilePath $powershell -ArgumentList $Arguments -Wait -PassThru -NoNewWindow -RedirectStandardOutput $StandardOutputPath -RedirectStandardError $StandardErrorPath
+            return $child
+        } finally {
+            if ($hadModulePath) {
+                $env:PSModulePath = $savedModulePath
+            } else {
+                Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     $setupScript = Join-Path $appDirectory "setup-runtime.ps1"
     $quotedSetupScript = '"' + $setupScript + '"'
     $argumentList = @(
@@ -106,8 +137,42 @@ try {
         $quotedSetupScript
     )
 
+    # Prove that the exact Windows PowerShell host used by Clippy starts with
+    # its own standard modules and can resolve the hash command before setup.
+    $moduleProbeScript = Join-Path $smokeRoot "verify-windows-powershell.ps1"
+    $moduleProbeContent = @'
+$ErrorActionPreference = "Stop"
+if ($PSVersionTable.PSEdition -ne "Desktop" -or $PSVersionTable.PSVersion.Major -ne 5) {
+    throw "Expected Windows PowerShell 5.1; found $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)."
+}
+$hashCommand = Get-Command Get-FileHash -ErrorAction Stop
+$jsonCommand = Get-Command ConvertFrom-Json -ErrorAction Stop
+Write-Output "PSEdition=$($PSVersionTable.PSEdition)"
+Write-Output "PSVersion=$($PSVersionTable.PSVersion)"
+Write-Output "PSModulePath=$env:PSModulePath"
+Write-Output "Get-FileHashModule=$($hashCommand.Source)"
+Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
+'@
+    [IO.File]::WriteAllText($moduleProbeScript, $moduleProbeContent, [Text.UTF8Encoding]::new($false))
+    $probeStdout = Join-Path $smokeRoot "windows-powershell-probe.stdout.log"
+    $probeStderr = Join-Path $smokeRoot "windows-powershell-probe.stderr.log"
+    $probeArguments = @("-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ('"' + $moduleProbeScript + '"'))
+    $probeProcess = Start-WindowsPowerShellProcess -Arguments $probeArguments -StandardOutputPath $probeStdout -StandardErrorPath $probeStderr
+    if ($probeProcess.ExitCode -ne 0) {
+        $probeDetails = @()
+        foreach ($logPath in @($probeStdout, $probeStderr)) {
+            if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+                $probeDetails += "===== $logPath ====="
+                $probeDetails += Get-Content -LiteralPath $logPath -Tail 40
+            }
+        }
+        throw ("Windows PowerShell 5.1 module preflight failed with exit code $($probeProcess.ExitCode)." + [Environment]::NewLine + ($probeDetails -join [Environment]::NewLine))
+    }
+    Write-Host "Windows PowerShell 5.1 module preflight passed:"
+    Get-Content -LiteralPath $probeStdout | ForEach-Object { Write-Host $_ }
+
     Write-Host "Running the actual first-run runtime setup in an isolated LOCALAPPDATA root..."
-    $process = Start-Process -FilePath $powershell -ArgumentList $argumentList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $setupStdout -RedirectStandardError $setupStderr
+    $process = Start-WindowsPowerShellProcess -Arguments $argumentList -StandardOutputPath $setupStdout -StandardErrorPath $setupStderr
     if ($process.ExitCode -ne 0) {
         $details = @()
         foreach ($logPath in @($setupLog, $setupStdout, $setupStderr)) {
@@ -144,15 +209,38 @@ try {
         }
     }
 
-    & $pythonExe -c "import app, torch, fastapi, faster_whisper; assert torch.version.cuda is None; print('Backend imports and CPU runtime OK:', torch.__version__)"
+    foreach ($key in @('PYTHONHOME','PYTHONPATH','NODE_OPTIONS','NODE_PATH')) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
+    $env:OUTPUT_DIR = Join-Path $root 'data\output'
+    $env:UPLOAD_DIR = Join-Path $root 'data\uploads'
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $root 'data\reference_templates'
+    $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
+    & $pythonExe -c "import sys,pathlib,app,torch,fastapi,faster_whisper; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(); assert torch.version.cuda is None; print('Packaged backend imports and CPU runtime OK:', torch.__version__)" $appDirectory
     if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
     & $nodeExe --version
     if ($LASTEXITCODE -ne 0) { throw "Managed Node.js executable smoke test failed." }
     & $ffmpegExe -version *> $null
     if ($LASTEXITCODE -ne 0) { throw "Managed FFmpeg executable smoke test failed." }
 
-    Write-Host "Clean first-run runtime smoke test passed for Clippy $appVersion."
+    # Match the supervisor's private environment for the post-setup checks.
+    $env:OUTPUT_DIR = Join-Path $root 'data\output'
+    $env:UPLOAD_DIR = Join-Path $root 'data\uploads'
+    $env:REFERENCE_TEMPLATES_DIR = Join-Path $root 'data\reference_templates'
+    $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
+    $env:PATH = (Split-Path $nodeExe -Parent) + ';' + (Split-Path $ffmpegExe -Parent) + ';' + "$env:SystemRoot\System32"
+    $fixture = Join-Path $smokeRoot 'fixture.mp4'
+    & $ffmpegExe -hide_banner -loglevel error -f lavfi -i 'color=c=blue:s=180x320:r=12:d=1' -an -c:v libx264 -pix_fmt yuv420p $fixture
+    if ($LASTEXITCODE -ne 0) { throw 'Could not create render smoke fixture.' }
+    & $nodeExe (Join-Path $PSScriptRoot 'smoke-render.mjs') $appDirectory $browserExe $fixture (Join-Path $smokeRoot 'rendered.mp4')
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged render smoke test failed.' }
+    # A healthy second setup must succeed without the local archive and without downloads.
+    Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE,Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue
+    $rerunOut = Join-Path $smokeRoot 'rerun.stdout.log'
+    $rerunErr = Join-Path $smokeRoot 'rerun.stderr.log'
+    $rerun = Start-WindowsPowerShellProcess -Arguments $argumentList -StandardOutputPath $rerunOut -StandardErrorPath $rerunErr
+    if ($rerun.ExitCode -ne 0 -or (Get-Content $rerunOut -Raw) -notmatch 'No downloads needed') { throw 'Healthy setup did not reuse the installed runtime.' }
+    Write-Host "Clean first-run runtime and rendering smoke tests passed for Clippy $appVersion."
 } finally {
+    foreach ($key in $originalEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key, $originalEnvironment[$key], 'Process') }
     if ($null -eq $originalLocalAppData) { Remove-Item Env:LOCALAPPDATA -ErrorAction SilentlyContinue } else { $env:LOCALAPPDATA = $originalLocalAppData }
     if ($null -eq $originalRuntimeArchive) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_ARCHIVE -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_ARCHIVE = $originalRuntimeArchive }
     if ($null -eq $originalRuntimeChecksum) { Remove-Item Env:CLIPPY_PYTHON_RUNTIME_CHECKSUM -ErrorAction SilentlyContinue } else { $env:CLIPPY_PYTHON_RUNTIME_CHECKSUM = $originalRuntimeChecksum }

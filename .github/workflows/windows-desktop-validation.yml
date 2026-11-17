@@ -59,6 +59,8 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-manifest-state.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/runtime-health.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/test-runtime-contract.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
 
       - name: Prepare packaged backend and renderer payload

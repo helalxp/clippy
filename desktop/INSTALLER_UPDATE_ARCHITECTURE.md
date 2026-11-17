@@ -1,6 +1,6 @@
 # Windows Installer and Update Architecture
 
-Status: hardening implementation in draft PR #10 (`windows-installer-hardening`); not yet approved for production release
+Status: v0.2.3 installer and first-run runtime delivery shipped and validated; in-app component updater remains future work
 Scope: Windows desktop packaging, runtime delivery, installation, repair, and updates.
 Out of scope for this migration: accounts, billing, cloud authorization, and brand workspaces.
 
@@ -23,7 +23,7 @@ Out of scope for this migration: accounts, billing, cloud authorization, and bra
 - Node 22.23.3 and FFmpeg essentials are provisioned by first-run setup and verified against publisher SHA-256 sidecars. The Remotion browser is stored outside replaceable app payloads, verified by Authenticode publisher and recorded SHA-256, then reused across app updates.
 - The runtime is installed under `%LOCALAPPDATA%\Clippy\runtime`; application payload is extracted under `%LOCALAPPDATA%\Clippy\app\current`.
 - The current release notes describe a manual installer update. There is no configured Tauri updater in the inspected Tauri configuration.
-- The installer payload hash detects accidental corruption. Public release automation now refuses to publish an unsigned NSIS installer; it requires the configured Authenticode certificate secrets. This is still separate from the future signed component-manifest updater.
+- The installer payload hash detects accidental corruption. Authenticode signing is supported when both certificate secrets are configured. The current workflow warns and continues unsigned when neither is configured, and fails if only one is provided. Configure both secrets for signed public distribution. This is still separate from the future signed component-manifest updater.
 - The setup script selects the prebuilt CUDA 12.8 archive only when the NVIDIA driver is at least 570.65 and compute capability is at least 7.0; otherwise it selects the CPU archive. Both runtime variants are built independently and checked for package imports, relocation, and required CUDA DLLs. The installed CUDA path is smoke-tested with a real PyTorch kernel and CTranslate2 device enumeration.
 
 ## Target installation layout
@@ -121,7 +121,7 @@ Do not initially implement binary delta patches. Component-level archives are ea
 
 ## Expected update sizes
 
-There is no measured production installer size yet. The repository does not contain a built installer or a committed runtime payload. The latest inspected branch has no published GitHub Release assets. The current CI validation builds an installer but does not retain it as an artifact, so its exact size cannot be read from the repository.
+The v0.2.3 GitHub Release provides measured production asset sizes. The NSIS installer is 154,970,658 bytes; the CPU runtime ZIP is 713,453,042 bytes; and the CUDA runtime is split into two parts of 1,879,048,192 and 1,477,944,533 bytes. The release contains 10 assets in total, including the installer checksum, CPU manifest/checksums, CUDA manifest and CUDA part checksums. These are measurements for v0.2.3, not size guarantees for future versions.
 
 The first complete installer will be materially larger than the current installer because the current first-run script downloads the Python and PyTorch environments and browser separately. The actual size must be measured from the finished CPU and NVIDIA installers, not guessed from repository size.
 
@@ -163,3 +163,16 @@ An app release declares a compatibility range for each runtime component. Keep t
 ## Current release behavior versus target
 
 Until the component updater is implemented and validated, releases remain manual full-installer upgrades. Do not advertise small/delta updates or automatic updates yet.
+
+
+## Verified v0.2.3 release baseline
+
+The complete release workflow passed on 2026-11-17 for source commit
+`9454c5eb485cc75c0ee14a00d11bd405d9a320aa`:
+
+- [Windows desktop validation run #360](https://github.com/helalxp/clippy/actions/runs/44062955499) passed.
+- [Clippy Windows Release run #5](https://github.com/helalxp/clippy/actions/runs/44066693854) passed all jobs, including CPU/CUDA runtime packaging, asset reconstruction and validation, first-run setup, packaged rendering, Rust tests, draft asset verification and publication.
+- [Published v0.2.3 assets](https://github.com/helalxp/clippy/releases/tag/v0.2.3) contain the installer, checksums and both runtime variants.
+- A real Windows install was manually exercised through the editing workflow. Whisper model selection had a small follow-up issue and is outside the installer milestone recorded here.
+
+The PowerShell 7 to Windows PowerShell 5.1 module-path regression is handled at the process boundary. The Tauri Rust launcher removes inherited `PSModulePath` before spawning the legacy PowerShell host; the CI smoke-test launcher applies the same isolation and preflights the standard cmdlets before setup. The actual setup, runtime reuse, and packaged render smoke checks passed.

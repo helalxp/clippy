@@ -1,9 +1,9 @@
 # Windows Release Versioning and Runtime Asset Delivery Contract
 
-**Status:** Implementation committed on `windows-installer-hardening`; awaiting CI and clean-machine validation  
-**Implementation branch:** `windows-installer-hardening`  
-**Application version in source:** `0.2.2`  
-**Last reviewed:** 2026-11-13
+**Status:** v0.2.3 published; release CI and Windows desktop validation passed; real Windows install exercised through the editing workflow  
+**Implementation branch:** `windows-installer-hardening` (promotion target: `windows-installer-release`, then `main`)  
+**Application version:** `0.2.3`  
+**Last reviewed:** 2026-11-17
 
 ## 1. Purpose
 
@@ -13,7 +13,7 @@ The production requirement is simple:
 
 > A user downloads one Clippy installer, installs it, opens it, and Clippy automatically downloads and installs the exact runtime package required by that installer. The user must not need PowerShell commands, manually supplied archives, Python, or environment-variable overrides.
 
-This document records the audit baseline and the implemented delivery contract. The implementation is committed on `windows-installer-hardening`; CI and real-machine validation remain release gates.
+This document records the implemented delivery contract and the verified v0.2.3 release baseline. Subsequent changes must repeat the CI, clean first-run, and real-machine gates; the v0.2.3 result is not a blanket approval for future releases.
 
 ## 2. Canonical application version
 
@@ -33,9 +33,9 @@ The existing `desktop/validate-version.ps1` checks these values and, when suppli
 Required release-tag format:
 
 ```text
-VERSION = 0.2.2
-Git tag  = v0.2.2
-Release  = v0.2.2
+VERSION = 0.2.3
+Git tag  = v0.2.3
+Release  = v0.2.3
 ```
 
 A release must not be published if the tag does not match the canonical `VERSION`.
@@ -45,7 +45,7 @@ A release must not be published if the tag does not match the canonical `VERSION
 `desktop/prepare-payload.ps1` copies the root `VERSION` file into the staged application payload. The runtime setup engine reads:
 
 ```text
-%LOCALAPPDATA%\\Clippy\\app\\current\\VERSION
+%LOCALAPPDATA%\Clippy\app\current\VERSION
 ```
 
 That value determines which GitHub Release the installed app will use for its runtime download.
@@ -56,15 +56,15 @@ The build must validate the canonical version before creating the payload. The p
 
 The implemented release contract uses this convention:
 
-| Item | Expected value for version 0.2.2 |
+| Item | Expected value for version 0.2.3 |
 |---|---|
-| Release tag | `v0.2.2` |
+| Release tag | `v0.2.3` |
 | CPU runtime manifest | `clippy-python-cpu.manifest.json` |
 | CUDA runtime manifest | `clippy-python-cuda.manifest.json` |
 | CPU runtime asset | `clippy-python-cpu.zip` while it remains below the part-size threshold |
 | CUDA runtime assets | Ordered `clippy-python-cuda.partNNN` files when multipart |
 | Per-variant metadata | `clippy-python-<variant>.parts.sha256` |
-| Example manifest URL | `https://github.com/helalxp/clippy/releases/download/v0.2.2/clippy-python-cuda.manifest.json` |
+| Example manifest URL | `https://github.com/helalxp/clippy/releases/download/v0.2.3/clippy-python-cuda.manifest.json` |
 
 The archive asset names are intentionally stable within each versioned release. The release tag supplies the application-version boundary. The local cache filename may include the application version to avoid collisions between cached packages.
 
@@ -74,13 +74,11 @@ A successful installer build is not proof that the runtime download is available
 
 ## 5. Audit findings
 
-### 5.1 Confirmed: no published GitHub Releases
+### 5.1 Historical audit finding: no published GitHub Release (resolved)
 
-At the time of this audit, the GitHub Releases API for `helalxp/clippy` returned an empty list.
+This was true during the initial audit, before v0.2.3 was published. It is now resolved: [Clippy v0.2.3](https://github.com/helalxp/clippy/releases/tag/v0.2.3) was published on 2026-11-17 and contains the installer, checksums, CPU runtime assets, CUDA manifest, and both CUDA runtime parts. The release workflow verifies the expected asset names and exact sizes before publication.
 
-Therefore, the current setup engine has no published release asset to download. An HTTP 404 is the expected result until a matching release is created and populated.
-
-### 5.2 Confirmed: the installed application version differs from the audited source version
+### 5.2 Historical audit finding: installed application version differed from the audited source version
 
 The user's installed setup log reports a local download/cache filename:
 
@@ -90,16 +88,16 @@ clippy-python-cuda-0.2.1.zip
 
 The old setup implementation used the application version in the local cache filename but constructed the remote release URL with an unversioned asset name. Therefore, the historical log's filename alone did **not** prove that GitHub was asked for an asset with the `.0.2.1` suffix.
 
-The installed payload is using application version `0.2.1`; the audited branch has `VERSION = 0.2.2`. Under the current contract, the expected remote URLs are:
+The installed payload is using application version `0.2.1`; the audited branch has `VERSION = 0.2.3`. Under the current contract, the expected remote URLs are:
 
 ```text
 Installed 0.2.1 (old format): /releases/download/v0.2.1/clippy-python-cuda.zip
-Current 0.2.2 (manifest):     /releases/download/v0.2.2/clippy-python-cuda.manifest.json
+Current 0.2.3 (manifest):     /releases/download/v0.2.3/clippy-python-cuda.manifest.json
 ```
 
-This is an installer/source version difference, not proof that the source-level version validator failed. Since the repository currently has no published releases, neither version has a runtime asset available through the expected release path.
+This was a historical version mismatch observed during the pre-release audit. It was resolved by publishing v0.2.3 from the validated source commit. The installed payload now embeds its own canonical version and constructs runtime URLs from that exact version; it must never fall back to a moving `latest` release.
 
-The next installer must be built from the intended release commit, and its embedded payload version must be checked before distribution.
+For every future release, build the installer from the accepted release commit and verify that its embedded payload version matches the tag before distribution.
 
 ### 5.3 Confirmed: current version consistency checks are useful but do not publish releases
 
@@ -255,7 +253,19 @@ A Windows release is not ready to distribute until all of the following are true
 - [ ] A clean Windows installation completes without environment overrides or manual files.
 - [ ] The published release is checked for all expected assets before users receive the installer.
 
-## 9. Implementation status
+## 9. Runtime repair and upgrade safeguards
+
+- `desktop/runtime-contract.json` defines Python, Node and FFmpeg identities for both setup and native validation. Browser identity comes from the packaged Remotion renderer, not the previous installed manifest.
+- Embedded Python retains `_pth` isolation and explicitly admits `../../app/current`; setup smoke checks the imported backend belongs to that payload.
+- Saved reference templates live under `data/reference_templates`. Before replacing a payload, native setup copies legacy references there, verifies conflicting files and aborts rather than overwriting user data.
+- A desktop-lifetime named mutex prevents concurrent shells; the payload installer and PowerShell setup share an installation mutex. Setup waits for the native `GO` handshake before mutating files, then runs in the shell's kill-on-close Job Object.
+- Runtime replacements are staged and validated before directory activation, with rollback and interrupted-upgrade recovery. Windows sharing/access failures get a bounded retry, never a destructive workaround.
+- Google's Chrome Headless Shell is unsigned. Setup pins its official versioned Google HTTPS archive and executable SHA-256 hashes in `runtime-contract.json`, verifies both before activation, and never substitutes system Chrome. Payload preparation rejects a renderer whose tested browser version differs from the contract.
+- Native checks include backend imports, FFprobe and an actual headless-browser launch. Retry setup invokes repair even if executable-version checks previously passed.
+- Renderer and composition packages use matching pinned Remotion versions and committed lockfiles. `prepare-payload.ps1` checks package identities and required files.
+- `desktop/smoke-test-runtime.ps1` verifies clean CPU setup, a packaged video render using the persistent browser, and a repeat setup without downloads. These checks do not replace CUDA hardware validation or testing the published release download route.
+
+## 10. Implementation status
 
 The coordinated implementation has been committed on `windows-installer-hardening`:
 
@@ -268,6 +278,16 @@ The coordinated implementation has been committed on `windows-installer-hardenin
 - `.github/workflows/release-windows.yml`: uploads manifest-based runtime assets and uses a draft-first, verify-before-publish release flow.
 - `RELEASING.md`: documents the release contract, branch flow, and required signing secrets.
 
-**Not yet proven:** the implementation has not yet completed a GitHub Actions run, produced a new signed installer, or passed a clean Windows installation on either test PC. Do not treat the branch as release-ready until those checks pass.
+**Verified v0.2.3 baseline (2026-11-17):**
 
-The hardening branch is intentionally not merged into `windows-installer-release` until the user has completed testing on both PCs and approved the merge.
+- Source commit: `9454c5eb485cc75c0ee14a00d11bd405d9a320aa`.
+- Windows desktop validation: [run #360](https://github.com/helalxp/clippy/actions/runs/44062955499), passed.
+- Full release: [run #5](https://github.com/helalxp/clippy/actions/runs/44066693854), passed. Both CPU and CUDA runtime builds, asset reconstruction/validation, PowerShell contract tests, clean first-run setup, packaged rendering smoke test, Rust tests, draft asset verification, and publication passed.
+- Published assets: one NSIS installer and checksum, one CPU ZIP plus manifest/checksums, and a CUDA manifest with two ordered parts and part checksums.
+- Manual Windows validation: the user confirmed successful install, first launch and use through the editing workflow. A Whisper model-selection hiccup remains a separate follow-up and is not claimed as fixed here.
+
+The smoke test launches the actual first-run setup in an isolated `LOCALAPPDATA`, confirms runtime activation and application imports, renders a fixture using the packaged Remotion browser, and verifies that a second setup reuses the healthy install without downloads. It is a CPU first-run smoke test; it does not prove CUDA inference on every physical NVIDIA GPU.
+
+For the PowerShell module-path regression, the native Rust launcher removes inherited `PSModulePath` before launching Windows PowerShell 5.1. The smoke-test process helper performs the same isolation and preflights `Get-FileHash` and `ConvertFrom-Json` before setup. Do not replace this process-boundary fix with broad environment resets or a switch to PowerShell 7 without repeating the compatibility tests.
+
+The v0.2.3 implementation passed the documented CI and manual Windows checks. The promotion sequence for this accepted installer baseline is `windows-installer-hardening` → `windows-installer-release` → `main`; record each merge commit and its post-merge validation here when completed.

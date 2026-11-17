@@ -7,7 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "runtime-archive.ps1")
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$PythonVersion = "3.12.10"
+$Contract = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'runtime-contract.json') -Raw | ConvertFrom-Json
+if ($Contract.schema -ne 1) { throw 'Unsupported runtime contract.' }
+$PythonVersion = $Contract.python
 $PythonArchiveName = "python-$PythonVersion-embed-amd64.zip"
 $PythonArchiveUrl = "https://www.python.org/ftp/python/$PythonVersion/$PythonArchiveName"
 $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
@@ -37,7 +39,7 @@ if ($ActualPythonHash -ne $PythonArchiveSha256) { throw "Official CPython archiv
 Expand-Archive -LiteralPath $PythonArchive -DestinationPath $RuntimeRoot
 $PythonPth = Join-Path $RuntimeRoot "python312._pth"
 if (-not (Test-Path $PythonPth)) { throw "Official CPython archive is missing python312._pth." }
-[System.IO.File]::WriteAllLines($PythonPth, @("python312.zip", ".", "Lib", "Lib\site-packages", "import site"), [System.Text.Encoding]::ASCII)
+[System.IO.File]::WriteAllLines($PythonPth, @("python312.zip", ".", "Lib", "Lib\site-packages", "../../app/current", "import site"), [System.Text.Encoding]::ASCII)
 New-Item -ItemType Directory -Path $SitePackages -Force | Out-Null
 
 # CI's Python/pip installs wheels directly into the final runtime. The shipped
