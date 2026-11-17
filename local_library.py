@@ -624,6 +624,7 @@ class LocalLibrary:
                 if latest:
                     latest_source = latest.get("source_video") or {}
                     project["created_at"] = latest.get("created_at") or project["created_at"]
+                    project["updated_at"] = latest.get("updated_at") or project["updated_at"]
                     if latest.get("title_source") == "user":
                         project["title"] = _safe_title(latest.get("title"))
                         project["title_source"] = "user"
