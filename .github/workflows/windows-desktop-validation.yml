@@ -3,11 +3,10 @@ name: Windows desktop validation
 on:
   push:
     branches:
-      - windows-installer-release
-      - windows-installer-hardening
+      - main
   pull_request:
     branches:
-      - windows-installer-release
+      - main
   workflow_dispatch:
 
 permissions:
