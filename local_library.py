@@ -8,17 +8,22 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
+import zipfile
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 _PROJECT_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -27,6 +32,16 @@ _LOCK = threading.RLock()
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _serialized(method):
+    """Serialize project metadata mutations in this single-user desktop process."""
+    def wrapped(self, *args, **kwargs):
+        with _LOCK:
+            return method(self, *args, **kwargs)
+    wrapped.__name__ = method.__name__
+    wrapped.__doc__ = method.__doc__
+    return wrapped
 
 
 def _safe_title(value: str, fallback: str = "Untitled project") -> str:
@@ -181,9 +196,11 @@ class LocalLibrary:
             "updated_at": _now(),
         })
 
+    @_serialized
     def reserve_project(
         self, job_id: str, fallback_title: str = "Processing project",
         source_path: str | None = None, source_url: str | None = None,
+        keep_source: bool | None = None,
     ) -> dict[str, Any]:
         """Create a durable project record as soon as a generation job is queued."""
         project_id = str(uuid.UUID(job_id))
@@ -193,6 +210,8 @@ class LocalLibrary:
         if (folder / "project.json").is_file():
             return self.get_project(project_id)
         now = _now()
+        if keep_source is None:
+            keep_source = self.get_settings().get("keep_source_default", False)
         source_file = Path(source_path).name if source_path else None
         project = {
             "schema_version": SCHEMA_VERSION,
@@ -200,7 +219,10 @@ class LocalLibrary:
             "title": _safe_title(fallback_title),
             "source_title": _safe_title(fallback_title),
             "title_source": "automatic",
-            "source_video": {"filename": source_file, "retained": False, "url": source_url},
+            "source_video": {
+                "filename": source_file, "retained": False,
+                "retention_requested": bool(keep_source), "url": source_url,
+            },
             "created_at": now,
             "updated_at": now,
             "status": "queued",
@@ -214,6 +236,7 @@ class LocalLibrary:
         _atomic_json(folder / "project.json", project)
         return self.get_project(project_id)
 
+    @_serialized
     def update_project_status(self, project_id: str, status: str) -> dict[str, Any] | None:
         if status not in {"queued", "processing", "failed", "interrupted", "archive_failed"}:
             raise ValueError("Invalid non-terminal project status.")
@@ -224,7 +247,7 @@ class LocalLibrary:
         folder = self._project_dir(project_id)
         project["status"] = status
         project["updated_at"] = _now()
-        project.pop("storage_path", None)
+        self._strip_presentation(project)
         _atomic_json(folder / "project.json", project)
         return self.get_project(project_id)
 
@@ -271,6 +294,28 @@ class LocalLibrary:
             candidate = source_dir / f"{metadata_path.name[:-len('_metadata.json')]}_clip_{original_index + 1}.mp4"
             filename = candidate.name
         return candidate, filename
+
+    def _create_thumbnail(self, video_path: Path, thumbnail_path: Path) -> bool:
+        """Extract a representative JPEG using the FFmpeg managed by Clippy."""
+        ffmpeg = os.environ.get("CLIPPY_FFMPEG_EXE") or shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.warning("FFmpeg unavailable; skipping Library thumbnail for %s", video_path.name)
+            return False
+        thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+        for seek in ("1", "0"):
+            command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", seek,
+                "-i", str(video_path), "-frames:v", "1", "-vf",
+                "scale=480:-2:force_original_aspect_ratio=decrease", "-q:v", "5", "-y", str(thumbnail_path)]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                logger.warning("Library thumbnail extraction failed for %s: %s", video_path.name, error)
+                return False
+            if result.returncode == 0 and thumbnail_path.is_file() and thumbnail_path.stat().st_size > 0:
+                return True
+            thumbnail_path.unlink(missing_ok=True)
+        logger.warning("FFmpeg could not extract a Library thumbnail from %s", video_path.name)
+        return False
 
     def needs_sync(
         self, job_id: str, output_dir: str | Path, job_data: dict[str, Any] | None = None,
@@ -328,7 +373,9 @@ class LocalLibrary:
             return True
         if caption_fingerprint != project.get("caption_fingerprint", []):
             return True
-        if keep_source and not (project.get("source_video") or {}).get("retained"):
+        source_video = project.get("source_video") or {}
+        retention_requested = bool(source_video.get("retention_requested", source_video.get("retained", False)))
+        if retention_requested and not source_video.get("retained"):
             source_name = Path(str(metadata.get("source_video") or "")).name
             candidates = [source_dir / source_name] if source_name else []
             source_path = (job_data or {}).get("source_path")
@@ -340,7 +387,7 @@ class LocalLibrary:
 
     def archive_job(
         self, job_id: str, output_dir: str | Path, job_data: dict[str, Any] | None = None,
-        result: dict[str, Any] | None = None, keep_source: bool = False,
+        result: dict[str, Any] | None = None, keep_source: bool | None = None,
     ) -> dict[str, Any]:
         """Archive a completed local job using staging + directory replacement."""
         project_id = str(uuid.UUID(job_id))
@@ -358,12 +405,20 @@ class LocalLibrary:
             raise ValueError("Job metadata has an invalid format.")
 
         project_dir = self._project_dir(project_id)
-        existing_project = None
-        if (project_dir / "project.json").is_file():
-            try:
-                existing_project = json.loads((project_dir / "project.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                existing_project = None
+        with _LOCK:
+            if self.is_deleted(project_id):
+                raise FileNotFoundError("This project was deleted from the Library.")
+            existing_project = None
+            if (project_dir / "project.json").is_file():
+                try:
+                    existing_project = json.loads((project_dir / "project.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    existing_project = None
+        existing_source = (existing_project or {}).get("source_video") or {}
+        if existing_project is not None:
+            keep_source = bool(existing_source.get("retention_requested", existing_source.get("retained", False)))
+        else:
+            keep_source = bool(keep_source)
         metadata_title = _safe_title(metadata_path.name[:-len("_metadata.json")])
         if existing_project and existing_project.get("status") == "completed":
             source_title = _safe_title(existing_project.get("source_title") or metadata_title)
@@ -372,7 +427,7 @@ class LocalLibrary:
         title_source = (existing_project or {}).get("title_source", "automatic")
         title = _safe_title((existing_project or {}).get("title") if title_source == "user" else source_title)
         source_name = Path(str(metadata.get("source_video") or "")).name
-        keep_source = bool(keep_source or (existing_project or {}).get("source_video", {}).get("retained"))
+        keep_source = bool(keep_source)
         source_retention_warning = None
         staging = self.projects_dir / f".{project_id}.{uuid.uuid4().hex}.staging"
         backup = self.projects_dir / f".{project_id}.{uuid.uuid4().hex}.backup"
@@ -458,6 +513,13 @@ class LocalLibrary:
                 clip_dir = staging / "clips" / clip_id
                 clip_dir.mkdir(parents=True)
                 _copy_verified(candidate, clip_dir / "video.mp4")
+                thumbnail_file = clip_dir / "thumbnail.jpg"
+                thumbnail_relative = None
+                try:
+                    if self._create_thumbnail(clip_dir / "video.mp4", thumbnail_file):
+                        thumbnail_relative = f"clips/{clip_id}/thumbnail.jpg"
+                except Exception as thumbnail_error:
+                    logger.warning("Library thumbnail generation failed for %s: %s", clip_id, thumbnail_error)
                 caption_fields = {
                     key: value for key, value in clip.items()
                     if any(token in key.lower() for token in ("caption", "description", "hashtag", "title_for_"))
@@ -490,6 +552,7 @@ class LocalLibrary:
                     "filename": filename,
                     "video_path": f"clips/{clip_id}/video.mp4",
                     "captions_path": f"clips/{clip_id}/captions.json",
+                    "thumbnail_path": thumbnail_relative,
                     "start": clip.get("start"),
                     "end": clip.get("end"),
                     "why": clip.get("why", ""),
@@ -512,6 +575,14 @@ class LocalLibrary:
             if not archived_clips and (eligible_clip_count or not existing_project):
                 raise ValueError("No completed clip files could be archived.")
 
+            project_thumbnail_relative = None
+            first_thumbnail = next((item.get("thumbnail_path") for item in archived_clips if item.get("thumbnail_path")), None)
+            if first_thumbnail:
+                try:
+                    _copy_verified(staging / first_thumbnail, staging / "thumbnail.jpg")
+                    project_thumbnail_relative = "thumbnail.jpg"
+                except OSError as thumbnail_error:
+                    logger.warning("Project cover thumbnail failed for %s: %s", project_id, thumbnail_error)
             project = {
                 "schema_version": SCHEMA_VERSION,
                 "project_id": project_id,
@@ -521,27 +592,76 @@ class LocalLibrary:
                 "source_video": {
                     "filename": source_name or None,
                     "retained": bool(keep_source and source_name and (staging / "source" / source_name).is_file()),
+                    "retention_requested": bool(keep_source),
                     "retention_warning": source_retention_warning if keep_source else None,
-                    "url": (job_data or {}).get("source_url"),
+                    "url": (job_data or {}).get("source_url") or existing_source.get("url"),
                 },
                 "created_at": created,
                 "updated_at": updated,
                 "status": "completed",
                 "clip_count": len(archived_clips),
+                "thumbnail_path": project_thumbnail_relative,
                 "clips": archived_clips,
                 "deleted_clip_ids": sorted(deleted_clip_ids),
                 "render_fingerprint": render_fingerprint,
                 "caption_fingerprint": caption_fingerprint,
                 "workspace_available": (staging / "workspace").is_dir(),
             }
-            _atomic_json(staging / "project.json", project)
-
             with _LOCK:
-                # Deletion may race with a long archive copy. Re-check the
-                # tombstone while holding the same lock used by delete_project
-                # so an in-flight archive cannot publish a deleted project.
                 if self.is_deleted(project_id):
                     raise FileNotFoundError("This project was deleted from the Library.")
+                latest = None
+                if (project_dir / "project.json").is_file():
+                    try:
+                        latest = json.loads((project_dir / "project.json").read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        latest = None
+                if latest:
+                    latest_source = latest.get("source_video") or {}
+                    project["created_at"] = latest.get("created_at") or project["created_at"]
+                    if latest.get("title_source") == "user":
+                        project["title"] = _safe_title(latest.get("title"))
+                        project["title_source"] = "user"
+                    deleted_now = set(project.get("deleted_clip_ids", [])) | set(latest.get("deleted_clip_ids", []))
+                    project["deleted_clip_ids"] = sorted(deleted_now)
+                    project["source_video"]["retention_requested"] = bool(latest_source.get("retention_requested", latest_source.get("retained", keep_source)))
+                    if latest_source.get("retained"):
+                        project["source_video"]["retained"] = True
+                    if latest_source.get("url"):
+                        project["source_video"]["url"] = latest_source["url"]
+                    kept_clips = []
+                    for staged_clip in archived_clips:
+                        clip_id = staged_clip["clip_id"]
+                        if clip_id in deleted_now:
+                            shutil.rmtree(staging / "clips" / clip_id, ignore_errors=True)
+                            continue
+                        previous = next((item for item in latest.get("clips", []) if item.get("clip_id") == clip_id), None)
+                        if previous:
+                            old_caption = (project_dir / previous.get("captions_path", "")).resolve()
+                            new_caption = (staging / staged_clip["captions_path"]).resolve()
+                            if old_caption.is_relative_to(project_dir) and new_caption.is_relative_to(staging) and old_caption.is_file():
+                                try:
+                                    old_data = json.loads(old_caption.read_text(encoding="utf-8"))
+                                except (OSError, ValueError):
+                                    old_data = {}
+                                if old_data.get("user_edited"):
+                                    _copy_verified(old_caption, new_caption)
+                        kept_clips.append(staged_clip)
+                    archived_clips[:] = kept_clips
+                    project["clips"] = archived_clips
+                    project["clip_count"] = len(archived_clips)
+                    project["render_fingerprint"] = [item for item in render_fingerprint if f"{project_id}-{int(item.get('index', -1)) + 1:03d}" not in deleted_now]
+                    project["caption_fingerprint"] = [item for item in caption_fingerprint if f"{project_id}-{int(item.get('index', -1)) + 1:03d}" not in deleted_now]
+                cover = next((item.get("thumbnail_path") for item in archived_clips if item.get("thumbnail_path")), None)
+                cover_path = staging / "thumbnail.jpg"
+                if cover:
+                    _copy_verified(staging / cover, cover_path)
+                    project["thumbnail_path"] = "thumbnail.jpg"
+                else:
+                    cover_path.unlink(missing_ok=True)
+                    project["thumbnail_path"] = None
+                project["storage_size_bytes"] = sum(item.stat().st_size for item in staging.rglob("*") if item.is_file())
+                _atomic_json(staging / "project.json", project)
                 if project_dir.exists():
                     os.replace(project_dir, backup)
                 try:
@@ -552,8 +672,6 @@ class LocalLibrary:
                     raise
                 if backup.exists():
                     shutil.rmtree(backup, ignore_errors=True)
-            project["storage_size_bytes"] = self.project_size(project_id)
-            _atomic_json(project_dir / "project.json", project)
             return self.get_project(project_id)
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
@@ -569,12 +687,37 @@ class LocalLibrary:
         except (OSError, ValueError, TypeError):
             return {"keep_source_default": False}
 
+    @_serialized
     def update_settings(self, keep_source_default: bool) -> dict[str, Any]:
         if not isinstance(keep_source_default, bool):
             raise ValueError("keep_source_default must be a boolean.")
         data = {"schema_version": SCHEMA_VERSION, "keep_source_default": keep_source_default, "updated_at": _now()}
         _atomic_json(self.root / "library_settings.json", data)
         return self.get_settings()
+
+    def _present_project(self, project: dict[str, Any]) -> dict[str, Any]:
+        folder = self._project_dir(project["project_id"])
+        project["storage_path"] = str(folder)
+        relative = project.get("thumbnail_path")
+        if relative:
+            path = (folder / relative).resolve()
+            if path.is_relative_to(folder) and path.is_file():
+                project["thumbnail_url"] = f"/api/library/projects/{project['project_id']}/thumbnail"
+        for clip in project.get("clips", []):
+            relative = clip.get("thumbnail_path")
+            if relative:
+                path = (folder / relative).resolve()
+                if path.is_relative_to(folder) and path.is_file():
+                    clip["thumbnail_url"] = f"/api/library/projects/{project['project_id']}/clips/{clip['clip_id']}/thumbnail"
+        return project
+
+    @staticmethod
+    def _strip_presentation(project: dict[str, Any]) -> dict[str, Any]:
+        project.pop("storage_path", None)
+        project.pop("thumbnail_url", None)
+        for clip in project.get("clips", []):
+            clip.pop("thumbnail_url", None)
+        return project
 
     def list_projects(self) -> list[dict[str, Any]]:
         projects = []
@@ -585,7 +728,7 @@ class LocalLibrary:
                 if self.is_deleted(folder.name):
                     continue
                 project = json.loads((folder / "project.json").read_text(encoding="utf-8"))
-                project["storage_path"] = str(folder)
+                project = self._present_project(project)
                 project["storage_size_bytes"] = int(project.get("storage_size_bytes") or 0)
                 projects.append(project)
             except (OSError, ValueError, TypeError):
@@ -600,9 +743,9 @@ class LocalLibrary:
         if not project_file.is_file():
             raise FileNotFoundError("Project not found.")
         project = json.loads(project_file.read_text(encoding="utf-8"))
-        project["storage_path"] = str(folder)
-        return project
+        return self._present_project(project)
 
+    @_serialized
     def rename_project(self, project_id: str, title: str) -> dict[str, Any]:
         folder = self._project_dir(project_id)
         project = self.get_project(project_id)
@@ -614,6 +757,7 @@ class LocalLibrary:
         _atomic_json(folder / "project.json", project)
         return self.get_project(project_id)
 
+    @_serialized
     def update_captions(self, project_id: str, clip_id: str, platforms: dict[str, Any]) -> dict[str, Any]:
         project = self.get_project(project_id)
         clip = next((c for c in project.get("clips", []) if c.get("clip_id") == clip_id), None)
@@ -664,6 +808,7 @@ class LocalLibrary:
             if folder.exists():
                 shutil.rmtree(folder)
 
+    @_serialized
     def delete_clip(self, project_id: str, clip_id: str) -> dict[str, Any]:
         folder = self._project_dir(project_id)
         project = self.get_project(project_id)
@@ -696,6 +841,15 @@ class LocalLibrary:
                 shutil.rmtree(clip_dir)
             except OSError:
                 pass
+        cover = next((item.get("thumbnail_path") for item in project.get("clips", []) if item.get("thumbnail_path")), None)
+        cover_path = folder / "thumbnail.jpg"
+        if cover:
+            _copy_verified(folder / cover, cover_path)
+            project["thumbnail_path"] = "thumbnail.jpg"
+        else:
+            cover_path.unlink(missing_ok=True)
+            project["thumbnail_path"] = None
+        self._strip_presentation(project)
         project["storage_size_bytes"] = self.project_size(project_id)
         _atomic_json(folder / "project.json", project)
         return self.get_project(project_id)
@@ -711,6 +865,66 @@ class LocalLibrary:
         if not path.is_file():
             raise FileNotFoundError("Archived clip file is missing.")
         return path
+
+    def project_thumbnail_path(self, project_id: str) -> Path:
+        project = self.get_project(project_id)
+        folder = self._project_dir(project_id)
+        relative = project.get("thumbnail_path")
+        if not relative:
+            raise FileNotFoundError("Project thumbnail is unavailable.")
+        path = (folder / relative).resolve()
+        if not path.is_relative_to(folder) or not path.is_file():
+            raise FileNotFoundError("Project thumbnail is unavailable.")
+        return path
+
+    def clip_thumbnail_path(self, project_id: str, clip_id: str) -> Path:
+        project = self.get_project(project_id)
+        clip = next((item for item in project.get("clips", []) if item.get("clip_id") == clip_id), None)
+        if not clip:
+            raise FileNotFoundError("Clip not found.")
+        relative = clip.get("thumbnail_path")
+        if not relative:
+            raise FileNotFoundError("Clip thumbnail is unavailable.")
+        folder = self._project_dir(project_id)
+        path = (folder / relative).resolve()
+        if not path.is_relative_to(folder) or not path.is_file():
+            raise FileNotFoundError("Clip thumbnail is unavailable.")
+        return path
+
+    def export_project_zip(self, project_id: str, destination: str | Path) -> Path:
+        """Export generated clips, platform captions, and a portable manifest."""
+        project = self.get_project(project_id)
+        title = _safe_title(project.get("title"), "Clippy project")
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        manifest = {"schema_version": SCHEMA_VERSION, "project": {
+            "project_id": project["project_id"], "title": title,
+            "source_title": project.get("source_title"),
+            "source_url": (project.get("source_video") or {}).get("url"),
+            "created_at": project.get("created_at"), "updated_at": project.get("updated_at"),
+            "clip_count": len(project.get("clips", []))}, "clips": []}
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
+            for clip in project.get("clips", []):
+                clip_id = clip["clip_id"]
+                stem = f"clip-{int(clip.get('index', 0)) + 1:03d}"
+                video_name = f"{title}/clips/{stem}.mp4"
+                captions_name = f"{title}/captions/{stem}.json"
+                archive.write(self.clip_path(project_id, clip_id), arcname=video_name)
+                folder = self._project_dir(project_id)
+                caption_path = (folder / clip["captions_path"]).resolve()
+                if not caption_path.is_relative_to(folder) or not caption_path.is_file():
+                    raise FileNotFoundError(f"Captions are unavailable for {clip_id}.")
+                caption_data = json.loads(caption_path.read_text(encoding="utf-8"))
+                platforms = caption_data.get("platforms") or {}
+                portable = {"schema_version": int(caption_data.get("schema_version", SCHEMA_VERSION)), "clip_id": clip_id,
+                    "platforms": {name: {field: (platforms.get(name) or {}).get(field, [] if field == "hashtags" else "")
+                    for field in ("title", "caption", "hashtags")} for name in ("youtube", "instagram", "tiktok")}}
+                archive.writestr(captions_name, json.dumps(portable, ensure_ascii=False, indent=2))
+                manifest["clips"].append({"clip_id": clip_id, "index": clip.get("index"), "title": clip.get("title"),
+                    "start": clip.get("start"), "end": clip.get("end"), "why": clip.get("why"),
+                    "video": f"clips/{stem}.mp4", "captions": f"captions/{stem}.json"})
+            archive.writestr(f"{title}/project.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        return destination
 
     def project_size(self, project_id: str) -> int:
         folder = self._project_dir(project_id)
