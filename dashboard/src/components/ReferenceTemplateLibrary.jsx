@@ -49,10 +49,6 @@ function BoxSummary({ box }) {
 
 
 
-function readObjectPath(value, path) {
-  return path.split('.').reduce((current, key) => current == null ? undefined : current[key], value);
-}
-
 function mergeObject(target, patch) {
   Object.entries(patch || {}).forEach(([key, value]) => {
     if (value && typeof value === 'object' && !Array.isArray(value) &&
@@ -134,6 +130,7 @@ function EvidenceFrame({ jobId, sample, box = null, boxes = null, onSelect = nul
 
 function ReviewControls({ review, onDecision, disabled = false }) {
   const [note, setNote] = useState(review?.note || '');
+  useEffect(() => setNote(review?.note || ''), [review?.note]);
   const decision = review?.decision || 'pending';
   return (
     <div className="mt-3 space-y-2 border-t border-rule pt-3">
@@ -202,6 +199,9 @@ export default function ReferenceTemplateLibrary() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedJobDetail, setSelectedJobDetail] = useState(null);
   const [reviewBusyKey, setReviewBusyKey] = useState('');
+  const [savedTemplates, setSavedTemplates] = useState([]);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftSaveMessage, setDraftSaveMessage] = useState('');
   const videoRef = useRef(null);
 
   const loadJobDetail = useCallback(async (jobId) => {
@@ -233,7 +233,16 @@ export default function ReferenceTemplateLibrary() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const loadSavedTemplates = useCallback(async () => {
+    try {
+      const data = await apiJson('/api/template-library/templates');
+      setSavedTemplates(data.templates || []);
+    } catch (e) {
+      setError(e?.detail || e?.message || 'Could not load saved template drafts.');
+    }
+  }, []);
+
+  useEffect(() => { load(); loadSavedTemplates(); }, [load, loadSavedTemplates]);
   useEffect(() => { loadJobDetail(selectedJobId); }, [selectedJobId, loadJobDetail]);
 
   const hasActiveJobs = useMemo(
@@ -268,6 +277,7 @@ export default function ReferenceTemplateLibrary() {
     () => applyReviewCorrections(rawVisual, reviewByKey),
     [rawVisual, reviewByKey],
   );
+  const acceptedReviewCount = (selectedJob?.review?.items || []).filter((item) => item.decision === 'accepted').length;
   const sampleById = useMemo(
     () => new Map(samples.map((sample) => [sample.asset_id, sample])),
     [samples],
@@ -346,6 +356,31 @@ export default function ReferenceTemplateLibrary() {
       return false;
     } finally {
       setReviewBusyKey('');
+    }
+  };
+
+  const saveDraftTemplate = async () => {
+    if (!selectedJob || savingDraft || acceptedReviewCount < 1) return;
+    setSavingDraft(true);
+    setDraftSaveMessage('');
+    try {
+      const response = await apiJson('/api/template-analysis/jobs/' + selectedJob.id + '/draft-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: selectedJob.name || (selectedJob.original_filename || 'Reference template').replace(/\\.[^.]+$/, ''),
+          description: 'Draft created from a reviewed reference-video analysis.',
+          category: selectedJob.category || 'Uncategorized',
+          tags: [],
+        }),
+      });
+      const template = response.template;
+      setSavedTemplates((current) => [template, ...current.filter((item) => item.id !== template.id)]);
+      setDraftSaveMessage('Saved "' + template.name + '" as a local template draft.');
+    } catch (e) {
+      setError(e?.detail || e?.message || 'Could not save the reviewed template draft.');
+    } finally {
+      setSavingDraft(false);
     }
   };
 
@@ -436,6 +471,25 @@ export default function ReferenceTemplateLibrary() {
       </form>
 
       {error && <div className="mb-6 rounded-input border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>}
+      {draftSaveMessage && <div className="mb-6 rounded-input border border-emerald-600/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-800">{draftSaveMessage}</div>}
+
+      {savedTemplates.length > 0 && (
+        <section className="card p-4 mb-5">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h2 className="text-sm font-semibold text-ink">Saved local template drafts</h2>
+            <span className="readout">{savedTemplates.length} templates</span>
+          </div>
+          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-2">
+            {savedTemplates.map((template) => (
+              <div key={template.id} className="rounded-input border border-rule p-3 min-w-0">
+                <p className="text-sm font-medium text-ink truncate">{template.name}</p>
+                <p className="readout mt-1 truncate">{template.category} · revision {template.revision}</p>
+                <p className="text-[11px] text-muted mt-2">Local draft · {new Date(template.updated_at).toLocaleDateString()}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="grid xl:grid-cols-[340px_minmax(0,1fr)] gap-5 items-start">
         <aside className="card p-4">
@@ -495,6 +549,16 @@ export default function ReferenceTemplateLibrary() {
                     <span className={'text-xs font-medium ' + ((STATUS[selectedJob.status] || STATUS.queued).tone)}>
                       {(STATUS[selectedJob.status] || STATUS.queued).label}
                     </span>
+                    {aiStatus === 'complete' && visual && (
+                      <button
+                        onClick={saveDraftTemplate}
+                        disabled={savingDraft || acceptedReviewCount < 1}
+                        title={acceptedReviewCount < 1 ? 'Accept at least one finding before saving a draft' : 'Save the accepted findings as a reusable local template'}
+                        className="btn-primary px-3 py-1.5 text-xs disabled:opacity-50"
+                      >
+                        {savingDraft ? <><Loader2 size={13} className="animate-spin" /> Saving</> : 'Save reviewed draft'}
+                      </button>
+                    )}
                     {['queued', 'running'].includes(selectedJob.status) && (
                       <button onClick={() => cancel(selectedJob.id)} className="btn-ghost px-3 py-1.5 text-xs">Cancel</button>
                     )}
@@ -602,7 +666,7 @@ export default function ReferenceTemplateLibrary() {
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
                         {visual.overview_evidence?.length > 0 && <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />}
                         {visual.overview_evidence?.length > 0 && <ReviewControls review={reviewByKey.get('overview:overview')} onDecision={(decision, note) => updateReview('overview', 'overview', decision, note)} disabled={reviewBusyKey === 'overview:overview'} />}
-                        {visual.overview_evidence?.length > 0 && <TemplateFindingCorrectionEditor targetType="overview" finding={visual} onSave={(patch) => updateReview('overview', 'overview', 'accepted', reviewByKey.get('overview:overview')?.note || '', patch)} disabled={reviewBusyKey === 'overview:overview'} />}
+                        {visual.overview_evidence?.length > 0 && <TemplateFindingCorrectionEditor key={selectedJob.id + '-overview-correction'} targetType="overview" finding={visual} onSave={(patch) => updateReview('overview', 'overview', 'accepted', reviewByKey.get('overview:overview')?.note || '', patch)} disabled={reviewBusyKey === 'overview:overview'} />}
                       </div>
 
                       {visual.color_palette?.length > 0 && (
@@ -622,7 +686,7 @@ export default function ReferenceTemplateLibrary() {
                                   onDecision={(decision, note) => updateReview('color_palette', String(index), decision, note)}
                                   disabled={reviewBusyKey === 'color_palette:' + index}
                                 />
-                                <TemplateFindingCorrectionEditor targetType="color_palette" finding={item} onSave={(patch) => updateReview('color_palette', String(index), 'accepted', reviewByKey.get('color_palette:' + index)?.note || '', patch)} disabled={reviewBusyKey === 'color_palette:' + index} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-palette-' + index} targetType="color_palette" finding={item} onSave={(patch) => updateReview('color_palette', String(index), 'accepted', reviewByKey.get('color_palette:' + index)?.note || '', patch)} disabled={reviewBusyKey === 'color_palette:' + index} />
                               </div>
                             ))}
                           </div>
@@ -640,7 +704,7 @@ export default function ReferenceTemplateLibrary() {
                                 {item.colors?.length > 0 && <div className="flex gap-1.5 mt-2">{item.colors.map((color, index) => <span key={color + index} className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls review={reviewByKey.get('backgrounds:' + item.id)} onDecision={(decision, note) => updateReview('backgrounds', item.id, decision, note)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
-                                <TemplateFindingCorrectionEditor targetType="backgrounds" finding={item} onSave={(patch) => updateReview('backgrounds', item.id, 'accepted', reviewByKey.get('backgrounds:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-background-' + item.id} targetType="backgrounds" finding={item} onSave={(patch) => updateReview('backgrounds', item.id, 'accepted', reviewByKey.get('backgrounds:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -658,7 +722,7 @@ export default function ReferenceTemplateLibrary() {
                                 {item.subject_regions?.length > 0 && <div className="mt-2 space-y-1">{item.subject_regions.map((box, index) => <div key={index}><span className="readout">Subject {index + 1}: </span><BoxSummary box={box} /></div>)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} boxes={item.subject_regions} />
                                 <ReviewControls review={reviewByKey.get('compositions:' + item.id)} onDecision={(decision, note) => updateReview('compositions', item.id, decision, note)} disabled={reviewBusyKey === 'compositions:' + item.id} />
-                                <TemplateFindingCorrectionEditor targetType="compositions" finding={item} onSave={(patch) => updateReview('compositions', item.id, 'accepted', reviewByKey.get('compositions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'compositions:' + item.id} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-composition-' + item.id} targetType="compositions" finding={item} onSave={(patch) => updateReview('compositions', item.id, 'accepted', reviewByKey.get('compositions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'compositions:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -707,7 +771,7 @@ export default function ReferenceTemplateLibrary() {
                                 {region.animation_notes && <p className="text-xs text-muted mt-2">{region.animation_notes}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={region.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={region.box} />
                                   <ReviewControls review={reviewByKey.get('text_regions:' + region.id)} onDecision={(decision, note) => updateReview('text_regions', region.id, decision, note)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
-                                  <TemplateFindingCorrectionEditor targetType="text_regions" finding={region} onSave={(patch) => updateReview('text_regions', region.id, 'accepted', reviewByKey.get('text_regions:' + region.id)?.note || '', patch)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
+                                  <TemplateFindingCorrectionEditor key={selectedJob.id + '-text-' + region.id} targetType="text_regions" finding={region} onSave={(patch) => updateReview('text_regions', region.id, 'accepted', reviewByKey.get('text_regions:' + region.id)?.note || '', patch)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
                             </article>
                             ))}
                           </div>
@@ -725,7 +789,7 @@ export default function ReferenceTemplateLibrary() {
                                 <BoxSummary box={item.box} />
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={item.box} />
                                 <ReviewControls review={reviewByKey.get('graphic_overlays:' + item.id)} onDecision={(decision, note) => updateReview('graphic_overlays', item.id, decision, note)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
-                                <TemplateFindingCorrectionEditor targetType="graphic_overlays" finding={item} onSave={(patch) => updateReview('graphic_overlays', item.id, 'accepted', reviewByKey.get('graphic_overlays:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-overlay-' + item.id} targetType="graphic_overlays" finding={item} onSave={(patch) => updateReview('graphic_overlays', item.id, 'accepted', reviewByKey.get('graphic_overlays:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -743,7 +807,7 @@ export default function ReferenceTemplateLibrary() {
                                 {item.start_ms != null && item.end_ms != null && <p className="readout mt-2">{formatSeconds(item.start_ms / 1000)}–{formatSeconds(item.end_ms / 1000)}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls review={reviewByKey.get('effects:' + item.id)} onDecision={(decision, note) => updateReview('effects', item.id, decision, note)} disabled={reviewBusyKey === 'effects:' + item.id} />
-                                <TemplateFindingCorrectionEditor targetType="effects" finding={item} onSave={(patch) => updateReview('effects', item.id, 'accepted', reviewByKey.get('effects:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'effects:' + item.id} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-effect-' + item.id} targetType="effects" finding={item} onSave={(patch) => updateReview('effects', item.id, 'accepted', reviewByKey.get('effects:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'effects:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -770,7 +834,7 @@ export default function ReferenceTemplateLibrary() {
                                   onDecision={(decision, note) => updateReview('transitions', item.id, decision, note)}
                                   disabled={reviewBusyKey === 'transitions:' + item.id}
                                 />
-                                <TemplateFindingCorrectionEditor targetType="transitions" finding={item} onSave={(patch) => updateReview('transitions', item.id, 'accepted', reviewByKey.get('transitions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'transitions:' + item.id} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-transition-' + item.id} targetType="transitions" finding={item} onSave={(patch) => updateReview('transitions', item.id, 'accepted', reviewByKey.get('transitions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'transitions:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -789,7 +853,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="mt-2"><Confidence value={scene.confidence} /></div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={scene.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls review={reviewByKey.get('scenes:' + scene.index)} onDecision={(decision, note) => updateReview('scenes', String(scene.index), decision, note)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
-                                <TemplateFindingCorrectionEditor targetType="scenes" finding={scene} onSave={(patch) => updateReview('scenes', String(scene.index), 'accepted', reviewByKey.get('scenes:' + scene.index)?.note || '', patch)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
+                                <TemplateFindingCorrectionEditor key={selectedJob.id + '-scene-' + scene.index} targetType="scenes" finding={scene} onSave={(patch) => updateReview('scenes', String(scene.index), 'accepted', reviewByKey.get('scenes:' + scene.index)?.note || '', patch)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
                               </div>
                             ))}
                           </div>
