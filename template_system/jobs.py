@@ -262,10 +262,83 @@ class AnalysisJobStore:
             shutil.rmtree(directory)
 
     def request_cancel(self, job_id: str) -> dict[str, Any]:
-        current = self.get(job_id)
-        if current["status"] in {"completed", "partial", "failed", "cancelled"}:
-            return current
-        return self.update(job_id, cancel_requested=True, stage="cancelling")
+        """Set cancellation under the same lock used by terminal finalization."""
+        path = self._manifest_path(job_id)
+        with self._lock(str(path)):
+            if path.is_symlink() or not path.is_file():
+                raise FileNotFoundError(job_id)
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError("template analysis job manifest is corrupt") from exc
+            if payload.get("id") != job_id:
+                raise ValueError("template analysis job id does not match its manifest")
+            if payload.get("status") in {"completed", "partial", "failed", "cancelled"}:
+                return payload
+            payload.update(
+                cancel_requested=True,
+                stage="cancelling",
+                updated_at=_now(),
+            )
+            self._atomic_json(path, payload)
+            return payload
+
+    def finish(
+        self,
+        job_id: str,
+        report: dict[str, Any],
+        *,
+        status: str,
+        ai_status: str,
+        ai_error: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically persist the final report and honor any concurrent cancel."""
+        if status not in {"completed", "partial", "cancelled"}:
+            raise ValueError("invalid terminal analysis status")
+        if ai_status not in {"complete", "failed", "not_consented", "cancelled"}:
+            raise ValueError("invalid terminal AI status")
+        path = self._manifest_path(job_id)
+        with self._lock(str(path)):
+            if path.is_symlink() or not path.is_file():
+                raise FileNotFoundError(job_id)
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError("template analysis job manifest is corrupt") from exc
+            if payload.get("id") != job_id:
+                raise ValueError("template analysis job id does not match its manifest")
+
+            final_report = dict(report)
+            if payload.get("cancel_requested"):
+                status = "cancelled"
+                ai_status = "cancelled"
+                ai_error = "Cancellation was requested while the analysis job was finalizing."
+                final_report["ai_status"] = "cancelled"
+                final_report["ai_error"] = ai_error
+                final_report["ai_report"] = None
+            else:
+                final_report["ai_status"] = ai_status
+                final_report["ai_error"] = ai_error
+                if ai_status != "complete":
+                    final_report["ai_report"] = None
+
+            report_path = self._job_dir(job_id) / "report.json"
+            if report_path.is_symlink():
+                raise ValueError("analysis report path cannot be a symbolic link")
+            self._atomic_json(report_path, final_report)
+
+            payload.update(
+                status=status,
+                stage="cancelled" if status == "cancelled" else "complete",
+                progress=100,
+                ai_status=ai_status,
+                ai_error=ai_error,
+                error=None,
+                completed_at=_now(),
+                updated_at=_now(),
+            )
+            self._atomic_json(path, payload)
+            return payload
 
     def is_cancel_requested(self, job_id: str) -> bool:
         return bool(self.get(job_id).get("cancel_requested"))
@@ -370,12 +443,14 @@ def execute_reference_analysis_job(
         store.save_report(job_id, report)
 
         if cancelled():
-            store.update(
-                job_id, status="cancelled", stage="cancelled", progress=100,
-                ai_status="cancelled", completed_at=_now(),
+            report["ai_status"] = "cancelled"
+            store.finish(
+                job_id, report, status="cancelled", ai_status="cancelled",
+                ai_error="Cancellation was requested before visual interpretation began.",
             )
             return
 
+        ai_report = None
         if item.get("gemini_consent"):
             store.update(job_id, stage="gemini_interpretation", progress=88, ai_status="running")
             try:
@@ -390,29 +465,15 @@ def execute_reference_analysis_job(
                 ai_status = "failed"
                 ai_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
 
-        # A Gemini request cannot be interrupted mid-flight, but a cancellation
-        # requested during it is honored immediately after the provider returns.
-        # Discard the AI result and preserve the already-saved deterministic pass.
-        if cancelled():
-            report["ai_status"] = "cancelled"
-            report["ai_error"] = "Cancellation was requested while visual interpretation was in progress."
-            store.save_report(job_id, report)
-            store.update(
-                job_id, status="cancelled", stage="cancelled", progress=100,
-                ai_status="cancelled", ai_error=report["ai_error"],
-                completed_at=_now(),
-            )
-            return
-
+        # finish() and request_cancel() serialize on the same manifest lock.
+        # A cancel arriving during the provider request or finalization wins.
+        final_status = "completed" if ai_status == "complete" else "partial"
         report["ai_status"] = ai_status
         report["ai_error"] = ai_error
         report["ai_report"] = ai_report if ai_status == "complete" else None
-        store.save_report(job_id, report)
-        final_status = "completed" if ai_status == "complete" else "partial"
-        store.update(
-            job_id, status=final_status, stage="complete",
-            progress=100, ai_status=ai_status, ai_error=ai_error,
-            error=None, completed_at=_now(),
+        store.finish(
+            job_id, report, status=final_status,
+            ai_status=ai_status, ai_error=ai_error,
         )
     except ReferenceAnalysisCancelled:
         store.update(job_id, status="cancelled", stage="cancelled", completed_at=_now())

@@ -201,3 +201,38 @@ def test_cancellation_during_gemini_preserves_deterministic_report(tmp_path, mon
     assert saved["ai_status"] == "cancelled"
     assert report["ai_report"] is None
     assert report["deterministic"]["technical"]["duration_seconds"] == 8.0
+
+
+def test_request_cancel_does_not_reopen_a_terminal_job(tmp_path):
+    store, job = _create_job(tmp_path)
+    store.update(job["id"], status="completed", stage="complete")
+
+    returned = store.request_cancel(job["id"])
+
+    assert returned["status"] == "completed"
+    assert returned["cancel_requested"] is False
+
+
+def test_atomic_finish_honors_cancel_requested_before_commit(tmp_path):
+    store, job = _create_job(tmp_path)
+    store.update(job["id"], status="running", stage="gemini_interpretation")
+    store.request_cancel(job["id"])
+
+    result = store.finish(
+        job["id"],
+        {
+            "schema_version": 1,
+            "deterministic": {"technical": {"duration_seconds": 3}},
+            "ai_status": "complete",
+            "ai_report": {"summary": "must not be saved"},
+        },
+        status="completed",
+        ai_status="complete",
+    )
+
+    saved_report = store.get_report(job["id"])
+    assert result["status"] == "cancelled"
+    assert result["ai_status"] == "cancelled"
+    assert saved_report["ai_status"] == "cancelled"
+    assert saved_report["ai_report"] is None
+    assert saved_report["deterministic"]["technical"]["duration_seconds"] == 3
