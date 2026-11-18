@@ -2608,6 +2608,9 @@ _LIBRARY_MEDIA_PATH_RE = re.compile(
 _TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE = re.compile(
     r"^/api/template-analysis/jobs/tjob_[a-f0-9]{32}/evidence/reference_frame_[0-9]{3}$"
 )
+_TEMPLATE_ANALYSIS_SOURCE_PATH_RE = re.compile(
+    r"^/api/template-analysis/jobs/tjob_[a-f0-9]{32}/source$"
+)
 
 
 def _assert_data_storage_available() -> None:
@@ -2627,8 +2630,10 @@ async def require_desktop_api_token(request: Request, call_next):
     media_paths = ("/videos/", "/thumbnails/", "/reference-templates-media/")
     library_media = _LIBRARY_MEDIA_PATH_RE.fullmatch(request.url.path) is not None
     template_evidence_media = _TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE.fullmatch(request.url.path) is not None
+    template_source_media = _TEMPLATE_ANALYSIS_SOURCE_PATH_RE.fullmatch(request.url.path) is not None
     if not supplied and request.method in ("GET", "HEAD") and (
-        request.url.path.startswith(media_paths) or library_media or template_evidence_media
+        request.url.path.startswith(media_paths) or library_media
+        or template_evidence_media or template_source_media
     ):
         supplied = request.query_params.get("token", "")
     if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
@@ -3619,6 +3624,30 @@ async def cancel_template_analysis_job(job_id: str):
         raise HTTPException(status_code=404, detail="Template analysis job not found.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/template-analysis/jobs/{job_id}/source")
+async def get_template_analysis_source(job_id: str):
+    """Serve the original reference uploaded for this analysis job."""
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    store = _template_analysis_store()
+    try:
+        path = store.source_path(job_id)
+        suffix = path.suffix.lower()
+        media_type = {
+            ".mp4": "video/mp4",
+            ".mov": "video/quicktime",
+            ".mkv": "video/x-matroska",
+            ".webm": "video/webm",
+            ".m4v": "video/mp4",
+            ".avi": "video/x-msvideo",
+        }.get(suffix, "application/octet-stream")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Reference source video not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return FileResponse(path, media_type=media_type, filename=path.name)
 
 
 @app.get("/api/template-analysis/jobs/{job_id}/evidence/{asset_id}")

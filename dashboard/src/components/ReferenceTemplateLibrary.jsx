@@ -269,6 +269,13 @@ export default function ReferenceTemplateLibrary() {
                     <p className="eyebrow text-brass">ANALYSIS JOB</p>
                     <h2 className="text-xl font-semibold text-ink mt-1 break-words">{selectedJob.name || selectedJob.original_filename}</h2>
                     <p className="readout mt-1">{selectedJob.original_filename} · {formatBytes(selectedJob.source_size_bytes)}</p>
+                    <video
+                      className="mt-4 w-full max-h-[520px] rounded-input bg-black"
+                      controls
+                      playsInline
+                      preload="metadata"
+                      src={getApiUrl('/api/template-analysis/jobs/' + selectedJob.id + '/source')}
+                    />
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={'text-xs font-medium ' + ((STATUS[selectedJob.status] || STATUS.queued).tone)}>
