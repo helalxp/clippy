@@ -29,8 +29,8 @@ function installLocalApiAuth(token, baseUrl) {
   };
 }
 
-async function startAndConfigureServices(invoke) {
-  const services = await invoke('start_services');
+async function startAndConfigureServices(invoke, startCommand = 'start_services') {
+  const services = await invoke(startCommand);
   if (!services?.backend_url) {
     throw new Error('Clippy services started without returning a backend address.');
   }
@@ -173,7 +173,7 @@ export default function DesktopRuntimeGate({ children }) {
   }, [attempt, invoke, isDesktop, runSetupRuntime]);
 
   const restoreServicesAfterUpdateFailure = useCallback(async () => {
-    return startAndConfigureServices(invoke);
+    return startAndConfigureServices(invoke, 'restore_services_after_update_failure');
   }, [invoke]);
 
   useEffect(() => {
