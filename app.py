@@ -3617,6 +3617,9 @@ async def get_template_analysis_job(job_id: str):
 
 
 class TemplateAnalysisReviewRequest(BaseModel):
+    class Config:
+        extra = "forbid"
+
     target_type: str
     target_id: str
     decision: str
