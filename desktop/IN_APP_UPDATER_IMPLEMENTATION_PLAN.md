@@ -717,3 +717,11 @@ contents of the encrypted private key file and its password. Never commit or
 paste either secret. The first updater-enabled release still requires a manual
 installation by users on the older 0.3.0 build, which does not contain the
 updater plugin/public key.
+
+
+The release manifest generator now has focused Pester coverage for its Windows
+platform entry, final installer URL, signature contents, release notes, RFC
+3339 publication timestamp, invalid SemVer tags, and empty signatures. The
+Windows validation workflow also parses the new PowerShell scripts and updater
+configuration overlay. These checks do not require signing secrets or build
+the CPU/CUDA runtime matrix.

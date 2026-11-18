@@ -110,12 +110,15 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/smoke-test-runtime.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/build.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/create-updater-manifest.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build-python-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-manifest-state.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-health.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/test-runtime-contract.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
+          Get-Content ./desktop/src-tauri/tauri.updater.conf.json -Raw | ConvertFrom-Json | Out-Null
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
