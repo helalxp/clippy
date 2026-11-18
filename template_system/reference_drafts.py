@@ -13,7 +13,6 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
 from typing import Any
 
 from PIL import Image
@@ -236,7 +235,10 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
             anchor_x, anchor_y = _box_center(item.box)
             add(f"{group}.anchor_x", float(anchor_x), item, review_item, "Center of accepted text bounding box", inferred=True)
             add(f"{group}.anchor_y", float(anchor_y), item, review_item, "Center of accepted text bounding box", inferred=True)
-            add(f"{group}.position", _vertical_position(anchor_y), item, review_item, "Vertical placement inferred from accepted text bounding box", inferred=True)
+            position = _vertical_position(anchor_y)
+            if is_hook and position == "middle":
+                position = "center"
+            add(f"{group}.position", position, item, review_item, "Vertical placement inferred from accepted text bounding box", inferred=True)
         if typography.line_count is not None and not is_hook:
             if typography.line_count <= 4:
                 add("captions.max_lines", int(typography.line_count), item, review_item, "Accepted observed caption line count")
@@ -361,7 +363,6 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
         raise ReferenceDraftError("sampled evidence frames are missing")
     samples: list[FrameSample] = []
     image_payloads: dict[str, bytes] = {}
-    expected_asset_ids = set()
     for index, item in enumerate(raw_samples, start=1):
         asset_id = f"reference_frame_{index:03d}"
         if not isinstance(item, dict) or item.get("asset_id") != asset_id:
@@ -404,7 +405,6 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
 
         samples.append(sample)
         image_payloads[asset_id] = payload
-        expected_asset_ids.add(asset_id)
 
     visual_measurements = []
     for item in deterministic.get("visual_measurements") or []:
@@ -443,7 +443,7 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
     return result, image_payloads
 
 
-def save_reviewed_reference_template(
+def _save_reviewed_reference_template_locked(
     store,
     template_storage: LocalTemplateStorage,
     job_id: str,
@@ -546,3 +546,27 @@ def save_reviewed_reference_template(
     except Exception:
         # Storage.create performs atomic cleanup itself; bubble up an actionable error.
         raise
+
+
+def save_reviewed_reference_template(
+    store,
+    template_storage: LocalTemplateStorage,
+    job_id: str,
+    *,
+    name: str | None = None,
+    description: str = "",
+    category: str | None = None,
+    tags: list[str] | None = None,
+) -> TemplateDocument:
+    """Save while holding the analysis-job lock so deletion cannot race asset copying."""
+    directory = store._job_dir(job_id)
+    with store._lock(str(directory)):
+        return _save_reviewed_reference_template_locked(
+            store,
+            template_storage,
+            job_id,
+            name=name,
+            description=description,
+            category=category,
+            tags=tags,
+        )
