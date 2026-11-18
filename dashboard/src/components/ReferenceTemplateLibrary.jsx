@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
+import TemplateFindingCorrectionEditor from './TemplateFindingCorrectionEditor';
 
 const VIDEO_ACCEPT = 'video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,.mp4,.mov,.mkv,.webm,.m4v,.avi';
 
@@ -44,6 +45,55 @@ function BoxSummary({ box }) {
   if (!box) return <span className="readout">Position unavailable</span>;
   const pct = (value) => Math.round(Number(value || 0) * 100) + '%';
   return <span className="readout">X {pct(box.x)} · Y {pct(box.y)} · W {pct(box.width)} · H {pct(box.height)}</span>;
+}
+
+
+
+function readObjectPath(value, path) {
+  return path.split('.').reduce((current, key) => current == null ? undefined : current[key], value);
+}
+
+function mergeObject(target, patch) {
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value && typeof value === 'object' && !Array.isArray(value) &&
+        target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])) {
+      mergeObject(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  });
+  return target;
+}
+
+function applyReviewCorrections(report, reviewByKey) {
+  if (!report) return null;
+  const result = JSON.parse(JSON.stringify(report));
+  reviewByKey.forEach((review) => {
+    if (review.decision !== 'accepted' || !review.correction) return;
+    const patch = JSON.parse(JSON.stringify(review.correction));
+    if (review.target_type === 'overview') {
+      Object.assign(result, patch);
+      return;
+    }
+    const collection = result[review.target_type];
+    if (!Array.isArray(collection)) return;
+    let finding = null;
+    if (review.target_type === 'color_palette') {
+      finding = collection[Number(review.target_id)];
+    } else if (review.target_type === 'scenes') {
+      finding = collection.find((item) => String(item.index) === String(review.target_id));
+    } else {
+      finding = collection.find((item) => item.id === review.target_id);
+    }
+    if (!finding) return;
+    if (review.target_type === 'text_regions' && patch.typography?.font_family) {
+      finding.human_font_family = patch.typography.font_family;
+      delete patch.typography.font_family;
+      if (!Object.keys(patch.typography).length) delete patch.typography;
+    }
+    mergeObject(finding, patch);
+  });
+  return result;
 }
 
 function EvidenceFrame({ jobId, sample, box = null, boxes = null, onSelect = null }) {
@@ -207,12 +257,16 @@ export default function ReferenceTemplateLibrary() {
   const report = selectedJob?.report || null;
   const aiStatus = selectedJob?.ai_status || report?.ai_status || 'pending';
   const deterministic = report?.deterministic || null;
-  const visual = report?.ai_report || null;
+  const rawVisual = report?.ai_report || null;
   const samples = deterministic?.samples || [];
   const measurements = deterministic?.visual_measurements || [];
   const reviewByKey = useMemo(
     () => new Map((selectedJob?.review?.items || []).map((item) => [item.target_type + ':' + item.target_id, item])),
     [selectedJob?.review],
+  );
+  const visual = useMemo(
+    () => applyReviewCorrections(rawVisual, reviewByKey),
+    [rawVisual, reviewByKey],
   );
   const sampleById = useMemo(
     () => new Map(samples.map((sample) => [sample.asset_id, sample])),
@@ -270,21 +324,26 @@ export default function ReferenceTemplateLibrary() {
     }
   };
 
-  const updateReview = async (targetType, targetId, decision, note = '') => {
-    if (!selectedJobId) return;
+  const updateReview = async (targetType, targetId, decision, note = '', correction) => {
+    if (!selectedJobId) return false;
+    const jobId = selectedJobId;
     const key = targetType + ':' + targetId;
     setReviewBusyKey(key);
     try {
-      const response = await apiJson('/api/template-analysis/jobs/' + selectedJobId + '/review', {
+      const payload = { target_type: targetType, target_id: String(targetId), decision, note };
+      if (correction !== undefined) payload.correction = correction;
+      const response = await apiJson('/api/template-analysis/jobs/' + jobId + '/review', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_type: targetType, target_id: String(targetId), decision, note }),
+        body: JSON.stringify(payload),
       });
-      setSelectedJobDetail((current) => current?.id === selectedJobId
+      setSelectedJobDetail((current) => current?.id === jobId
         ? { ...current, review: response.review }
         : current);
+      return true;
     } catch (e) {
       setError(e?.detail || e?.message || 'Could not save the review decision.');
+      return false;
     } finally {
       setReviewBusyKey('');
     }
@@ -543,6 +602,7 @@ export default function ReferenceTemplateLibrary() {
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
                         {visual.overview_evidence?.length > 0 && <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />}
                         {visual.overview_evidence?.length > 0 && <ReviewControls review={reviewByKey.get('overview:overview')} onDecision={(decision, note) => updateReview('overview', 'overview', decision, note)} disabled={reviewBusyKey === 'overview:overview'} />}
+                        {visual.overview_evidence?.length > 0 && <TemplateFindingCorrectionEditor targetType="overview" finding={visual} onSave={(patch) => updateReview('overview', 'overview', 'accepted', reviewByKey.get('overview:overview')?.note || '', patch)} disabled={reviewBusyKey === 'overview:overview'} />}
                       </div>
 
                       {visual.color_palette?.length > 0 && (
@@ -562,6 +622,7 @@ export default function ReferenceTemplateLibrary() {
                                   onDecision={(decision, note) => updateReview('color_palette', String(index), decision, note)}
                                   disabled={reviewBusyKey === 'color_palette:' + index}
                                 />
+                                <TemplateFindingCorrectionEditor targetType="color_palette" finding={item} onSave={(patch) => updateReview('color_palette', String(index), 'accepted', reviewByKey.get('color_palette:' + index)?.note || '', patch)} disabled={reviewBusyKey === 'color_palette:' + index} />
                               </div>
                             ))}
                           </div>
@@ -579,6 +640,7 @@ export default function ReferenceTemplateLibrary() {
                                 {item.colors?.length > 0 && <div className="flex gap-1.5 mt-2">{item.colors.map((color, index) => <span key={color + index} className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls review={reviewByKey.get('backgrounds:' + item.id)} onDecision={(decision, note) => updateReview('backgrounds', item.id, decision, note)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
+                                <TemplateFindingCorrectionEditor targetType="backgrounds" finding={item} onSave={(patch) => updateReview('backgrounds', item.id, 'accepted', reviewByKey.get('backgrounds:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -596,6 +658,7 @@ export default function ReferenceTemplateLibrary() {
                                 {item.subject_regions?.length > 0 && <div className="mt-2 space-y-1">{item.subject_regions.map((box, index) => <div key={index}><span className="readout">Subject {index + 1}: </span><BoxSummary box={box} /></div>)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} boxes={item.subject_regions} />
                                 <ReviewControls review={reviewByKey.get('compositions:' + item.id)} onDecision={(decision, note) => updateReview('compositions', item.id, decision, note)} disabled={reviewBusyKey === 'compositions:' + item.id} />
+                                <TemplateFindingCorrectionEditor targetType="compositions" finding={item} onSave={(patch) => updateReview('compositions', item.id, 'accepted', reviewByKey.get('compositions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'compositions:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -625,6 +688,7 @@ export default function ReferenceTemplateLibrary() {
                                   <span className="readout">Alignment {region.typography?.alignment || 'unknown'}</span>
                                   <span className="readout">Animation {titleCase(region.animation || 'unknown')}</span>
                                 </div>
+                                {region.human_font_family && <p className="readout mt-2">Human-corrected font: {region.human_font_family}</p>}
                                 {region.typography?.font_candidates?.length > 0 && (
                                   <div className="mt-3">
                                     <span className="eyebrow block mb-1">Likely font candidates, ranked</span>
@@ -643,6 +707,7 @@ export default function ReferenceTemplateLibrary() {
                                 {region.animation_notes && <p className="text-xs text-muted mt-2">{region.animation_notes}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={region.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={region.box} />
                                   <ReviewControls review={reviewByKey.get('text_regions:' + region.id)} onDecision={(decision, note) => updateReview('text_regions', region.id, decision, note)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
+                                  <TemplateFindingCorrectionEditor targetType="text_regions" finding={region} onSave={(patch) => updateReview('text_regions', region.id, 'accepted', reviewByKey.get('text_regions:' + region.id)?.note || '', patch)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
                             </article>
                             ))}
                           </div>
@@ -660,6 +725,7 @@ export default function ReferenceTemplateLibrary() {
                                 <BoxSummary box={item.box} />
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={item.box} />
                                 <ReviewControls review={reviewByKey.get('graphic_overlays:' + item.id)} onDecision={(decision, note) => updateReview('graphic_overlays', item.id, decision, note)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
+                                <TemplateFindingCorrectionEditor targetType="graphic_overlays" finding={item} onSave={(patch) => updateReview('graphic_overlays', item.id, 'accepted', reviewByKey.get('graphic_overlays:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -677,6 +743,7 @@ export default function ReferenceTemplateLibrary() {
                                 {item.start_ms != null && item.end_ms != null && <p className="readout mt-2">{formatSeconds(item.start_ms / 1000)}–{formatSeconds(item.end_ms / 1000)}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls review={reviewByKey.get('effects:' + item.id)} onDecision={(decision, note) => updateReview('effects', item.id, decision, note)} disabled={reviewBusyKey === 'effects:' + item.id} />
+                                <TemplateFindingCorrectionEditor targetType="effects" finding={item} onSave={(patch) => updateReview('effects', item.id, 'accepted', reviewByKey.get('effects:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'effects:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -703,6 +770,7 @@ export default function ReferenceTemplateLibrary() {
                                   onDecision={(decision, note) => updateReview('transitions', item.id, decision, note)}
                                   disabled={reviewBusyKey === 'transitions:' + item.id}
                                 />
+                                <TemplateFindingCorrectionEditor targetType="transitions" finding={item} onSave={(patch) => updateReview('transitions', item.id, 'accepted', reviewByKey.get('transitions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'transitions:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -721,6 +789,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="mt-2"><Confidence value={scene.confidence} /></div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={scene.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls review={reviewByKey.get('scenes:' + scene.index)} onDecision={(decision, note) => updateReview('scenes', String(scene.index), decision, note)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
+                                <TemplateFindingCorrectionEditor targetType="scenes" finding={scene} onSave={(patch) => updateReview('scenes', String(scene.index), 'accepted', reviewByKey.get('scenes:' + scene.index)?.note || '', patch)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
                               </div>
                             ))}
                           </div>
