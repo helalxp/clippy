@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import uuid
@@ -359,10 +360,11 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
         raise ReferenceDraftError("deterministic media metadata is malformed") from exc
 
     raw_samples = deterministic.get("samples") or []
-    if not isinstance(raw_samples, list) or not raw_samples:
-        raise ReferenceDraftError("sampled evidence frames are missing")
+    if not isinstance(raw_samples, list) or not raw_samples or len(raw_samples) > 64:
+        raise ReferenceDraftError("sampled evidence frames are missing or exceed the 64-frame limit")
     samples: list[FrameSample] = []
     image_payloads: dict[str, bytes] = {}
+    total_image_bytes = 0
     for index, item in enumerate(raw_samples, start=1):
         asset_id = f"reference_frame_{index:03d}"
         if not isinstance(item, dict) or item.get("asset_id") != asset_id:
@@ -375,8 +377,18 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
             sha256 = str(item["sha256"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ReferenceDraftError("sample evidence metadata is incomplete") from exc
-        if timestamp_ms < 0 or width < 1 or height < 1 or size_bytes < 1 or not re.fullmatch(r"[a-fA-F0-9]{64}", sha256):
+        if (
+            timestamp_ms < 0
+            or width < 1 or width > 16384
+            or height < 1 or height > 16384
+            or width * height > 50_000_000
+            or size_bytes < 1 or size_bytes > 12 * 1024 * 1024
+            or not re.fullmatch(r"[a-fA-F0-9]{64}", sha256)
+        ):
             raise ReferenceDraftError("sample evidence metadata is outside supported limits")
+        total_image_bytes += size_bytes
+        if total_image_bytes > 80 * 1024 * 1024:
+            raise ReferenceDraftError("sampled evidence exceeds the 80 MB portable-template limit")
 
         path = f"assets/{asset_id}.png"
         sample = FrameSample(
@@ -387,7 +399,10 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
             width=width,
             height=height,
         )
-        evidence_path = store.evidence_path(job_id, asset_id)
+        try:
+            evidence_path = store.evidence_path(job_id, asset_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ReferenceDraftError(f"sample frame {asset_id} is missing or unsafe") from exc
         if evidence_path.is_symlink() or not evidence_path.is_file():
             raise ReferenceDraftError(f"sample frame {asset_id} is missing or unsafe")
         payload = evidence_path.read_bytes()
@@ -413,17 +428,28 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
                 ColorShare(hex_color=str(color["hex_color"]), proportion=float(color["proportion"]))
                 for color in item.get("dominant_colors", [])
             )
+            numbers = [
+                float(item["mean_luminance"]),
+                float(item["luminance_stddev"]),
+                float(item["mean_saturation"]),
+                float(item["edge_density"]),
+            ]
+            change_value = (
+                float(item["inter_sample_visual_change"])
+                if item.get("inter_sample_visual_change") is not None else None
+            )
+            if any(not math.isfinite(value) for value in numbers) or (
+                change_value is not None and not math.isfinite(change_value)
+            ):
+                raise ValueError("non-finite deterministic visual measurement")
             visual_measurements.append(FrameVisualMeasurement(
                 timestamp_ms=int(item["timestamp_ms"]),
                 dominant_colors=colors,
-                mean_luminance=float(item["mean_luminance"]),
-                luminance_stddev=float(item["luminance_stddev"]),
-                mean_saturation=float(item["mean_saturation"]),
-                edge_density=float(item["edge_density"]),
-                inter_sample_visual_change=(
-                    float(item["inter_sample_visual_change"])
-                    if item.get("inter_sample_visual_change") is not None else None
-                ),
+                mean_luminance=numbers[0],
+                luminance_stddev=numbers[1],
+                mean_saturation=numbers[2],
+                edge_density=numbers[3],
+                inter_sample_visual_change=change_value,
             ))
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise ReferenceDraftError("deterministic visual measurements are malformed") from exc
@@ -431,9 +457,17 @@ def _restore_analysis_result(job_report: dict[str, Any], store, job_id: str) -> 
     boundaries = deterministic.get("scene_boundaries_seconds")
     if not isinstance(boundaries, list):
         boundaries = [int(value) / 1000 for value in (deterministic.get("scene_boundaries_ms") or [])]
+    if probe.file_size_bytes <= 0 or probe.duration_seconds <= 0 or not math.isfinite(probe.duration_seconds):
+        raise ReferenceDraftError("deterministic media dimensions or duration are invalid")
+    parsed_boundaries = tuple(float(value) for value in boundaries)
+    if any(
+        not math.isfinite(value) or value < 0 or value > probe.duration_seconds
+        for value in parsed_boundaries
+    ):
+        raise ReferenceDraftError("deterministic scene boundaries are outside the media duration")
     result = ReferenceAnalysisResult(
         probe=probe,
-        scene_boundaries_seconds=tuple(float(value) for value in boundaries),
+        scene_boundaries_seconds=parsed_boundaries,
         samples=tuple(samples),
         coverage=dict(deterministic.get("coverage") or {}),
         limitations=tuple(deterministic.get("limitations") or []),
