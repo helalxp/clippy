@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, Clock3, FileVideo, Loader2, RefreshCw,
-  Sparkles, Upload, XCircle,
+  Sparkles, Trash2, Upload, XCircle,
 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import { getApiUrl } from '../config';
@@ -171,6 +171,18 @@ export default function ReferenceTemplateLibrary() {
     }
   };
 
+  const remove = async (jobId) => {
+    if (!window.confirm('Delete this reference analysis and its uploaded source video? This cannot be undone.')) return;
+    try {
+      await apiJson('/api/template-analysis/jobs/' + jobId, { method: 'DELETE' });
+      setJobs((current) => current.filter((item) => item.id !== jobId));
+      setSelectedJobId((current) => current === jobId ? null : current);
+      setError('');
+    } catch (e) {
+      setError(e?.detail || e?.message || 'Could not delete reference analysis.');
+    }
+  };
+
   const cancel = async (jobId) => {
     try {
       const data = await apiJson('/api/template-analysis/jobs/' + jobId + '/cancel', { method: 'POST' });
@@ -318,6 +330,11 @@ export default function ReferenceTemplateLibrary() {
                     </span>
                     {['queued', 'running'].includes(selectedJob.status) && (
                       <button onClick={() => cancel(selectedJob.id)} className="btn-ghost px-3 py-1.5 text-xs">Cancel</button>
+                    )}
+                    {!['queued', 'running'].includes(selectedJob.status) && (
+                      <button onClick={() => remove(selectedJob.id)} className="btn-ghost px-3 py-1.5 text-xs text-danger">
+                        <Trash2 size={13} /> Delete
+                      </button>
                     )}
                   </div>
                 </div>

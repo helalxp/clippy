@@ -161,3 +161,33 @@ def test_source_and_evidence_query_token_allowlist_is_exact():
     assert not app_module._TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE.fullmatch(
         "/api/template-analysis/jobs/tjob_0123456789abcdef0123456789abcdef/evidence/../job.json"
     )
+
+
+def test_delete_endpoint_removes_terminal_analysis_and_source_files(tmp_path, monkeypatch):
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"delete-me")
+    job = store.create(staged, original_filename="delete-me.mp4")
+    store.update(job["id"], status="cancelled", stage="cancelled")
+
+    response = asyncio.run(app_module.delete_template_analysis_job(job["id"]))
+
+    assert response == {"deleted": job["id"]}
+    with pytest.raises(FileNotFoundError):
+        store.get(job["id"])
+
+
+def test_delete_endpoint_rejects_active_job(tmp_path, monkeypatch):
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"do-not-delete")
+    job = store.create(staged, original_filename="active.mp4")
+    store.update(job["id"], status="running", stage="frame_sampling")
+    task = SimpleNamespace(done=lambda: False)
+    monkeypatch.setattr(app_module, "_TEMPLATE_ANALYSIS_TASKS", {job["id"]: task})
+
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(app_module.delete_template_analysis_job(job["id"]))
+
+    assert rejected.value.status_code == 409
+    assert store.source_path(job["id"]).read_bytes() == b"do-not-delete"

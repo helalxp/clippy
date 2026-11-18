@@ -142,3 +142,15 @@ def test_gemini_failure_does_not_discard_deterministic_result(tmp_path, monkeypa
     assert saved["ai_status"] == "failed"
     assert "provider unavailable" in saved["ai_error"]
     assert report["deterministic"]["technical"]["duration_seconds"] == 8.0
+
+
+def test_store_deletes_only_terminal_jobs(tmp_path):
+    store, job = _create_job(tmp_path)
+    with pytest.raises(ValueError, match="terminal state"):
+        store.delete(job["id"])
+
+    store.update(job["id"], status="completed", stage="complete")
+    store.delete(job["id"])
+
+    with pytest.raises(FileNotFoundError):
+        store.get(job["id"])

@@ -242,6 +242,25 @@ class AnalysisJobStore:
                 continue
         return sorted(jobs, key=lambda item: item.get("created_at", ""), reverse=True)
 
+    def delete(self, job_id: str) -> None:
+        """Remove a terminal analysis job and all retained source/evidence assets."""
+        directory = self._job_dir(job_id)
+        with self._lock(str(directory)):
+            if directory.is_symlink() or not directory.is_dir():
+                raise FileNotFoundError(job_id)
+            manifest = directory / "job.json"
+            if manifest.is_symlink() or not manifest.is_file():
+                raise ValueError("template analysis job manifest is missing or unsafe")
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError("template analysis job manifest is corrupt") from exc
+            if payload.get("id") != job_id:
+                raise ValueError("template analysis job id does not match its directory")
+            if payload.get("status") not in {"completed", "partial", "failed", "cancelled"}:
+                raise ValueError("analysis jobs can only be deleted after they reach a terminal state")
+            shutil.rmtree(directory)
+
     def request_cancel(self, job_id: str) -> dict[str, Any]:
         current = self.get(job_id)
         if current["status"] in {"completed", "partial", "failed", "cancelled"}:

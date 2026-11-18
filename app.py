@@ -3626,6 +3626,26 @@ async def cancel_template_analysis_job(job_id: str):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.delete("/api/template-analysis/jobs/{job_id}")
+async def delete_template_analysis_job(job_id: str):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    active_task = _TEMPLATE_ANALYSIS_TASKS.get(job_id)
+    if active_task is not None and not active_task.done():
+        raise HTTPException(
+            status_code=409,
+            detail="This analysis is still running. Cancel it and wait for it to finish before deleting it.",
+        )
+    store = _template_analysis_store()
+    try:
+        await asyncio.to_thread(store.delete, job_id)
+        return {"deleted": job_id}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/api/template-analysis/jobs/{job_id}/source")
 async def get_template_analysis_source(job_id: str):
     """Serve the original reference uploaded for this analysis job."""
