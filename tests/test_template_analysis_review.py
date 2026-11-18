@@ -150,3 +150,30 @@ def test_get_review_rejects_corrupt_review_sidecar(tmp_path):
 
     with pytest.raises(ValueError, match="review document is invalid"):
         store.get_review(job["id"])
+
+
+def test_review_note_is_retained_and_can_be_updated(tmp_path):
+    store, job = _store_with_report(tmp_path, _report())
+
+    first = apply_review_decision(
+        store, job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="accepted",
+            note="The font treatment and placement look correct.",
+        ),
+    )
+    second = apply_review_decision(
+        store, job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="rejected",
+            note="On closer inspection, the outline is wrong.",
+        ),
+    )
+
+    assert first["items"][0]["note"] == "The font treatment and placement look correct."
+    assert second["items"][0]["note"] == "On closer inspection, the outline is wrong."
+    assert len(second["items"]) == 1

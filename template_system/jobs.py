@@ -243,12 +243,12 @@ class AnalysisJobStore:
         """Read and validate human-review decisions kept separately from the AI report."""
         from .reviews import ReviewDocument
 
-        self.get(job_id)
         directory = self._job_dir(job_id)
-        path = directory / "review.json"
-        if path.is_symlink():
-            raise ValueError("template review path cannot be a symbolic link")
-        with self._lock(str(path)):
+        with self._lock(str(directory)):
+            self.get(job_id)
+            path = directory / "review.json"
+            if path.is_symlink():
+                raise ValueError("template review path cannot be a symbolic link")
             if not path.exists():
                 return ReviewDocument(job_id=job_id).model_dump(mode="json")
             if not path.is_file():
@@ -266,14 +266,15 @@ class AnalysisJobStore:
         """Validate and atomically upsert one decision by finding type and ID."""
         from .reviews import ReviewDocument, ReviewItem
 
-        self.get(job_id)
+        directory = self._job_dir(job_id)
         try:
             reviewed_item = ReviewItem.model_validate(item)
         except Exception as exc:
             raise ValueError(f"template review item is invalid: {exc}") from exc
 
-        path = self._job_dir(job_id) / "review.json"
-        with self._lock(str(path)):
+        with self._lock(str(directory)):
+            self.get(job_id)
+            path = directory / "review.json"
             if path.is_symlink():
                 raise ValueError("template review path cannot be a symbolic link")
             if path.exists():
