@@ -2646,7 +2646,11 @@ class _DataMoveQuiescenceMiddleware:
         is_exempt = (
             method == "OPTIONS"
             or path in ("/health", "/health/ready")
-            or path == "/api/library/storage/prepare-move"
+            or path in (
+                "/api/library/storage/prepare-move",
+                "/api/desktop/update/prepare",
+                "/api/desktop/update/cancel",
+            )
         )
         counted = not is_exempt
         reject_request = False
@@ -4223,20 +4227,25 @@ async def get_local_library_storage():
     }
 
 
-@app.post("/api/library/storage/prepare-move")
-async def prepare_local_library_storage_move():
+async def _prepare_desktop_maintenance(operation: str):
+    """Stop admitting work, drain in-flight requests, and require an idle app.
+
+    The pending flag is shared by operations that must stop the backend before
+    touching the application or data installation. On success it intentionally
+    remains set until the caller stops this backend process. On rejection it is
+    always released so Clippy remains usable.
+    """
     global _DATA_MOVE_PENDING
-    if BILLING_ENABLED:
-        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
     with _DATA_MOVE_LOCK:
         if _DATA_MOVE_PENDING:
-            raise HTTPException(status_code=409, detail="A Clippy data relocation is already in progress.")
+            raise HTTPException(
+                status_code=409,
+                detail="Another Clippy maintenance operation is already being prepared.",
+            )
         _DATA_MOVE_PENDING = True
 
     handoff_ready = False
     try:
-        # Stop admitting API requests first, then drain requests already in flight.
-        # This also waits for active video/ZIP streams and background model downloads.
         deadline = time.monotonic() + 60
         while True:
             with _DATA_MOVE_LOCK:
@@ -4247,7 +4256,10 @@ async def prepare_local_library_storage_move():
             if time.monotonic() >= deadline:
                 raise HTTPException(
                     status_code=409,
-                    detail="Clippy is still handling a request or background task. Wait for active work to finish, then retry the data move.",
+                    detail=(
+                        f"Clippy is still handling requests or background tasks. "
+                        f"Wait for them to finish before {operation}."
+                    ),
                 )
             await asyncio.sleep(0.05)
 
@@ -4259,19 +4271,62 @@ async def prepare_local_library_storage_move():
             1 for slot in pending_uploads.values()
             if isinstance(slot, dict) and not slot.get("complete")
         )
-        if active_jobs or active_uploads:
+        active_publications = sum(
+            1 for publication in publish_jobs.values()
+            if isinstance(publication, dict) and publication.get("status") == "uploading"
+        )
+        if active_jobs or active_uploads or active_publications:
             raise HTTPException(
                 status_code=409,
-                detail=f"Finish or cancel active work before moving Clippy data ({active_jobs} active jobs, {active_uploads} incomplete uploads).",
+                detail=(
+                    f"Finish or cancel active work before {operation} "
+                    f"({active_jobs} generation jobs, {active_uploads} incomplete uploads, "
+                    f"{active_publications} active publications)."
+                ),
             )
+
         handoff_ready = True
-        return {"ready": True}
+        return {
+            "ready": True,
+            "active_jobs": 0,
+            "active_uploads": 0,
+            "active_publications": 0,
+        }
     finally:
-        # On rejection, timeout, or cancellation, leave the still-running
-        # backend usable. On success the native shell stops this process next.
         if not handoff_ready:
             with _DATA_MOVE_LOCK:
                 _DATA_MOVE_PENDING = False
+
+
+def _cancel_desktop_maintenance():
+    """Re-open request admission after a prepared maintenance operation aborts."""
+    global _DATA_MOVE_PENDING
+    with _DATA_MOVE_LOCK:
+        _DATA_MOVE_PENDING = False
+
+
+@app.post("/api/library/storage/prepare-move")
+async def prepare_local_library_storage_move():
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Local Library is unavailable in cloud mode.")
+    return await _prepare_desktop_maintenance("moving the Clippy data directory")
+
+
+@app.post("/api/desktop/update/prepare")
+async def prepare_desktop_update():
+    """Approve an update only after all backend-visible work has settled."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Desktop updates are unavailable in cloud mode.")
+    return await _prepare_desktop_maintenance("installing a Clippy update")
+
+
+@app.post("/api/desktop/update/cancel")
+async def cancel_desktop_update():
+    """Cancel a prepared update while the current backend is still running."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Desktop updates are unavailable in cloud mode.")
+    _cancel_desktop_maintenance()
+    return {"ready": True, "cancelled": True}
 
 
 @app.get("/api/library/settings")
