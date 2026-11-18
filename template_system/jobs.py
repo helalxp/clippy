@@ -333,7 +333,7 @@ def execute_reference_analysis_job(
             "status": analysis_result.status,
             "limitations": list(analysis_result.limitations) + (
                 ["Audio content and audio-editing treatment are not analyzed in this visual-analysis milestone; only audio stream metadata is measured."]
-                if analysis_result.probe.has_audio else []
+                if getattr(analysis_result.probe, "has_audio", False) else []
             ),
         }
 
