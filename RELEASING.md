@@ -108,7 +108,7 @@ PR [#21](https://github.com/helalxp/clippy/pull/21) adds the Tauri 2 in-app upda
 
 This is a signed full-installer update, not a binary delta or independent runtime-component updater. The app payload keeps its previous known-good copy until runtime validation and backend/renderer health checks pass; failed startup restores the previous payload and retries service startup.
 
-The published `v0.3.0` build predates updater support, so users on it must manually install the first updater-enabled release. The planned rollout is:
+The published `v0.3.0` build predates updater support, so users on it must manually install the first updater-enabled release. The prepared rollout target is `v0.3.1-rc.1` (create the tag only after this PR is merged and version-sync validation passes):
 
 1. Publish `v0.3.1-rc.1` as a prerelease and manually install it over an existing `v0.3.0` installation.
 2. Verify startup, user-data preservation, managed-runtime reuse, and updater operation.

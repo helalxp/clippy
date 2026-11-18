@@ -4,7 +4,8 @@
 **Target branch:** `feature/in-app-updater-plan`  
 **Base branch:** `main`  
 **Base commit:** `30e7686de84612446562799376e8e2c4649864ac`  
-**Current application baseline:** Clippy `0.3.0`  
+**Previous stable baseline:** Clippy `0.3.0`  
+**Prepared updater prerelease:** Clippy `0.3.1-rc.1` (tag not yet created)  
 **Scope:** Windows x64 desktop application updates, with a deliberately separate follow-up for component-level runtime updates.
 
 ---
