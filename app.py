@@ -3692,7 +3692,8 @@ async def save_template_analysis_draft(job_id: str, request: TemplateAnalysisDra
     analysis_store = _template_analysis_store()
     template_storage = _template_system_storage()
     try:
-        document = save_reviewed_reference_template(
+        document = await asyncio.to_thread(
+            save_reviewed_reference_template,
             analysis_store,
             template_storage,
             job_id,
@@ -3715,7 +3716,7 @@ async def list_template_system_documents():
     _assert_data_storage_available()
     _reference_templates_local_only()
     try:
-        documents = _template_system_storage().list()
+        documents = await asyncio.to_thread(_template_system_storage().list)
         return {"templates": [_public_template_system_document(item) for item in documents]}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not read local template library: {exc}") from exc
