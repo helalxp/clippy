@@ -482,10 +482,11 @@ async fn restore_services_after_update_failure(
         let root = installation::user_root()?;
         let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
         let state = app.state::<Mutex<Supervisor>>();
-        state
+        let result = state
             .lock()
             .map_err(|_| "Service supervisor is unavailable".to_string())?
-            .start()
+            .start();
+        result
     })
     .await
     .map_err(|error| format!("Service recovery worker failed: {error}"))?
