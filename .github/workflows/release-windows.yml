@@ -39,7 +39,7 @@ jobs:
 
   validate-signing:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Require Tauri updater signing credentials
         env:
@@ -55,6 +55,38 @@ jobs:
             exit 1
           fi
           echo "Required Tauri updater signing secrets are present."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Minisign verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends minisign
+
+      - name: Install Tauri CLI signer
+        run: npm install --global --no-audit --no-fund @tauri-apps/cli@2.12.5
+
+      - name: Validate configured updater public key
+        run: node desktop/validate-updater-signing-key.mjs "$RUNNER_TEMP/clippy-updater.pub"
+
+      - name: Prove release private key matches configured public key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          probe="$(mktemp "$RUNNER_TEMP/clippy-updater-signing-probe.XXXXXX")"
+          public_key="$RUNNER_TEMP/clippy-updater.pub"
+          trap 'rm -f "$probe" "$probe.sig" "$public_key"' EXIT
+
+          printf '%s\n' 'Clippy updater signing preflight' > "$probe"
+          tauri signer sign --app-version 0.0.0 "$probe"
+          test -s "$probe.sig"
+          minisign -Vm "$probe" -p "$public_key" -x "$probe.sig"
+          echo "Tauri updater private key successfully signed a probe verified by the configured public key."
 
   build-python-runtimes:
     needs: [validate, validate-signing]
