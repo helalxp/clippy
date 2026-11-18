@@ -3521,6 +3521,7 @@ async def create_template_analysis_job(
     _assert_data_storage_available()
     _reference_templates_local_only()
     if not rights_confirmed:
+        await video.close()
         raise HTTPException(
             status_code=400,
             detail="Confirm that you own this reference video or have permission to analyze it.",
@@ -3529,6 +3530,7 @@ async def create_template_analysis_job(
     original_name = os.path.basename(video.filename or "reference.mp4")
     suffix = os.path.splitext(original_name)[1].lower()
     if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}:
+        await video.close()
         raise HTTPException(
             status_code=400,
             detail="Upload an MP4, MOV, MKV, WebM, M4V, or AVI reference video.",
@@ -3536,8 +3538,13 @@ async def create_template_analysis_job(
 
     api_key = None
     if gemini_consent:
-        api_key = await resolve_gemini(request)
+        try:
+            api_key = await resolve_gemini(request)
+        except Exception:
+            await video.close()
+            raise
         if not api_key and not os.environ.get("GEMINI_API_KEY"):
+            await video.close()
             raise HTTPException(
                 status_code=400,
                 detail="Add a Gemini API key before enabling AI visual analysis.",

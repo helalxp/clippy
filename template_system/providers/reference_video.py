@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 
-from .reference_report import EvidenceFrame, ReferenceStyleReport, validate_report_evidence
+from ..reference_report import EvidenceFrame, ReferenceStyleReport, validate_report_evidence
 from ..analysis import ReferenceAnalysisResult
 
 

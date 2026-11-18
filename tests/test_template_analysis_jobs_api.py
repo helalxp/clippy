@@ -83,7 +83,7 @@ def test_upload_endpoint_requires_rights_confirmation(tmp_path, monkeypatch):
         ))
 
     assert rejected.value.status_code == 400
-    assert upload.closed is False
+    assert upload.closed is True
 
 
 def test_upload_endpoint_requires_key_when_gemini_consent_is_enabled(
