@@ -2577,7 +2577,7 @@ def _create_data_background_task(coroutine):
     """Track background work that may read or write under the movable data root.
 
     A request admitted before relocation may still register its task while the
-    move flag is raised. The move handshake drains that request and then waits
+    move flag is raised. The maintenance handshake drains that request and then waits
     for the task, so rejecting it here would interrupt legitimate in-flight work.
     """
     global _MAINTENANCE_ACTIVE_BACKGROUND_TASKS
@@ -2629,7 +2629,7 @@ async def require_desktop_api_token(request: Request, call_next):
     return await call_next(request)
 
 
-class _DataMoveQuiescenceMiddleware:
+class _MaintenanceQuiescenceMiddleware:
     """Drain complete ASGI responses before allowing a maintenance operation."""
 
     def __init__(self, app):
@@ -2661,7 +2661,7 @@ class _DataMoveQuiescenceMiddleware:
                 else:
                     _MAINTENANCE_ACTIVE_REQUESTS += 1
         if reject_request:
-            body = b'{"detail":"Clippy data is being relocated. Try again after the app restarts."}'
+            body = b'{"detail":"Clippy is preparing a maintenance operation. Try again after the app restarts."}'
             await send({
                 "type": "http.response.start",
                 "status": 503,
@@ -2684,7 +2684,7 @@ class _DataMoveQuiescenceMiddleware:
 
 
 
-app.add_middleware(_DataMoveQuiescenceMiddleware)
+app.add_middleware(_MaintenanceQuiescenceMiddleware)
 
 # Cloud mode uses its configured web origins. The installed desktop build only
 # accepts its own Tauri origins; the Vite origin is allowed for native dev.

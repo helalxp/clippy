@@ -121,6 +121,31 @@ export default function DesktopRuntimeGate({ children }) {
     }
   }, [attempt, invoke, isDesktop, runSetupRuntime]);
 
+  const restoreServicesAfterUpdateFailure = useCallback(async () => {
+    const services = await invoke('restore_services_after_update_failure');
+    if (!services?.backend_url) {
+      throw new Error('Clippy services restarted without returning a backend address.');
+    }
+    const token = await invoke('get_api_token');
+    if (!token) throw new Error('Clippy did not return a fresh local API token.');
+
+    window.__CLIPPY_API_BASE_URL__ = services.backend_url;
+    window.__CLIPPY_RENDERER_URL__ = services.renderer_url || '';
+    window.__CLIPPY_API_TOKEN__ = token;
+    installLocalApiAuth(token, services.backend_url);
+    return services;
+  }, [invoke]);
+
+  useEffect(() => {
+    if (!isDesktop) return undefined;
+    window.__CLIPPY_RESTORE_SERVICES__ = restoreServicesAfterUpdateFailure;
+    return () => {
+      if (window.__CLIPPY_RESTORE_SERVICES__ === restoreServicesAfterUpdateFailure) {
+        delete window.__CLIPPY_RESTORE_SERVICES__;
+      }
+    };
+  }, [isDesktop, restoreServicesAfterUpdateFailure]);
+
   useEffect(() => {
     let active = true;
     let unlisten;
