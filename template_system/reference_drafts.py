@@ -189,9 +189,13 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
             if item.first_seen_ms is not None and item.last_seen_ms is not None:
                 start = item.first_seen_ms / 1000
                 duration = (item.last_seen_ms - item.first_seen_ms) / 1000
-                if duration > 0:
+                if 0 < duration <= 120:
                     add("hook.start_seconds", float(start), item, review_item, "Estimated hook visibility start", inferred=True)
                     add("hook.duration_seconds", float(duration), item, review_item, "Estimated hook visibility duration", inferred=True)
+                elif duration > 120:
+                    candidates.setdefault("_limitations", []).append({
+                        "value": f"Hook finding {item.id} visibility exceeds the canonical 120-second duration limit."
+                    })
             if typography.background_color:
                 add("hook.background_color", typography.background_color, item, review_item, "Observed hook text backing color")
         else:
@@ -206,7 +210,13 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
                 add("captions.reveal_by_word", False, item, review_item, "No word-by-word caption reveal observed")
 
         if typography.size_ratio is not None:
-            add(f"{group}.font_size_ratio", float(typography.size_ratio), item, review_item, "Accepted estimated text size")
+            maximum_size = 0.2 if is_hook else 0.15
+            if typography.size_ratio <= maximum_size:
+                add(f"{group}.font_size_ratio", float(typography.size_ratio), item, review_item, "Accepted estimated text size")
+            else:
+                candidates.setdefault("_limitations", []).append({
+                    "value": f"Finding {item.id} estimated text size exceeds the canonical {group} limit and was not applied."
+                })
         if typography.fill_color:
             add(f"{group}.font_color" if not is_hook else "hook.color", typography.fill_color, item, review_item, "Accepted text fill color")
         if typography.highlight_color and not is_hook:
@@ -228,7 +238,12 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
             add(f"{group}.anchor_y", float(anchor_y), item, review_item, "Center of accepted text bounding box", inferred=True)
             add(f"{group}.position", _vertical_position(anchor_y), item, review_item, "Vertical placement inferred from accepted text bounding box", inferred=True)
         if typography.line_count is not None and not is_hook:
-            add("captions.max_lines", int(typography.line_count), item, review_item, "Accepted observed caption line count")
+            if typography.line_count <= 4:
+                add("captions.max_lines", int(typography.line_count), item, review_item, "Accepted observed caption line count")
+            else:
+                candidates.setdefault("_limitations", []).append({
+                    "value": f"Finding {item.id} exceeds the canonical four-line caption limit and was not applied."
+                })
         if typography.uppercase is not None and not is_hook:
             add("captions.uppercase", bool(typography.uppercase), item, review_item, "Accepted observed capitalization")
 
@@ -288,6 +303,11 @@ def _compile_interpretation(report: ReferenceStyleReport, review: ReviewDocument
     if any(item.value == "solid" for item in claims if item.property_path == "background.mode") and not any(item.property_path == "background.color" for item in claims):
         claims = [item for item in claims if item.property_path != "background.mode"]
         limitations.append("A solid background had conflicting or unavailable color evidence; the background mode was left unchanged.")
+
+    # A hook is only a valid recipe when one unambiguous, readable text value survives.
+    if any(item.property_path == "hook.enabled" and item.value is True for item in claims) and not any(item.property_path == "hook.text" for item in claims):
+        claims = [item for item in claims if not item.property_path.startswith("hook.")]
+        limitations.append("Accepted hook findings did not produce one unambiguous readable text value; no hook settings were applied.")
 
     provider_id = "gemini"
     model_id = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
