@@ -124,6 +124,7 @@ export default function ReferenceTemplateLibrary() {
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId) || null;
   const report = selectedJob?.report || null;
+  const aiStatus = selectedJob?.ai_status || report?.ai_status || 'pending';
   const deterministic = report?.deterministic || null;
   const visual = report?.ai_report || null;
   const samples = deterministic?.samples || [];
@@ -422,8 +423,8 @@ export default function ReferenceTemplateLibrary() {
                 <div className="card p-5 space-y-5">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-semibold text-ink">AI editing breakdown</h3>
-                    <span className={'text-xs ' + (report.ai_status === 'complete' ? 'text-emerald-700' : report.ai_status === 'failed' ? 'text-danger' : 'text-muted')}>
-                      {titleCase(report.ai_status)}
+                    <span className={'text-xs ' + (aiStatus === 'complete' ? 'text-emerald-700' : aiStatus === 'failed' ? 'text-danger' : 'text-muted')}>
+                      {titleCase(aiStatus)}
                     </span>
                   </div>
                   {visual ? (
@@ -621,9 +622,15 @@ export default function ReferenceTemplateLibrary() {
                     </>
                   ) : (
                     <div className="text-sm text-muted">
-                      {report.ai_error || (report.ai_status === 'not_consented'
-                        ? 'Gemini was not enabled for this job. Deterministic media analysis is still available above.'
-                        : 'No AI report was produced for this job.')}
+                      {report.ai_error || (
+                        aiStatus === 'running' || aiStatus === 'pending'
+                          ? 'Gemini is interpreting the sampled evidence. The deterministic analysis above is already available.'
+                          : aiStatus === 'not_consented'
+                            ? 'Gemini was not enabled for this job. Deterministic media analysis is still available above.'
+                            : aiStatus === 'cancelled'
+                              ? 'Gemini interpretation was cancelled. The deterministic analysis remains available above.'
+                              : 'No AI report was produced for this job.'
+                      )}
                     </div>
                   )}
                 </div>
