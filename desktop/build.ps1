@@ -1,3 +1,7 @@
+param(
+    [switch]$CreateUpdaterArtifacts
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -50,7 +54,11 @@ if ($LASTEXITCODE -ne 0) { throw "Application payload preparation failed (exit $
 Write-Host "Building Windows NSIS installer..."
 Push-Location $tauriDir
 try {
-    cargo tauri build --bundles nsis
+    if ($CreateUpdaterArtifacts) {
+        cargo tauri build --bundles nsis --config tauri.updater.conf.json
+    } else {
+        cargo tauri build --bundles nsis
+    }
     if ($LASTEXITCODE -ne 0) { throw "Tauri installer build failed (exit $LASTEXITCODE)." }
 } finally {
     Pop-Location

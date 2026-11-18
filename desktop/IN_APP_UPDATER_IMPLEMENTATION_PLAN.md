@@ -688,3 +688,32 @@ The release artifact-generation switch remains off until the encrypted GitHub
 Actions signing secrets and release manifest workflow are configured. This is
 intentional: existing CI uses locked dependency installs and must not be
 weakened to accommodate stale lockfiles.
+
+
+## 9.12 Signed Windows updater release pipeline (2026-11-18)
+
+The dependency lockfiles and updater application integration have passed the
+branch CI and Windows desktop validation. The release pipeline is now being
+prepared to publish the static Tauri updater manifest consumed by the Settings
+UI.
+
+The release build opts into `createUpdaterArtifacts: true` through a dedicated
+Tauri config overlay, leaving ordinary developer installer builds independent
+of the private signing key. The release workflow requires the encrypted
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+repository secrets and passes them only through the build/signing environment.
+
+The workflow re-signs the final NSIS installer with Tauri after optional
+Authenticode signing, because modifying the installer after Tauri signing would
+invalidate the updater signature. It then generates `latest.json` from the
+final signature and the actual GitHub release notes, uploads the manifest to
+the draft release, and verifies the manifest version, installer URL, signature,
+and uploaded asset sizes before publication. Stable tags are marked latest;
+SemVer prerelease tags are not.
+
+This pipeline has not yet been exercised by a signed tag build. Before the
+first updater-enabled release, configure both GitHub Actions secrets using the
+contents of the encrypted private key file and its password. Never commit or
+paste either secret. The first updater-enabled release still requires a manual
+installation by users on the older 0.3.0 build, which does not contain the
+updater plugin/public key.
