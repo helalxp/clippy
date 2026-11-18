@@ -46,26 +46,28 @@ function BoxSummary({ box }) {
   return <span className="readout">X {pct(box.x)} · Y {pct(box.y)} · W {pct(box.width)} · H {pct(box.height)}</span>;
 }
 
-function EvidenceFrame({ jobId, sample, box = null, onSelect = null }) {
+function EvidenceFrame({ jobId, sample, box = null, boxes = null, onSelect = null }) {
   const url = getApiUrl('/api/template-analysis/jobs/' + jobId + '/evidence/' + sample.asset_id);
+  const highlights = boxes?.length ? boxes : (box ? [box] : []);
   const image = (
     <span
       className="relative block w-full overflow-hidden rounded-input border border-rule bg-paper2"
       style={{ aspectRatio: String(sample.width || 16) + ' / ' + String(sample.height || 9) }}
     >
       <img src={url} alt={'Reference frame at ' + formatSeconds(sample.timestamp_ms / 1000)} className="absolute inset-0 w-full h-full object-contain" loading="lazy" />
-      {box && (
+      {highlights.map((rect, index) => (
         <span
+          key={index}
           aria-hidden="true"
           className="absolute border-2 border-amber-400 bg-amber-300/10 pointer-events-none"
           style={{
-            left: (box.x * 100) + '%',
-            top: (box.y * 100) + '%',
-            width: (box.width * 100) + '%',
-            height: (box.height * 100) + '%',
+            left: (rect.x * 100) + '%',
+            top: (rect.y * 100) + '%',
+            width: (rect.width * 100) + '%',
+            height: (rect.height * 100) + '%',
           }}
         />
-      )}
+      ))}
     </span>
   );
   return (
@@ -75,8 +77,33 @@ function EvidenceFrame({ jobId, sample, box = null, onSelect = null }) {
           {image}
         </button>
       ) : image}
-      <figcaption className="readout mt-1.5">{formatSeconds(sample.timestamp_ms / 1000)}{box ? ' · highlighted region' : ''}</figcaption>
+      <figcaption className="readout mt-1.5">{formatSeconds(sample.timestamp_ms / 1000)}{highlights.length ? ' · highlighted region' : ''}</figcaption>
     </figure>
+  );
+}
+
+function EvidenceStrip({ jobId, evidence = [], sampleById, onSelect, box = null, boxes = null }) {
+  const entries = Array.isArray(evidence) ? evidence : [];
+  if (!entries.length) return <p className="readout mt-2">No sampled evidence was attached to this finding.</p>;
+  return (
+    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {entries.slice(0, 3).map((item, index) => {
+        const sample = sampleById.get(item.asset_id);
+        return sample ? (
+          <EvidenceFrame
+            key={item.asset_id + '-' + item.timestamp_ms + '-' + index}
+            jobId={jobId}
+            sample={sample}
+            box={box}
+            boxes={boxes}
+            onSelect={onSelect}
+          />
+        ) : (
+          <span key={item.asset_id + '-' + item.timestamp_ms} className="readout">Evidence frame unavailable · {formatSeconds(item.timestamp_ms / 1000)}</span>
+        );
+      })}
+      {entries.length > 3 && <p className="readout col-span-full">+{entries.length - 3} additional evidence frames attached</p>}
+    </div>
   );
 }
 
@@ -445,6 +472,7 @@ export default function ReferenceTemplateLibrary() {
                                 <span className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: item.hex_color }} />
                                 <span className="text-xs text-ink2">{item.hex_color} · {titleCase(item.role)}</span>
                                 <Confidence value={item.confidence} />
+                                <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                               </div>
                             ))}
                           </div>
@@ -460,6 +488,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><Confidence value={item.confidence} /></div>
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.colors?.length > 0 && <div className="flex gap-1.5 mt-2">{item.colors.map((color, index) => <span key={color + index} className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />)}</div>}
+                                <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                               </div>
                             ))}
                           </div>
@@ -475,6 +504,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)} · {titleCase(item.framing)}</span><Confidence value={item.confidence} /></div>
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.subject_regions?.length > 0 && <div className="mt-2 space-y-1">{item.subject_regions.map((box, index) => <div key={index}><span className="readout">Subject {index + 1}: </span><BoxSummary box={box} /></div>)}</div>}
+                                <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} boxes={item.subject_regions} />
                               </div>
                             ))}
                           </div>
@@ -516,20 +546,11 @@ export default function ReferenceTemplateLibrary() {
                                 )}
                                 {region.notes && <p className="text-xs text-muted mt-2">{region.notes}</p>}
                                 <p className="readout mt-2">Evidence: {(region.evidence || []).map((item) => formatSeconds(item.timestamp_ms / 1000)).join(', ')}</p>
-                                <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                  {(region.evidence || []).map((item) => {
-                                    const evidenceSample = sampleById.get(item.asset_id);
-                                    return evidenceSample ? (
-                                      <EvidenceFrame
-                                        key={item.asset_id + '-' + item.timestamp_ms}
-                                        jobId={selectedJob.id}
-                                        sample={evidenceSample}
-                                        box={region.box}
-                                        onSelect={seekReferenceFrame}
-                                      />
-                                    ) : null;
-                                  })}
-                                </div>
+                                {region.first_seen_ms != null && region.last_seen_ms != null && (
+                                  <p className="readout mt-2">Observed visibility: {formatSeconds(region.first_seen_ms / 1000)}–{formatSeconds(region.last_seen_ms / 1000)}</p>
+                                )}
+                                {region.animation_notes && <p className="text-xs text-muted mt-2">{region.animation_notes}</p>}
+                                <EvidenceStrip jobId={selectedJob.id} evidence={region.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={region.box} />
                               </article>
                             ))}
                           </div>
@@ -545,20 +566,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><Confidence value={item.confidence} /></div>
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 <BoxSummary box={item.box} />
-                                <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                                  {(item.evidence || []).map((evidence) => {
-                                    const evidenceSample = sampleById.get(evidence.asset_id);
-                                    return evidenceSample ? (
-                                      <EvidenceFrame
-                                        key={item.id + '-' + evidence.asset_id + '-' + evidence.timestamp_ms}
-                                        jobId={selectedJob.id}
-                                        sample={evidenceSample}
-                                        box={item.box}
-                                        onSelect={seekReferenceFrame}
-                                      />
-                                    ) : null;
-                                  })}
-                                </div>
+                                <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={item.box} />
                               </div>
                             ))}
                           </div>
@@ -574,6 +582,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><Confidence value={item.confidence} /></div>
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.start_ms != null && item.end_ms != null && <p className="readout mt-2">{formatSeconds(item.start_ms / 1000)}–{formatSeconds(item.end_ms / 1000)}</p>}
+                                <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                               </div>
                             ))}
                           </div>
@@ -588,6 +597,7 @@ export default function ReferenceTemplateLibrary() {
                               <div key={item.id} className="rounded-input border border-rule p-3 flex items-start justify-between gap-3">
                                 <div><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><p className="readout mt-1">Around {formatSeconds(item.at_ms / 1000)} {item.duration_ms != null ? '· ' + item.duration_ms + ' ms' : ''}</p>{item.notes && <p className="text-xs text-muted mt-1">{item.notes}</p>}</div>
                                 <Confidence value={item.confidence} />
+                                <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                               </div>
                             ))}
                           </div>
@@ -604,6 +614,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{scene.description}</p>
                                 <p className="readout mt-2">{titleCase(scene.content_type)} · {titleCase(scene.mood)} mood · {titleCase(scene.energy)} energy · {titleCase(scene.editorial_role)}</p>
                                 <div className="mt-2"><Confidence value={scene.confidence} /></div>
+                                <EvidenceStrip jobId={selectedJob.id} evidence={scene.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                               </div>
                             ))}
                           </div>
