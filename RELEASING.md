@@ -91,7 +91,7 @@ Configure both GitHub Actions repository secrets:
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
-The release workflow checks that both are present before starting the CPU/CUDA runtime matrix. The private key must remain in GitHub Actions Secrets and must never be committed or printed. Tauri signs the final NSIS installer after any optional Authenticode modification; the resulting detached `.sig` is embedded in the generated `latest.json` manifest. A signed tag build is still required to validate the key/password pair and verify the real release artifacts.
+The release workflow checks that both are present, validates the configured Minisign public-key encoding and structure, and proves that the private key matches the public key by signing and verifying a temporary probe before starting the CPU/CUDA runtime matrix. These checks run in the `validate-signing` job and do not print or persist the private key. The private key must remain in GitHub Actions Secrets and must never be committed or printed. Tauri signs the final NSIS installer after any optional Authenticode modification; the resulting detached `.sig` is embedded in the generated `latest.json` manifest. A signed tag build is still required to verify the real release artifacts.
 
 **Windows Authenticode signing (optional)**
 
@@ -108,9 +108,13 @@ PR [#21](https://github.com/helalxp/clippy/pull/21) adds the Tauri 2 in-app upda
 
 This is a signed full-installer update, not a binary delta or independent runtime-component updater. The app payload keeps its previous known-good copy until runtime validation and backend/renderer health checks pass; failed startup restores the previous payload and retries service startup.
 
-The published `v0.3.0` build predates updater support, so users on it must manually install the first updater-enabled release. The prepared rollout target is `v0.3.1-rc.1` (create the tag only after this PR is merged and version-sync validation passes):
+The published `v0.3.0` build predates updater support, so users on it must manually install the first updater-enabled release.
 
-1. Publish `v0.3.1-rc.1` as a prerelease and manually install it over an existing `v0.3.0` installation.
+The first candidate, `v0.3.1-rc.1`, was not published: the Windows installer was generated, but Tauri rejected the updater public key because its outer Base64 value contained a newline. PR [#22](https://github.com/helalxp/clippy/pull/22) corrected the key formatting and added early public-key and private/public key-pair validation. Do not move or reuse the existing `v0.3.1-rc.1` tag.
+
+The next rollout target is `v0.3.1-rc.2`. Create the tag only after the canonical version and every synchronized manifest pass validation on the merged `main` commit:
+
+1. Publish `v0.3.1-rc.2` as a prerelease and manually install it over an existing `v0.3.0` installation.
 2. Verify startup, user-data preservation, managed-runtime reuse, and updater operation.
 3. Publish stable `v0.3.1`; the prerelease installation should discover it through the stable-only `releases/latest` endpoint and install it in-app.
 
