@@ -216,7 +216,7 @@ class AnalysisJobStore:
         payload = self.get(job_id)
         source_name = payload.get("source_file")
         if not isinstance(source_name, str) or not re.fullmatch(
-            r"source\\.(?:mp4|mov|mkv|webm|m4v|avi)", source_name
+            r"source\.(?:mp4|mov|mkv|webm|m4v|avi)", source_name
         ):
             raise ValueError("reference source manifest path is unsafe")
         directory = self._job_dir(job_id).resolve(strict=True)

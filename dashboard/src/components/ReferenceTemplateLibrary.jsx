@@ -484,7 +484,7 @@ export default function ReferenceTemplateLibrary() {
                         {visual.visual_identity && <p className="text-sm text-muted mt-2">{visual.visual_identity}</p>}
                         {visual.editorial_style && <p className="text-sm text-muted mt-2">{visual.editorial_style}</p>}
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
-                        <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
+                        {visual.overview_evidence?.length > 0 && <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />}
                       </div>
 
                       {visual.color_palette?.length > 0 && (

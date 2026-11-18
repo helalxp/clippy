@@ -19,7 +19,7 @@ The report is not yet a renderer recipe and is not automatically applied. It is 
 4. The API streams the upload to a bounded staging file. The job store moves it into its own durable job directory.
 5. An analysis worker probes the source, detects cut candidates, extracts bounded frames, measures visual statistics and writes progress.
 6. With consent, Gemini receives the sampled resized PNG frames and exact evidence identifiers/timestamps. It does not receive the full source video.
-7. Clippy validates the structured response. Every finding must cite an exact frame/timestamp pair supplied to Gemini.
+7. Clippy validates the structured response. Every finding, including global overview conclusions, must cite an exact frame/timestamp pair supplied to Gemini. Time-bounded text, effect, scene and transition findings are checked against their cited evidence window.
 8. The workbench displays technical facts, evidence frames, measured visual properties and the AI breakdown. Clicking an evidence thumbnail seeks the original video player to that timestamp; estimated text/graphic boxes are overlaid on cited frames.
 9. Jobs can be cancelled. Terminal jobs can be deleted along with their retained source and evidence files.
 
