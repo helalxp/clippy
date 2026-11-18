@@ -36,7 +36,7 @@ InterpretationProperty = Literal[
     "captions.outline_ratio", "captions.shadow_ratio", "captions.position",
     "captions.anchor_x", "captions.anchor_y", "captions.max_lines",
     "captions.word_highlight", "captions.uppercase", "captions.reveal_by_word",
-    "hook.enabled", "hook.font_family", "hook.font_size_ratio", "hook.color",
+    "hook.enabled", "hook.text", "hook.font_family", "hook.font_size_ratio", "hook.color",
     "hook.background_color", "hook.position", "hook.anchor_x", "hook.anchor_y",
     "hook.entrance", "hook.start_seconds", "hook.duration_seconds",
     "background.mode", "background.color", "background.blur_radius_ratio",
@@ -304,7 +304,7 @@ class TemplateRecipe(ContractModel):
 class TemplateAsset(ContractModel):
     id: str = Field(min_length=1, max_length=80)
     path: str = Field(min_length=1, max_length=240)
-    media_type: Literal["image/png", "image/webp", "image/jpeg", "font/ttf", "font/otf"]
+    media_type: Literal["image/png", "image/webp", "image/jpeg", "font/ttf", "font/otf", "application/json"]
     size_bytes: int = Field(ge=0, le=250_000_000)
     sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     width: int | None = Field(default=None, ge=1, le=16384)
@@ -317,6 +317,10 @@ class TemplateAsset(ContractModel):
             value is not None for value in (self.width, self.height, self.source_timestamp_ms)
         ):
             raise ValueError("font assets cannot contain frame dimensions or source timestamps")
+        if self.media_type == "application/json" and any(
+            value is not None for value in (self.width, self.height, self.source_timestamp_ms)
+        ):
+            raise ValueError("JSON assets cannot contain frame dimensions or source timestamps")
         if (self.width is None) != (self.height is None):
             raise ValueError("image dimensions must be supplied together")
         if self.source_timestamp_ms is not None and self.width is None:
