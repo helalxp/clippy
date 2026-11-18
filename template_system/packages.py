@@ -75,6 +75,17 @@ def _validate_asset_bytes(asset: TemplateAsset, payload: bytes) -> None:
             raise TemplatePackageError(f"package font type does not match its manifest: {asset.path}")
         return
 
+    if asset.media_type == "application/json":
+        if len(payload) > 2 * 1024 * 1024:
+            raise TemplatePackageError(f"template JSON asset exceeds the 2 MB limit: {asset.path}")
+        try:
+            parsed = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_json_object)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise TemplatePackageError(f"template JSON asset is invalid: {asset.path}") from exc
+        if not isinstance(parsed, dict):
+            raise TemplatePackageError(f"template JSON asset must contain an object: {asset.path}")
+        return
+
     expected_formats = {
         "image/png": "PNG",
         "image/jpeg": "JPEG",
