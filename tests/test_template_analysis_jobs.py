@@ -154,3 +154,50 @@ def test_store_deletes_only_terminal_jobs(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         store.get(job["id"])
+
+
+def test_cancellation_during_gemini_preserves_deterministic_report(tmp_path, monkeypatch):
+    import template_system.analysis as analysis_module
+    from template_system.reference_report import ReferenceStyleReport
+
+    store, job = _create_job(tmp_path, consent=True)
+
+    class FakeProbe:
+        has_audio = False
+        def to_dict(self):
+            return {"duration_seconds": 8.0}
+
+    class FakeResult:
+        probe = FakeProbe()
+        scene_boundaries_seconds = ()
+        visual_measurements = ()
+        coverage = {"media_probe": 1.0}
+        status = "complete"
+        limitations = ()
+
+        def to_template_parts(self):
+            return None, []
+
+    def fake_analyze(source, output, *, progress_callback, cancel_check):
+        progress_callback("frame_sampling", 0.5)
+        return FakeResult()
+
+    class CancellingAnalyzer:
+        def __init__(self, **kwargs):
+            assert kwargs == {"consent_confirmed": True}
+
+        def analyze(self, result, evidence_root):
+            store.request_cancel(job["id"])
+            return ReferenceStyleReport(summary="This result must be discarded")
+
+    monkeypatch.setattr(analysis_module, "analyze_reference_video", fake_analyze)
+    execute_reference_analysis_job(
+        store, job["id"], analyzer_factory=CancellingAnalyzer
+    )
+
+    saved = store.get(job["id"])
+    report = store.get_report(job["id"])
+    assert saved["status"] == "cancelled"
+    assert saved["ai_status"] == "cancelled"
+    assert report["ai_report"] is None
+    assert report["deterministic"]["technical"]["duration_seconds"] == 8.0

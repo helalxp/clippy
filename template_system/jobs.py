@@ -356,9 +356,26 @@ def execute_reference_analysis_job(
             ),
         }
 
-        ai_report = None
-        ai_status = "not_consented"
+        ai_status = "pending" if item.get("gemini_consent") else "not_consented"
         ai_error = None
+        report = {
+            "schema_version": 1,
+            "deterministic": deterministic,
+            "ai_status": ai_status,
+            "ai_error": None,
+            "ai_report": None,
+        }
+        # Persist the deterministic work before making an optional network call.
+        # Cancelling or losing Gemini must not discard the local analysis.
+        store.save_report(job_id, report)
+
+        if cancelled():
+            store.update(
+                job_id, status="cancelled", stage="cancelled", progress=100,
+                ai_status="cancelled", completed_at=_now(),
+            )
+            return
+
         if item.get("gemini_consent"):
             store.update(job_id, stage="gemini_interpretation", progress=88, ai_status="running")
             try:
@@ -373,13 +390,23 @@ def execute_reference_analysis_job(
                 ai_status = "failed"
                 ai_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
 
-        report = {
-            "schema_version": 1,
-            "deterministic": deterministic,
-            "ai_status": ai_status,
-            "ai_error": ai_error,
-            "ai_report": ai_report,
-        }
+        # A Gemini request cannot be interrupted mid-flight, but a cancellation
+        # requested during it is honored immediately after the provider returns.
+        # Discard the AI result and preserve the already-saved deterministic pass.
+        if cancelled():
+            report["ai_status"] = "cancelled"
+            report["ai_error"] = "Cancellation was requested while visual interpretation was in progress."
+            store.save_report(job_id, report)
+            store.update(
+                job_id, status="cancelled", stage="cancelled", progress=100,
+                ai_status="cancelled", ai_error=report["ai_error"],
+                completed_at=_now(),
+            )
+            return
+
+        report["ai_status"] = ai_status
+        report["ai_error"] = ai_error
+        report["ai_report"] = ai_report if ai_status == "complete" else None
         store.save_report(job_id, report)
         final_status = "completed" if ai_status == "complete" else "partial"
         store.update(
