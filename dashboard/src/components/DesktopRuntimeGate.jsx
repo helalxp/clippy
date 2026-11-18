@@ -29,6 +29,30 @@ function installLocalApiAuth(token, baseUrl) {
   };
 }
 
+async function startAndConfigureServices(invoke, startCommand = 'start_services') {
+  const services = await invoke(startCommand);
+  if (!services?.backend_url) {
+    throw new Error('Clippy services started without returning a backend address.');
+  }
+  const token = await invoke('get_api_token');
+  if (!token) throw new Error('Clippy did not provide its per-launch local API token.');
+
+  window.__CLIPPY_API_BASE_URL__ = services.backend_url;
+  window.__CLIPPY_RENDERER_URL__ = services.renderer_url || '';
+  window.__CLIPPY_API_TOKEN__ = token;
+  installLocalApiAuth(token, services.backend_url);
+  return services;
+}
+
+async function commitPayloadBestEffort(invoke) {
+  try {
+    await invoke('commit_app_payload');
+    return '';
+  } catch (error) {
+    return error?.message || String(error);
+  }
+}
+
 export default function DesktopRuntimeGate({ children }) {
   const tauri = getDesktopApi();
   const invoke = tauri?.core?.invoke;
@@ -66,11 +90,13 @@ export default function DesktopRuntimeGate({ children }) {
       error: '',
     }));
 
+    let payloadPrepared = false;
     try {
       // The payload check is cheap and also applies a bundled app update when
-      // its SHA-256 changes. Runtime validation must happen AFTER this step,
-      // because it validates the requirements shipped in that payload.
+      // its SHA-256 changes. Keep the previous payload until the new runtime
+      // and both managed services have passed their startup health checks.
       await invoke('install_app_payload');
+      payloadPrepared = true;
 
       let runtimeStatus = await invoke('check_runtime');
       if (attempt > 0 || runtimeStatus?.error) {
@@ -88,38 +114,77 @@ export default function DesktopRuntimeGate({ children }) {
         phase: 'startup',
         stage: 'Starting Clippy services…',
       }));
-      const services = await invoke('start_services');
-      if (!services?.backend_url) {
-        throw new Error('Clippy services started without returning a backend address.');
-      }
-      // The supervisor selects available loopback ports at runtime. Install the
-      // resolved base URL before rendering the application so every API client
-      // uses the same managed backend rather than a compile-time fixed port.
-      window.__CLIPPY_API_BASE_URL__ = services.backend_url;
-      window.__CLIPPY_RENDERER_URL__ = services.renderer_url || '';
-      const localApiToken = await invoke('get_api_token');
-      if (!localApiToken) {
-        throw new Error('Clippy did not provide its per-launch local API token.');
-      }
-      window.__CLIPPY_API_TOKEN__ = localApiToken;
-      installLocalApiAuth(localApiToken, services.backend_url);
+      await startAndConfigureServices(invoke);
+
+      // Payload cleanup is not allowed to turn a healthy startup into a failed
+      // startup. A cleanup error leaves the backup in place for the next launch.
+      const cleanupError = await commitPayloadBestEffort(invoke);
       setState((current) => ({
         ...current,
         status: 'ready',
         phase: 'startup',
-        stage: 'Ready',
+        stage: cleanupError ? 'Ready. Previous-version cleanup will be retried later.' : 'Ready',
         error: '',
       }));
     } catch (error) {
+      let message = typeof error === 'string' ? error : error?.message || String(error);
+
+      // If the newly activated application payload cannot pass runtime or
+      // service startup, restore the previous payload and attempt to launch it.
+      if (payloadPrepared) {
+        try {
+          const rolledBack = await invoke('rollback_app_payload');
+          if (rolledBack) {
+            let previousRuntime = await invoke('check_runtime');
+            if (previousRuntime?.error) {
+              await runSetupRuntime();
+              previousRuntime = await invoke('check_runtime');
+            }
+            if (previousRuntime?.error) {
+              throw new Error(previousRuntime.error);
+            }
+            await startAndConfigureServices(invoke);
+            const cleanupError = await commitPayloadBestEffort(invoke);
+            setState((current) => ({
+              ...current,
+              status: 'ready',
+              phase: 'startup',
+              stage: cleanupError
+                ? 'Recovered using the previous application version. Cleanup will be retried later.'
+                : 'Recovered using the previous application version.',
+              error: '',
+            }));
+            return;
+          }
+        } catch (recoveryError) {
+          message += ' Automatic application rollback/restart also failed: '
+            + (recoveryError?.message || String(recoveryError));
+        }
+      }
+
       setState((current) => ({
         ...current,
         status: 'setup-required',
         phase: current.phase === 'startup' ? 'setup' : current.phase,
         stage: 'Clippy could not finish preparing this computer.',
-        error: typeof error === 'string' ? error : error?.message || String(error),
+        error: message,
       }));
     }
   }, [attempt, invoke, isDesktop, runSetupRuntime]);
+
+  const restoreServicesAfterUpdateFailure = useCallback(async () => {
+    return startAndConfigureServices(invoke, 'restore_services_after_update_failure');
+  }, [invoke]);
+
+  useEffect(() => {
+    if (!isDesktop) return undefined;
+    window.__CLIPPY_RESTORE_SERVICES__ = restoreServicesAfterUpdateFailure;
+    return () => {
+      if (window.__CLIPPY_RESTORE_SERVICES__ === restoreServicesAfterUpdateFailure) {
+        delete window.__CLIPPY_RESTORE_SERVICES__;
+      }
+    };
+  }, [isDesktop, restoreServicesAfterUpdateFailure]);
 
   useEffect(() => {
     let active = true;

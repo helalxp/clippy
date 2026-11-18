@@ -1,6 +1,7 @@
 mod bootstrap;
 mod data_storage;
 mod installation;
+mod payload_update;
 mod supervisor;
 
 static INSTALL_OPERATION: Mutex<()> = Mutex::new(());
@@ -449,6 +450,50 @@ async fn start_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> 
 }
 
 #[tauri::command]
+async fn prepare_update_install(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = INSTALL_OPERATION
+            .lock()
+            .map_err(|_| "Installation worker unavailable")?;
+        let root = installation::user_root()?;
+        let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
+        let state = app.state::<Mutex<Supervisor>>();
+        let mut supervisor = state
+            .lock()
+            .map_err(|_| "Service supervisor is unavailable".to_string())?;
+
+        // The backend atomically blocks new work and confirms that existing
+        // requests, jobs, uploads, and publications have settled before either
+        // managed process is stopped for the Windows installer.
+        supervisor.prepare_update()?;
+        supervisor.stop()
+    })
+    .await
+    .map_err(|error| format!("Update preparation worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn restore_services_after_update_failure(
+    app: tauri::AppHandle,
+) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = INSTALL_OPERATION
+            .lock()
+            .map_err(|_| "Installation worker unavailable")?;
+        let root = installation::user_root()?;
+        let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
+        let state = app.state::<Mutex<Supervisor>>();
+        let result = state
+            .lock()
+            .map_err(|_| "Service supervisor is unavailable".to_string())?
+            .start();
+        result
+    })
+    .await
+    .map_err(|error| format!("Service recovery worker failed: {error}"))?
+}
+
+#[tauri::command]
 fn get_api_token(app: tauri::AppHandle) -> Result<String, String> {
     let state = app.state::<Mutex<Supervisor>>();
     let result = state
@@ -586,15 +631,23 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
     let current_payload_is_complete = required_payload_files
         .iter()
         .all(|relative| current.join(relative).is_file());
-    if current.join(".clippy-payload-sha256").is_file()
+    let current_payload_matches = current.join(".clippy-payload-sha256").is_file()
         && fs::read_to_string(current.join(".clippy-payload-sha256"))
             .ok()
             .map(|v| v.trim().to_string())
             .as_deref()
             == Some(expected_hash.as_str())
-        && current_payload_is_complete
-    {
+        && current_payload_is_complete;
+    if current_payload_matches {
+        // A matching current payload may still have a previous version beside
+        // it. That backup is intentionally retained until services pass health
+        // checks and the frontend commits this startup.
         return Ok(current.display().to_string());
+    }
+    if backup.exists() {
+        // A different payload is being applied while an earlier activation is
+        // still uncommitted. Restore the last known-good payload first.
+        payload_update::rollback(&app_root)?;
     }
     if !archive_path.is_file() {
         return Err(format!(
@@ -660,27 +713,42 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
     )
     .map_err(|e| format!("Cannot write staged application payload marker: {e}"))?;
 
-    if backup.exists() {
-        fs::remove_dir_all(&backup)
-            .map_err(|e| format!("Cannot remove previous application backup: {e}"))?;
-    }
-    let had_current = current.exists();
-    if had_current {
-        fs::rename(&current, &backup)
-            .map_err(|e| format!("Cannot preserve current application before update: {e}"))?;
-    }
-    if let Err(error) = fs::rename(&staging, &current) {
-        if had_current {
-            let _ = fs::rename(&backup, &current);
-        }
-        let _ = fs::remove_dir_all(&staging);
-        return Err(format!("Cannot activate application payload: {error}"));
-    }
-    if backup.exists() {
-        let _ = fs::remove_dir_all(&backup);
-    }
+    payload_update::activate(&app_root, &staging)?;
 
     Ok(current.display().to_string())
+}
+
+#[tauri::command]
+async fn commit_app_payload() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = INSTALL_OPERATION
+            .lock()
+            .map_err(|_| "Installation worker unavailable")?;
+        let root = installation::user_root()?;
+        let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
+        payload_update::commit(&root.join("app"))
+    })
+    .await
+    .map_err(|error| format!("Application payload commit worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn rollback_app_payload(app: tauri::AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = INSTALL_OPERATION
+            .lock()
+            .map_err(|_| "Installation worker unavailable")?;
+        let root = installation::user_root()?;
+        let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
+        let state = app.state::<Mutex<Supervisor>>();
+        let mut supervisor = state
+            .lock()
+            .map_err(|_| "Service supervisor unavailable".to_string())?;
+        supervisor.stop()?;
+        payload_update::rollback(&root.join("app"))
+    })
+    .await
+    .map_err(|error| format!("Application payload rollback worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -921,15 +989,20 @@ pub fn run() {
         }
     };
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Mutex::new(Supervisor::default()))
         .manage(Mutex::new(SetupLifecycle::default()))
         .invoke_handler(tauri::generate_handler![
             start_services,
+            prepare_update_install,
+            restore_services_after_update_failure,
             stop_services,
             service_status,
             get_api_token,
             check_runtime,
             install_app_payload,
+            commit_app_payload,
+            rollback_app_payload,
             setup_runtime,
             open_external_url,
             choose_data_directory,

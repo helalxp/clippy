@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, FolderOpen, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import LocalModelSettings from './components/LocalModelSettings';
+import DesktopUpdaterCard from './components/DesktopUpdaterCard';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
@@ -381,6 +382,19 @@ function App() {
   // Clip editor overlay: index of the clip being edited, or null.
   const [editingClip, setEditingClip] = useState(null);
   const [reframingClip, setReframingClip] = useState(null);
+
+  useEffect(() => {
+    const activeWork = [];
+    if (status === 'processing') activeWork.push('clip generation');
+    if (bulkSub.running) activeWork.push('bulk subtitle processing');
+    if (downloadingAll) activeWork.push('clip download');
+    if (processingMedia) activeWork.push('media processing');
+    if (editingClip !== null) activeWork.push('clip editing');
+    if (reframingClip !== null) activeWork.push('clip reframing');
+    window.__CLIPPY_ACTIVE_WORK__ = activeWork;
+    return () => { window.__CLIPPY_ACTIVE_WORK__ = []; };
+  }, [status, bulkSub.running, downloadingAll, processingMedia, editingClip, reframingClip]);
+
 
   // Silent-success "saved" states for the settings key inputs (design.md: no alert popups)
   const [elevenLabsSaved, setElevenLabsSaved] = useState(false);
@@ -1666,6 +1680,7 @@ function App() {
                   <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              <DesktopUpdaterCard />
               {/* Local desktop installs manage their one-time runtime setup separately
                   from optional model weights. Cloud accounts do not expose local paths. */}
               {!billingEnabled && <LocalModelSettings />}
