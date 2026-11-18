@@ -603,3 +603,36 @@ ready, so ordinary builds are not made dependent on an unavailable private key.
 The stable endpoint must be paired with release automation that publishes
 `latest.json` for stable releases and marks the correct stable release as
 GitHub's latest release. Prereleases must not replace the stable endpoint.
+
+
+## 9.10 Safe update lifecycle groundwork (2026-11-18)
+
+The first implementation slice now adds a backend maintenance handshake for
+desktop updates. It reuses the existing admission gate and request/background
+work counters rather than introducing a second, competing shutdown mechanism.
+
+- `POST /api/desktop/update/prepare` stops admission of new backend requests,
+  drains requests and tracked background tasks, and refuses the handoff while
+  generation jobs, incomplete uploads, or active publications remain.
+- `POST /api/desktop/update/cancel` releases the gate if a prepared operation
+  is cancelled before the backend is stopped.
+- Data-directory moves and application updates share one maintenance gate, so
+  they cannot both prepare concurrently.
+- The native supervisor calls the authenticated update-prepare endpoint before
+  stopping the renderer and backend.
+- Native recovery command `restore_services_after_update_failure` restarts the
+  managed services if the Windows installer cannot be launched.
+- Backend tests cover successful prepare/cancel, active generation jobs,
+  incomplete uploads, active publications, and conflicts with data relocation.
+
+The native commands are groundwork for the updater UI; no updater plugin or
+signed installer is enabled yet. The recovery command also still needs to be
+wired into the frontend's installer-error path.
+
+### Validation policy
+
+To avoid wasting Windows runners on unrelated runtime rebuilds, the Windows
+validation workflow now detects changes to Python runtime inputs and skips the
+CPU/CUDA runtime packaging matrix for application-only changes. Manual workflow
+dispatch still runs the full matrix. Both CI workflows use per-PR/branch
+concurrency so newer commits supersede older queued or in-progress runs.
