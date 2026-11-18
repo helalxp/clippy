@@ -52,6 +52,7 @@ def _target_exists(report: ReferenceStyleReport, target_type: str, target_id: st
 
 def apply_review_decision(store, job_id: str, request: ReviewDecisionRequest) -> dict:
     """Validate a target against the saved visual report, then persist a decision."""
+    store.get(job_id)
     wrapper = store.get_report(job_id)
     if not wrapper:
         raise ValueError("analysis report is not available for review")

@@ -269,6 +269,7 @@ class AnalysisJobStore:
 
     def record_review(self, job_id: str, item: dict[str, Any]) -> dict[str, Any]:
         """Atomically upsert one decision by finding type and stable identifier."""
+        self.get(job_id)
         required = {"target_type", "target_id", "decision", "note", "reviewed_at"}
         if not isinstance(item, dict) or set(item) != required:
             raise ValueError("template review item has an invalid shape")

@@ -265,6 +265,7 @@ export default function ReferenceTemplateLibrary() {
     try {
       const response = await apiJson('/api/template-analysis/jobs/' + selectedJobId + '/review', {
         method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_type: targetType, target_id: String(targetId), decision }),
       });
       setSelectedJobDetail((current) => current?.id === selectedJobId
@@ -535,14 +536,20 @@ export default function ReferenceTemplateLibrary() {
                       {visual.color_palette?.length > 0 && (
                         <div>
                           <h4 className="text-sm font-semibold text-ink mb-3">Observed style palette ({visual.color_palette.length})</h4>
-                          <div className="flex flex-wrap gap-2">
+                          <div className="space-y-3">
                             {visual.color_palette.map((item, index) => (
-                              <div key={item.hex_color + index} className="flex items-center gap-2 rounded-input border border-rule px-2 py-1.5">
-                                <span className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: item.hex_color }} />
-                                <span className="text-xs text-ink2">{item.hex_color} · {titleCase(item.role)}</span>
-                                <Confidence value={item.confidence} />
+                              <div key={item.hex_color + index} className="rounded-input border border-rule p-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: item.hex_color }} />
+                                  <span className="text-xs text-ink2">{item.hex_color} · {titleCase(item.role)}</span>
+                                  <Confidence value={item.confidence} />
+                                </div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
-                                <ReviewControls review={reviewByKey.get('color_palette:' + index)} onDecision={(decision) => updateReview('color_palette', String(index), decision)} disabled={reviewBusyKey === 'color_palette:' + index} />
+                                <ReviewControls
+                                  review={reviewByKey.get('color_palette:' + index)}
+                                  onDecision={(decision) => updateReview('color_palette', String(index), decision)}
+                                  disabled={reviewBusyKey === 'color_palette:' + index}
+                                />
                               </div>
                             ))}
                           </div>
@@ -667,13 +674,23 @@ export default function ReferenceTemplateLibrary() {
                       {visual.transitions?.length > 0 && (
                         <div>
                           <h4 className="text-sm font-semibold text-ink mb-3">Transitions ({visual.transitions.length})</h4>
-                          <div className="space-y-2">
+                          <div className="space-y-3">
                             {visual.transitions.map((item) => (
-                              <div key={item.id} className="rounded-input border border-rule p-3 flex items-start justify-between gap-3">
-                                <div><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><p className="readout mt-1">Around {formatSeconds(item.at_ms / 1000)} {item.duration_ms != null ? '· ' + item.duration_ms + ' ms' : ''}</p>{item.notes && <p className="text-xs text-muted mt-1">{item.notes}</p>}</div>
-                                <Confidence value={item.confidence} />
+                              <div key={item.id} className="rounded-input border border-rule p-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span>
+                                    <p className="readout mt-1">Around {formatSeconds(item.at_ms / 1000)} {item.duration_ms != null ? '· ' + item.duration_ms + ' ms' : ''}</p>
+                                    {item.notes && <p className="text-xs text-muted mt-1">{item.notes}</p>}
+                                  </div>
+                                  <Confidence value={item.confidence} />
+                                </div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
-                                <ReviewControls review={reviewByKey.get('transitions:' + item.id)} onDecision={(decision) => updateReview('transitions', item.id, decision)} disabled={reviewBusyKey === 'transitions:' + item.id} />
+                                <ReviewControls
+                                  review={reviewByKey.get('transitions:' + item.id)}
+                                  onDecision={(decision) => updateReview('transitions', item.id, decision)}
+                                  disabled={reviewBusyKey === 'transitions:' + item.id}
+                                />
                               </div>
                             ))}
                           </div>

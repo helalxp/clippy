@@ -95,3 +95,19 @@ def test_review_target_must_exist(tmp_path):
 def test_review_request_rejects_unknown_target_type():
     with pytest.raises(Exception):
         ReviewDecisionRequest(target_type="not-a-finding", target_id="x", decision="accepted")
+
+
+def test_review_cannot_create_a_sidecar_for_a_missing_job(tmp_path):
+    store = AnalysisJobStore(tmp_path / "analysis")
+
+    with pytest.raises(FileNotFoundError):
+        store.record_review(
+            "tjob_0123456789abcdef0123456789abcdef",
+            {
+                "target_type": "overview",
+                "target_id": "overview",
+                "decision": "accepted",
+                "note": None,
+                "reviewed_at": "2026-11-18T00:00:00+00:00",
+            },
+        )
