@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timezone
 
 import pytest
 from PIL import Image
+
+import app as app_module
 
 from template_system.jobs import AnalysisJobStore
 from template_system.packages import export_template_package, import_template_package
@@ -222,3 +225,35 @@ def test_draft_refuses_missing_or_tampered_evidence(tmp_path):
         save_reviewed_reference_template(store, storage, job["id"])
 
     assert storage.list() == []
+
+
+def test_api_saves_and_lists_local_template_drafts(tmp_path, monkeypatch):
+    store, job, _report = _create_reviewable_job(tmp_path)
+    apply_review_decision(
+        store,
+        job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-main",
+            decision="accepted",
+        ),
+    )
+    template_storage = LocalTemplateStorage(tmp_path / "templates")
+    monkeypatch.setattr(app_module, "_template_analysis_store", lambda: store)
+    monkeypatch.setattr(app_module, "_template_system_storage", lambda: template_storage)
+    monkeypatch.setattr(app_module, "_assert_data_storage_available", lambda: None)
+    monkeypatch.setattr(app_module, "_reference_templates_local_only", lambda: None)
+
+    saved = asyncio.run(app_module.save_template_analysis_draft(
+        job["id"],
+        app_module.TemplateAnalysisDraftRequest(
+            name="API-created template",
+            description="A reviewed local draft.",
+            category="Podcast",
+        ),
+    ))
+    listed = asyncio.run(app_module.list_template_system_documents())
+
+    assert saved["template"]["name"] == "API-created template"
+    assert len(listed["templates"]) == 1
+    assert listed["templates"][0]["id"] == saved["template"]["id"]
