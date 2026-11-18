@@ -40,6 +40,32 @@ Release  = v0.2.3
 
 A release must not be published if the tag does not match the canonical `VERSION`.
 
+## 2A. Development versioning policy
+
+A version number identifies an official distributable application release, not an individual source change. Feature/fix branches, commits, pull requests, merges, internal test builds, and CI corrections do not each require a version bump. Group compatible work and increment the version when preparing the next official installer release.
+
+Use SemVer according to the highest-impact change included:
+- Patch for backward-compatible fixes and maintenance.
+- Minor for backward-compatible features and improvements.
+- Major for intentional breaking changes or a stable public-contract transition.
+- Prerelease suffixes such as -rc.1, -rc.2 for candidates leading to the next release.
+
+Do not publish different installers under the same already-published version. A published tag and its installer, payload, and version-scoped runtime assets are immutable. Fixes to a published release require a new version. Reusing an identifier is only appropriate for a deliberately recovered, unpublished failed candidate.
+
+## 2B. Application version and runtime compatibility are separate
+
+The application version is embedded in the payload and determines the exact GitHub Release URL used by first-run setup. This is why a new official installer cannot safely reuse an already-published version.
+
+The managed runtime state is checked separately. Its compatibility inputs include Python, Node.js, FFmpeg, Remotion/browser identity, and the hash of the packaged Python requirements. The application version is not itself part of the runtime compatibility fingerprint. When an application upgrade leaves those inputs unchanged and the installed components pass their health checks, setup reuses the existing runtime. A version bump alone does not force a full CPU/CUDA runtime download.
+
+When runtime inputs change or health checks fail, setup may need to repair or replace the affected components. The current setup script and runtime contract remain authoritative; do not infer reuse solely from an unchanged application feature set.
+
+## 2C. Current workflow behavior and future optimization
+
+The current .github/workflows/release-windows.yml builds CPU and CUDA runtime packages for each tag-triggered application release, including application-only fixes. This creates avoidable CI time and release-asset churn even though existing installations can reuse compatible healthy runtimes.
+
+**Future TODO (not implemented):** separate runtime package publication from application publication. Give runtime artifacts independent immutable identities (versioned or content-addressed), rebuild them only when runtime inputs change, and have each application release reference the exact compatible runtime manifest. Preserve reproducibility, manifest validation, SHA-256 checks, exact compatibility gates, and first-install reliability. Never solve this by mutating assets behind an existing published release or weakening integrity checks.
+
 ## 3. Application payload version
 
 `desktop/prepare-payload.ps1` copies the root `VERSION` file into the staged application payload. The runtime setup engine reads:
