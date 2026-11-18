@@ -17,7 +17,8 @@ export const getApiUrl = (path) => {
                 const absoluteUrl = new URL(path);
                 const apiOrigin = new URL(runtimeBase, window.location.href).origin;
                 const isMedia = /^\/(videos|thumbnails|reference-templates-media)(\/|$)/.test(absoluteUrl.pathname);
-                if (absoluteUrl.origin === apiOrigin && isMedia) {
+                const isTemplateEvidence = /^\/api\/template-analysis\/jobs\/tjob_[a-f0-9]{32}\/evidence\/reference_frame_[0-9]{3}$/i.test(absoluteUrl.pathname);
+                if (absoluteUrl.origin === apiOrigin && (isMedia || isTemplateEvidence)) {
                     absoluteUrl.searchParams.set('token', sessionToken);
                     return absoluteUrl.toString();
                 }
@@ -33,7 +34,8 @@ export const getApiUrl = (path) => {
     const mediaPath = normalizedPath.split('?')[0];
     const isStaticMedia = /^\/(videos|thumbnails|reference-templates-media)(\/|$)/.test(mediaPath);
     const isLibraryMedia = /^\/api\/library\/projects\/[0-9a-f-]{36}\/(?:thumbnail|clips\/[0-9a-f-]+\/(?:thumbnail|video))$/i.test(mediaPath);
-    if ((isStaticMedia || isLibraryMedia) && sessionToken) {
+    const isTemplateEvidence = /^\/api\/template-analysis\/jobs\/tjob_[a-f0-9]{32}\/evidence\/reference_frame_[0-9]{3}$/i.test(mediaPath);
+    if ((isStaticMedia || isLibraryMedia || isTemplateEvidence) && sessionToken) {
         const mediaUrl = new URL(url, window.location.href);
         mediaUrl.searchParams.set('token', sessionToken);
         return mediaUrl.toString();

@@ -39,7 +39,7 @@ def _now() -> str:
 
 
 def _safe_filename(value: str) -> str:
-    name = Path(str(value or "reference.mp4")).name
+    name = re.split(r"[\\/]", str(value or "reference.mp4"))[-1]
     name = re.sub(r"[\x00-\x1f]", "_", name)
     return (name.strip(" .") or "reference.mp4")[:240]
 
