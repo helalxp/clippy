@@ -177,3 +177,101 @@ def test_review_note_is_retained_and_can_be_updated(tmp_path):
     assert first["items"][0]["note"] == "The font treatment and placement look correct."
     assert second["items"][0]["note"] == "On closer inspection, the outline is wrong."
     assert len(second["items"]) == 1
+
+
+
+def test_typed_correction_is_saved_without_mutating_the_ai_report(tmp_path):
+    original = _report()
+    store, job = _store_with_report(tmp_path, original)
+
+    result = apply_review_decision(
+        store,
+        job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="accepted",
+            correction={
+                "visible_text": "Corrected words",
+                "box": {"x": 0.2},
+                "typography": {
+                    "font_family": "Montserrat",
+                    "size_ratio": 0.052,
+                    "fill_color": "#12ABEF",
+                },
+            },
+        ),
+    )
+
+    saved = result["items"][0]
+    assert saved["correction"]["visible_text"] == "Corrected words"
+    assert saved["correction"]["box"] == {"x": 0.2}
+    assert saved["correction"]["typography"]["font_family"] == "Montserrat"
+    assert store.get_report(job["id"])["ai_report"] == original.model_dump(mode="json")
+
+
+def test_correction_updates_merge_and_survive_decision_only_changes(tmp_path):
+    store, job = _store_with_report(tmp_path, _report())
+
+    apply_review_decision(
+        store,
+        job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="accepted",
+            correction={"visible_text": "Corrected words"},
+        ),
+    )
+    apply_review_decision(
+        store,
+        job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="accepted",
+            correction={"typography": {"fill_color": "#ABCDEF"}},
+        ),
+    )
+    result = apply_review_decision(
+        store,
+        job["id"],
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="rejected",
+            note="Reconsider this finding",
+        ),
+    )
+
+    correction = result["items"][0]["correction"]
+    assert correction["visible_text"] == "Corrected words"
+    assert correction["typography"]["fill_color"] == "#ABCDEF"
+    assert len(result["items"]) == 1
+
+
+def test_correction_rejects_unknown_fields_and_invalid_merged_geometry(tmp_path):
+    store, job = _store_with_report(tmp_path, _report())
+
+    with pytest.raises(Exception):
+        ReviewDecisionRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="accepted",
+            correction={"confidence": "high"},
+        )
+
+    with pytest.raises(ValueError, match="correction would make the visual finding invalid"):
+        apply_review_decision(
+            store,
+            job["id"],
+            ReviewDecisionRequest(
+                target_type="text_regions",
+                target_id="caption-1",
+                decision="accepted",
+                correction={"box": {"x": 0.95}},
+            ),
+        )
+
+    assert store.get_review(job["id"])["items"] == []
+    assert store.get_report(job["id"])["ai_report"] == _report().model_dump(mode="json")
