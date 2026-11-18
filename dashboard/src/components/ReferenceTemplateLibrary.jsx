@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, Clock3, FileVideo, Loader2, RefreshCw,
   Sparkles, Upload, XCircle,
@@ -46,14 +46,36 @@ function BoxSummary({ box }) {
   return <span className="readout">X {pct(box.x)} · Y {pct(box.y)} · W {pct(box.width)} · H {pct(box.height)}</span>;
 }
 
-function EvidenceFrame({ jobId, sample }) {
+function EvidenceFrame({ jobId, sample, box = null, onSelect = null }) {
   const url = getApiUrl('/api/template-analysis/jobs/' + jobId + '/evidence/' + sample.asset_id);
+  const image = (
+    <span
+      className="relative block w-full overflow-hidden rounded-input border border-rule bg-paper2"
+      style={{ aspectRatio: String(sample.width || 16) + ' / ' + String(sample.height || 9) }}
+    >
+      <img src={url} alt={'Reference frame at ' + formatSeconds(sample.timestamp_ms / 1000)} className="absolute inset-0 w-full h-full object-contain" loading="lazy" />
+      {box && (
+        <span
+          aria-hidden="true"
+          className="absolute border-2 border-amber-400 bg-amber-300/10 pointer-events-none"
+          style={{
+            left: (box.x * 100) + '%',
+            top: (box.y * 100) + '%',
+            width: (box.width * 100) + '%',
+            height: (box.height * 100) + '%',
+          }}
+        />
+      )}
+    </span>
+  );
   return (
     <figure className="min-w-0">
-      <div className="aspect-video bg-paper2 rounded-input overflow-hidden border border-rule">
-        <img src={url} alt={'Reference frame at ' + formatSeconds(sample.timestamp_ms / 1000)} className="w-full h-full object-contain" loading="lazy" />
-      </div>
-      <figcaption className="readout mt-1.5">{formatSeconds(sample.timestamp_ms / 1000)}</figcaption>
+      {onSelect ? (
+        <button type="button" onClick={() => onSelect(sample.timestamp_ms)} className="block w-full text-left">
+          {image}
+        </button>
+      ) : image}
+      <figcaption className="readout mt-1.5">{formatSeconds(sample.timestamp_ms / 1000)}{box ? ' · highlighted region' : ''}</figcaption>
     </figure>
   );
 }
@@ -69,6 +91,7 @@ export default function ReferenceTemplateLibrary() {
   const [geminiConsent, setGeminiConsent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
+  const videoRef = useRef(null);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -105,6 +128,17 @@ export default function ReferenceTemplateLibrary() {
   const visual = report?.ai_report || null;
   const samples = deterministic?.samples || [];
   const measurements = deterministic?.visual_measurements || [];
+  const sampleById = useMemo(
+    () => new Map(samples.map((sample) => [sample.asset_id, sample])),
+    [samples],
+  );
+  const seekReferenceFrame = useCallback((timestampMs) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(Number(timestampMs))) return;
+    video.currentTime = Math.max(0, Number(timestampMs) / 1000);
+    const playback = video.play();
+    if (playback && typeof playback.catch === 'function') playback.catch(() => {});
+  }, []);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -270,6 +304,7 @@ export default function ReferenceTemplateLibrary() {
                     <h2 className="text-xl font-semibold text-ink mt-1 break-words">{selectedJob.name || selectedJob.original_filename}</h2>
                     <p className="readout mt-1">{selectedJob.original_filename} · {formatBytes(selectedJob.source_size_bytes)}</p>
                     <video
+                      ref={videoRef}
                       className="mt-4 w-full max-h-[520px] rounded-input bg-black"
                       controls
                       playsInline
@@ -337,7 +372,7 @@ export default function ReferenceTemplateLibrary() {
                       <h3 className="font-semibold text-ink mb-3">Sampled evidence frames</h3>
                       <p className="text-xs text-muted mb-4">These are the actual frames used by analysis. Every AI finding must cite this evidence set.</p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                        {samples.map((sample) => <EvidenceFrame key={sample.asset_id} jobId={selectedJob.id} sample={sample} />)}
+                        {samples.map((sample) => <EvidenceFrame key={sample.asset_id} jobId={selectedJob.id} sample={sample} onSelect={seekReferenceFrame} />)}
                       </div>
                     </div>
                   )}
@@ -416,6 +451,20 @@ export default function ReferenceTemplateLibrary() {
                                 )}
                                 {region.notes && <p className="text-xs text-muted mt-2">{region.notes}</p>}
                                 <p className="readout mt-2">Evidence: {(region.evidence || []).map((item) => formatSeconds(item.timestamp_ms / 1000)).join(', ')}</p>
+                                <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                  {(region.evidence || []).map((item) => {
+                                    const evidenceSample = sampleById.get(item.asset_id);
+                                    return evidenceSample ? (
+                                      <EvidenceFrame
+                                        key={item.asset_id + '-' + item.timestamp_ms}
+                                        jobId={selectedJob.id}
+                                        sample={evidenceSample}
+                                        box={region.box}
+                                        onSelect={seekReferenceFrame}
+                                      />
+                                    ) : null;
+                                  })}
+                                </div>
                               </article>
                             ))}
                           </div>
@@ -431,6 +480,20 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><Confidence value={item.confidence} /></div>
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 <BoxSummary box={item.box} />
+                                <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                  {(item.evidence || []).map((evidence) => {
+                                    const evidenceSample = sampleById.get(evidence.asset_id);
+                                    return evidenceSample ? (
+                                      <EvidenceFrame
+                                        key={item.id + '-' + evidence.asset_id + '-' + evidence.timestamp_ms}
+                                        jobId={selectedJob.id}
+                                        sample={evidenceSample}
+                                        box={item.box}
+                                        onSelect={seekReferenceFrame}
+                                      />
+                                    ) : null;
+                                  })}
+                                </div>
                               </div>
                             ))}
                           </div>
