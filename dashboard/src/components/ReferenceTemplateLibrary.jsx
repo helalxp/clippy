@@ -406,7 +406,7 @@ export default function ReferenceTemplateLibrary() {
             This workbench analyzes references only; it does not change clip generation.
           </p>
         </div>
-        <button onClick={() => { load(); if (selectedJobId) loadJobDetail(selectedJobId); }} disabled={loading} className="btn-ghost px-4 py-2 text-sm shrink-0">
+        <button onClick={() => { load(); loadSavedTemplates(); if (selectedJobId) loadJobDetail(selectedJobId); }} disabled={loading} className="btn-ghost px-4 py-2 text-sm shrink-0">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
@@ -665,7 +665,7 @@ export default function ReferenceTemplateLibrary() {
                         {visual.editorial_style && <p className="text-sm text-muted mt-2">{visual.editorial_style}</p>}
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
                         {visual.overview_evidence?.length > 0 && <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />}
-                        {visual.overview_evidence?.length > 0 && <ReviewControls review={reviewByKey.get('overview:overview')} onDecision={(decision, note) => updateReview('overview', 'overview', decision, note)} disabled={reviewBusyKey === 'overview:overview'} />}
+                        {visual.overview_evidence?.length > 0 && <ReviewControls key={selectedJob.id + '-overview-review'} review={reviewByKey.get('overview:overview')} onDecision={(decision, note) => updateReview('overview', 'overview', decision, note)} disabled={reviewBusyKey === 'overview:overview'} />}
                         {visual.overview_evidence?.length > 0 && <TemplateFindingCorrectionEditor key={selectedJob.id + '-overview-correction'} targetType="overview" finding={visual} onSave={(patch) => updateReview('overview', 'overview', 'accepted', reviewByKey.get('overview:overview')?.note || '', patch)} disabled={reviewBusyKey === 'overview:overview'} />}
                       </div>
 
@@ -682,6 +682,7 @@ export default function ReferenceTemplateLibrary() {
                                 </div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls
+                                  key={selectedJob.id + '-palette-review-' + index}
                                   review={reviewByKey.get('color_palette:' + index)}
                                   onDecision={(decision, note) => updateReview('color_palette', String(index), decision, note)}
                                   disabled={reviewBusyKey === 'color_palette:' + index}
@@ -703,7 +704,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.colors?.length > 0 && <div className="flex gap-1.5 mt-2">{item.colors.map((color, index) => <span key={color + index} className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
-                                <ReviewControls review={reviewByKey.get('backgrounds:' + item.id)} onDecision={(decision, note) => updateReview('backgrounds', item.id, decision, note)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
+                                <ReviewControls key={selectedJob.id + '-background-review-' + item.id} review={reviewByKey.get('backgrounds:' + item.id)} onDecision={(decision, note) => updateReview('backgrounds', item.id, decision, note)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
                                 <TemplateFindingCorrectionEditor key={selectedJob.id + '-background-' + item.id} targetType="backgrounds" finding={item} onSave={(patch) => updateReview('backgrounds', item.id, 'accepted', reviewByKey.get('backgrounds:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
                               </div>
                             ))}
@@ -721,7 +722,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.subject_regions?.length > 0 && <div className="mt-2 space-y-1">{item.subject_regions.map((box, index) => <div key={index}><span className="readout">Subject {index + 1}: </span><BoxSummary box={box} /></div>)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} boxes={item.subject_regions} />
-                                <ReviewControls review={reviewByKey.get('compositions:' + item.id)} onDecision={(decision, note) => updateReview('compositions', item.id, decision, note)} disabled={reviewBusyKey === 'compositions:' + item.id} />
+                                <ReviewControls key={selectedJob.id + '-composition-review-' + item.id} review={reviewByKey.get('compositions:' + item.id)} onDecision={(decision, note) => updateReview('compositions', item.id, decision, note)} disabled={reviewBusyKey === 'compositions:' + item.id} />
                                 <TemplateFindingCorrectionEditor key={selectedJob.id + '-composition-' + item.id} targetType="compositions" finding={item} onSave={(patch) => updateReview('compositions', item.id, 'accepted', reviewByKey.get('compositions:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'compositions:' + item.id} />
                               </div>
                             ))}
@@ -770,7 +771,7 @@ export default function ReferenceTemplateLibrary() {
                                 )}
                                 {region.animation_notes && <p className="text-xs text-muted mt-2">{region.animation_notes}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={region.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={region.box} />
-                                  <ReviewControls review={reviewByKey.get('text_regions:' + region.id)} onDecision={(decision, note) => updateReview('text_regions', region.id, decision, note)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
+                                  <ReviewControls key={selectedJob.id + '-text-review-' + region.id} review={reviewByKey.get('text_regions:' + region.id)} onDecision={(decision, note) => updateReview('text_regions', region.id, decision, note)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
                                   <TemplateFindingCorrectionEditor key={selectedJob.id + '-text-' + region.id} targetType="text_regions" finding={region} onSave={(patch) => updateReview('text_regions', region.id, 'accepted', reviewByKey.get('text_regions:' + region.id)?.note || '', patch)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
                             </article>
                             ))}
@@ -788,7 +789,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 <BoxSummary box={item.box} />
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={item.box} />
-                                <ReviewControls review={reviewByKey.get('graphic_overlays:' + item.id)} onDecision={(decision, note) => updateReview('graphic_overlays', item.id, decision, note)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
+                                <ReviewControls key={selectedJob.id + '-overlay-review-' + item.id} review={reviewByKey.get('graphic_overlays:' + item.id)} onDecision={(decision, note) => updateReview('graphic_overlays', item.id, decision, note)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
                                 <TemplateFindingCorrectionEditor key={selectedJob.id + '-overlay-' + item.id} targetType="graphic_overlays" finding={item} onSave={(patch) => updateReview('graphic_overlays', item.id, 'accepted', reviewByKey.get('graphic_overlays:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
                               </div>
                             ))}
@@ -806,7 +807,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.start_ms != null && item.end_ms != null && <p className="readout mt-2">{formatSeconds(item.start_ms / 1000)}–{formatSeconds(item.end_ms / 1000)}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
-                                <ReviewControls review={reviewByKey.get('effects:' + item.id)} onDecision={(decision, note) => updateReview('effects', item.id, decision, note)} disabled={reviewBusyKey === 'effects:' + item.id} />
+                                <ReviewControls key={selectedJob.id + '-effect-review-' + item.id} review={reviewByKey.get('effects:' + item.id)} onDecision={(decision, note) => updateReview('effects', item.id, decision, note)} disabled={reviewBusyKey === 'effects:' + item.id} />
                                 <TemplateFindingCorrectionEditor key={selectedJob.id + '-effect-' + item.id} targetType="effects" finding={item} onSave={(patch) => updateReview('effects', item.id, 'accepted', reviewByKey.get('effects:' + item.id)?.note || '', patch)} disabled={reviewBusyKey === 'effects:' + item.id} />
                               </div>
                             ))}
@@ -830,6 +831,7 @@ export default function ReferenceTemplateLibrary() {
                                 </div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                                 <ReviewControls
+                                  key={selectedJob.id + '-transition-review-' + item.id}
                                   review={reviewByKey.get('transitions:' + item.id)}
                                   onDecision={(decision, note) => updateReview('transitions', item.id, decision, note)}
                                   disabled={reviewBusyKey === 'transitions:' + item.id}
@@ -852,7 +854,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="readout mt-2">{titleCase(scene.content_type)} · {titleCase(scene.mood)} mood · {titleCase(scene.energy)} energy · {titleCase(scene.editorial_role)}</p>
                                 <div className="mt-2"><Confidence value={scene.confidence} /></div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={scene.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
-                                <ReviewControls review={reviewByKey.get('scenes:' + scene.index)} onDecision={(decision, note) => updateReview('scenes', String(scene.index), decision, note)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
+                                <ReviewControls key={selectedJob.id + '-scene-review-' + scene.index} review={reviewByKey.get('scenes:' + scene.index)} onDecision={(decision, note) => updateReview('scenes', String(scene.index), decision, note)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
                                 <TemplateFindingCorrectionEditor key={selectedJob.id + '-scene-' + scene.index} targetType="scenes" finding={scene} onSave={(patch) => updateReview('scenes', String(scene.index), 'accepted', reviewByKey.get('scenes:' + scene.index)?.note || '', patch)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
                               </div>
                             ))}
