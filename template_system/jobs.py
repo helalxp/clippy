@@ -344,17 +344,34 @@ class AnalysisJobStore:
         return bool(self.get(job_id).get("cancel_requested"))
 
     def recover_interrupted(self) -> list[str]:
-        """Make interrupted jobs eligible for re-queue after the API restarts."""
+        """Re-queue interrupted work without resurrecting explicit cancellations."""
         resumed: list[str] = []
         for item in self.list():
-            if item.get("status") == "running":
+            status = item.get("status")
+            if status not in {"running", "queued"}:
+                continue
+            if item.get("cancel_requested"):
+                report = self.get_report(item["id"])
+                if report is not None:
+                    report["ai_status"] = "cancelled"
+                    report["ai_error"] = "The job was cancelled before the previous Clippy session shut down."
+                    report["ai_report"] = None
+                    self.save_report(item["id"], report)
+                self.update(
+                    item["id"],
+                    status="cancelled",
+                    stage="cancelled",
+                    ai_status="cancelled",
+                    ai_error="The job was cancelled before the previous Clippy session shut down.",
+                    completed_at=_now(),
+                )
+                continue
+            if status == "running":
                 self.update(
                     item["id"], status="queued", stage="queued", progress=0,
                     cancel_requested=False,
                 )
-                resumed.append(item["id"])
-            elif item.get("status") == "queued":
-                resumed.append(item["id"])
+            resumed.append(item["id"])
         return resumed
 
 

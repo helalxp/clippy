@@ -236,3 +236,23 @@ def test_atomic_finish_honors_cancel_requested_before_commit(tmp_path):
     assert saved_report["ai_status"] == "cancelled"
     assert saved_report["ai_report"] is None
     assert saved_report["deterministic"]["technical"]["duration_seconds"] == 3
+
+
+def test_recovery_does_not_resurrect_a_cancelled_job(tmp_path):
+    store, job = _create_job(tmp_path)
+    store.update(job["id"], status="running", stage="gemini_interpretation")
+    store.save_report(job["id"], {
+        "schema_version": 1,
+        "deterministic": {"technical": {"duration_seconds": 5}},
+        "ai_status": "running",
+        "ai_report": None,
+    })
+    store.request_cancel(job["id"])
+
+    assert store.recover_interrupted() == []
+    recovered = store.get(job["id"])
+    report = store.get_report(job["id"])
+    assert recovered["status"] == "cancelled"
+    assert recovered["cancel_requested"] is True
+    assert report["ai_status"] == "cancelled"
+    assert report["deterministic"]["technical"]["duration_seconds"] == 5
