@@ -22,6 +22,53 @@ Run the consistency check:
 
 The installer build runs this check automatically. The payload builder copies the canonical `VERSION` into the installed application payload.
 
+## Development changes versus official releases
+
+**A version increment represents an official distributable application release, not an individual code change.** Do not bump the application version for every commit, fix branch, pull request, merge, internal build, or CI correction.
+
+During normal development:
+- Commit and merge independently validated fixes without changing the application version.
+- Group multiple compatible fixes and improvements into a single release when practical.
+- Use ordinary internal/test builds to validate changes; these do not need a new public release identity.
+- Do not publish multiple different installers under an already-published version.
+
+Increment the version when preparing a new official installer release for users:
+
+| Change being shipped | Version increment |
+|---|---|
+| Backward-compatible bug fixes, small corrections, maintenance | Patch: 0.2.3 → 0.2.4 |
+| Backward-compatible user-facing feature or substantial improvement | Minor: 0.2.3 → 0.3.0 |
+| Intentional breaking change or stable public-contract transition | Major: 0.2.3 → 1.0.0 |
+| Pre-release candidate for the next version | Prerelease identifier, e.g. 0.2.4-rc.1, 0.2.4-rc.2, then final 0.2.4 |
+
+Choose the increment based on the most significant change included in the release. A release containing several bug fixes and a new backward-compatible feature is normally a minor release, not several patch releases. Keep prerelease identifiers ordered and do not treat an RC as a separate stable release.
+
+Once a version has been published, its tag, installer, embedded payload version, and runtime assets are an immutable release identity. Never replace a published installer or force-move its tag while retaining the same version. A correction to a published release requires a new version. Reusing a version is only a controlled recovery option for an unpublished/failed candidate, after confirming no public release has been published.
+
+## What the application version controls
+
+The canonical application version is copied from root VERSION into the packaged application payload. At first launch, desktop/setup-runtime.ps1 reads that embedded version and constructs exact-version GitHub Release URLs, including the runtime manifest and archive parts. It does not resolve runtime downloads through a moving latest URL.
+
+Therefore, publishing a new installer under an existing published version is unsafe: the installer would share the same release identity and versioned runtime asset location. The version is an installation/release contract, not merely the text displayed in the UI.
+
+## Application version versus runtime component identity
+
+The application version and managed runtime compatibility are separate concerns.
+
+The runtime state/fingerprint is based on runtime component identities and compatibility inputs, including Python, Node.js, FFmpeg, the Remotion browser, and the SHA-256 of the packaged Python requirements. The application version itself is not part of the runtime compatibility fingerprint.
+
+On an application upgrade, first-run setup checks the existing managed runtime. If the runtime manifest, component versions, dependency hash, required files, and health checks still match, setup reuses the healthy runtime and exits without reinstalling it. A version bump alone therefore does not imply that users must redownload the multi-gigabyte CPU/CUDA runtime.
+
+Runtime changes can require component repair/replacement or a new runtime package. In particular, dependency changes affect the requirements hash; Python/CUDA, Node, FFmpeg, or Remotion/browser changes affect their corresponding compatibility checks. The setup script is authoritative for the exact behavior. Do not promise runtime reuse when a runtime compatibility input has changed or a health check fails.
+
+## Current release-pipeline cost and future improvement
+
+The current tag-triggered release workflow builds both CPU and CUDA runtime packages for each application release, even when the change is application-only (for example, a frontend-only fix). Existing installations can still reuse healthy runtimes, but CI spends time rebuilding and uploading runtime assets.
+
+**Future TODO, not implemented:** decouple application releases from runtime package releases. Introduce independently versioned or content-addressed runtime artifacts, publish/rebuild them only when runtime inputs change, and let an application release reference an immutable runtime manifest/version. Preserve strict SHA-256 verification, exact compatibility checks, reproducible builds, and a reliable first-install path. Do not implement this by silently reusing mutable assets or weakening release/version validation.
+
+A future in-app updater is also not currently implemented; the supported distribution path remains manual installation of each published installer release.
+
 ## Runtime release assets
 
 The runtime builder produces a manifest for each runtime variant:
