@@ -352,3 +352,229 @@ Official Tauri documentation:
 - [Tauri 2 Updater plugin](https://v2.tauri.app/plugin/updater/)
 - [Tauri updater source documentation](https://github.com/tauri-apps/tauri-docs/blob/v2/src/content/docs/plugin/updater.mdx)
 
+---
+
+## 9. Phase 0 source-audit findings (2026-11-18)
+
+This section records a static source audit of the implementation branch. It is
+not a claim that a Windows in-place upgrade has been tested. The audit followed
+the actual source call paths and treats the code as authoritative where older
+architecture documents describe a future target layout.
+
+### 9.1 Actual application startup and update boundary
+
+The current desktop startup sequence is:
+
+1. `desktop/src-tauri/src/main.rs` calls `clippy_desktop::run()`.
+2. `desktop/src-tauri/src/lib.rs::run` acquires the per-user `Desktop`
+   installation mutex for the lifetime of the shell, creates the Tauri builder,
+   manages `Supervisor` and setup lifecycle state, and registers native
+   commands.
+3. `dashboard/src/main.jsx` wraps the application in
+   `DesktopRuntimeGate` when the Tauri runtime is present.
+4. `dashboard/src/components/DesktopRuntimeGate.jsx` invokes
+   `install_app_payload`, then `check_runtime`, then
+   `setup_runtime` only when runtime validation reports a problem (or the
+   user retries), then `start_services`. It installs the dynamically allocated
+   local API URL and per-launch API token before rendering the application.
+5. `Supervisor::start` launches the managed Python backend and managed Node
+   renderer, waits for their health endpoints, and places both processes in a
+   Windows Job Object. Closing the job object kills surviving descendants.
+6. On shell shutdown, `Supervisor::drop` stops the renderer and backend. The
+   current `stop` path kills the direct child processes and closes the Job
+   Object; it is not a graceful backend-drain protocol.
+
+The updater-enabled NSIS installer will replace the Tauri desktop shell. On the
+next launch, the updated shell's embedded `app-payload.zip` is applied by
+`install_app_payload`. The Tauri shell update and the application-payload
+activation are therefore two sequential operations, not one atomic operation.
+
+### 9.2 Files and responsibilities
+
+| Area | Actual files | Responsibility |
+|---|---|---|
+| Tauri entry/config | `desktop/src-tauri/src/main.rs`, `lib.rs`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, `capabilities/default.json` | Shell startup, native commands, bundled resources, dependencies, frontend permissions |
+| Frontend bootstrap | `dashboard/src/main.jsx`, `components/DesktopRuntimeGate.jsx` | First-launch gate, payload activation, runtime validation/repair, service startup |
+| App payload build | `desktop/build.ps1`, `prepare-payload.ps1`, `validate-version.ps1` | Build dashboard, stage backend/renderer/runtime setup files, package ZIP and SHA-256, enforce version synchronization |
+| Runtime reconciliation | `desktop/setup-runtime.ps1`, `runtime-health.ps1`, `runtime-manifest-state.ps1`, `runtime-contract.json`, `runtime-archive.ps1` | Compare runtime state, verify components, download/repair only what is missing or incompatible, persist runtime manifest |
+| Native runtime validation | `desktop/src-tauri/src/bootstrap.rs` | Validate runtime manifest, executable versions, requirements hash, backend imports, persistent browser hash and launch |
+| Process/data ownership | `desktop/src-tauri/src/supervisor.rs`, `installation.rs`, `data_storage.rs` | Managed child process lifecycle, Windows Job Object, installation mutexes, configured external data directory, safe reference-template migration |
+| Release | `.github/workflows/release-windows.yml` | CI, runtime archives, payload/installer build, optional Authenticode signing, SHA-256, draft asset verification and publication |
+| Settings UI | `dashboard/src/App.jsx` and settings components | Existing Settings route and UI integration point; updater should be a separate component, not embedded into the large App component |
+
+### 9.3 Actual filesystem boundaries
+
+The implementation currently uses `%LOCALAPPDATA%\\Clippy`; it does not
+implement the future `app/versions/<version>` pointer layout described in the
+architecture document.
+
+- Replaceable application payload: `app/current`.
+- Payload transaction paths: `app/current.installing` and
+  `app/current.previous`.
+- Managed Python, Node and FFmpeg: `runtime/python`, `runtime/node`,
+  `runtime/ffmpeg`.
+- Runtime state: `runtime-manifest.json`.
+- Persistent Remotion browser: `browser/headless-shell`, with version metadata
+  under `browser`.
+- Settings and install metadata: `settings.json`,
+  `storage-location.json`.
+- Default user data: `data`; when configured, user data can live in an
+  external directory. Outputs, uploads, Library, models and reference templates
+  are rooted there.
+- Runtime downloads/cache: `downloads`.
+- Logs: `logs`.
+
+The native bootstrap and supervisor resolve these paths from
+`LOCALAPPDATA\\Clippy` and the storage-location configuration. The data
+directory is explicitly required to be outside the installation root so a
+normal app update cannot replace it.
+
+### 9.4 Runtime reuse: what the source actually guarantees
+
+The new payload is activated before runtime validation. The runtime checker
+compares the installed manifest to the new payload's requirements hash and
+runtime contract.
+
+- If the manifest and all health checks still match, setup is skipped entirely.
+- If setup runs, Python is selected by CPU/CUDA variant and its expected runtime
+  package is tied to the app release. A valid matching manifest allows the
+  normal path to skip Python replacement. If the manifest is absent/invalid or
+  the Python state changes, Python may be downloaded and replaced.
+- Node is reused when its managed executable reports the required version;
+  otherwise the versioned official archive is downloaded, verified, staged,
+  and activated.
+- FFmpeg/FFprobe are reused when both executables pass health checks; otherwise
+  the publisher archive and SHA-256 sidecar are downloaded and verified.
+- The browser is reused when its version metadata, executable SHA-256, and
+  launch check match the new renderer contract. A renderer/browser contract
+  change can legitimately require a browser download.
+- CPU/CUDA selection is recalculated from current hardware/driver state. A
+  change in selected variant can require replacing the Python runtime.
+
+The component helper in `runtime-health.ps1` stages and validates replacements,
+rotates the existing directory to a `.previous` backup, activates the staged
+directory, validates again, and restores the backup on activation failure.
+
+**Conclusion:** the ordinary same-contract update path is designed to reuse
+healthy runtimes. A damaged/missing manifest, changed requirements, changed
+component version, invalid component, or CPU/CUDA variant change can trigger
+downloads. This is a source-level conclusion, not yet a measured Windows
+upgrade result. Phase 5 must compare component versions, hashes and actual
+network/download logs before and after an upgrade.
+
+### 9.5 Payload activation and rollback limitation
+
+`install_app_payload` verifies the embedded ZIP SHA-256, extracts into
+`current.installing`, checks required files, writes the payload hash marker,
+renames `current` to `current.previous`, and renames staging to `current`.
+It restores the previous directory if the activation rename itself fails.
+
+However, after the rename succeeds, it immediately deletes
+`current.previous`. Runtime validation and backend/renderer startup happen
+later in `DesktopRuntimeGate`. Therefore the current payload transaction does
+not retain a known-good payload until the new payload has passed runtime and
+service health checks. The updater implementation must explicitly decide
+whether to improve this transaction (preferred) or define and test another
+recovery mechanism. Do not describe the existing payload swap as full
+post-startup rollback.
+
+Reference templates are migrated from the old payload into the configured
+persistent data directory before payload activation. Conflicts are surfaced
+rather than silently overwriting user files.
+
+### 9.6 Active-work and shutdown safety
+
+The current supervisor's Windows Job Object is a reliable process-tree cleanup
+boundary, but it is not permission to terminate active work. The backend has
+interrupted-job recovery logic, yet an update should wait for active work to
+finish rather than depend on recovery after forced process termination.
+
+There is already a useful quiescence implementation in `app.py`:
+`_DataMoveQuiescenceMiddleware` counts complete in-flight HTTP responses and
+registered background tasks, blocks new requests after the pending flag is set,
+and `/api/library/storage/prepare-move` waits for quiescence and rejects when
+jobs are queued/processing or uploads are incomplete. This is the right
+architectural foundation to reuse, but the updater must not call the
+data-move endpoint as a semantic shortcut. Introduce a clearly named update
+preparation/maintenance handshake using the shared quiescence mechanism, then
+stop services and invoke the native updater only after the backend confirms
+idle. The handshake must be reversible if the installer cannot be launched.
+
+The frontend also has app-level activity state in `App.jsx`, including the
+main generation status, bulk subtitle work, downloads, clip editing and
+reframing. The update experience must account for relevant frontend-only
+operations as well as backend jobs and requests. Checking/downloading an update
+can remain available while work is active; installation must be deferred until
+the safe-to-exit handshake succeeds.
+
+### 9.7 Updater and release pipeline gaps
+
+The branch source audit confirms there is currently no updater plugin dependency
+or registration, no frontend updater package, no updater capability permission,
+no updater public key/endpoint, and no updater artifacts or manifest in the
+release workflow.
+
+Additional release integration issues to resolve before enabling discovery:
+
+1. The current workflow explicitly sets `make_latest: false`, while Tauri's
+   documented static GitHub endpoint uses
+   `/releases/latest/download/latest.json`. That endpoint cannot be assumed to
+   resolve to Clippy's intended stable release until stable-release publication
+   behavior is changed and verified.
+2. The current workflow optionally Authenticode-signs the NSIS executable
+   **after** `cargo tauri build`. Tauri generates its detached updater
+   signature during the build. Authenticode modifies the installer bytes, so
+   the final installer must be re-signed for the updater after Authenticode, or
+   the signing order must be changed and verified. A stale `.sig` must never
+   be published.
+3. Authenticode signing and Tauri updater signing are separate. The updater
+   signature is mandatory even if Authenticode remains optional.
+4. The NSIS bundle currently relies on Tauri's default per-user install mode.
+   Make `bundle.windows.nsis.installMode: currentUser` explicit to preserve
+   the existing per-user install assumptions. Configure the updater's Windows
+   installer UI mode explicitly as well.
+5. The release workflow currently validates a draft's installer/checksum and
+   runtime assets, but it has no checks for an updater signature, static
+   manifest, manifest version/platform/URL, or cryptographic signature
+   verification.
+6. The current published `0.3.0` binary has no updater plugin or embedded
+   updater public key. Existing 0.3.0 users therefore need one manual install
+   of the first updater-enabled release before they can receive subsequent
+   in-app updates.
+
+### 9.8 Verification boundary and next actions
+
+Static source inspection is complete for the startup, payload, runtime,
+process, data-storage, settings integration, and release-build paths described
+above. The following are not yet proven:
+
+- Tauri updater installation behavior against Clippy's exact currentUser NSIS
+  installation on a real Windows machine.
+- That the updater installer can replace the running shell cleanly while the
+  desktop mutex is held and that the mutex is released before NSIS activation.
+- That a new payload reaches healthy backend/renderer startup and retains a
+  rollback copy until that point.
+- That unchanged CPU and CUDA runtime components are not downloaded during a
+  real upgrade.
+- That the final Authenticode-signed installer verifies against the detached
+  Tauri updater signature.
+- That active generation, renderer requests, model downloads, exports and
+  uploads all defer installation correctly.
+
+Next implementation order:
+
+1. Add a focused update-preparation handshake that reuses the backend's
+   quiescence machinery and reports active jobs/uploads/requests.
+2. Add a reversible native pre-install flow: stop services only after idle is
+   confirmed; if updater launch fails, restart services and release the
+   maintenance gate.
+3. Decide and implement payload activation rollback through successful runtime
+   validation and service health.
+4. Integrate the Tauri updater plugin, public key, frontend API and least-
+   privilege capability permissions.
+5. Correct the release workflow's stable latest endpoint and signing order;
+   verify the final installer signature after all signing operations.
+6. Run Windows upgrade tests from 0.3.0 and capture component hashes, logs,
+   update artifact sizes, and active-work behavior.
+
+No application source code was changed as part of this audit.
