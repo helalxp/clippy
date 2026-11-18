@@ -636,3 +636,55 @@ validation workflow now detects changes to Python runtime inputs and skips the
 CPU/CUDA runtime packaging matrix for application-only changes. Manual workflow
 dispatch still runs the full matrix. Both CI workflows use per-PR/branch
 concurrency so newer commits supersede older queued or in-progress runs.
+
+
+## 9.11 Updater plugin and Settings UI groundwork (2026-11-18)
+
+The Tauri updater plugin is now registered in the native shell, its frontend
+package is declared, and the default desktop capability grants the plugin's
+documented updater workflow permission set. The Settings surface has a manual
+update check, release-note display, download progress, and a separate install
+action.
+
+The update package is downloaded and signature-verified before services are
+stopped. Immediately before installation, the frontend checks its own known
+busy states and the native command asks the backend maintenance gate to confirm
+that backend jobs, uploads, publications, in-flight requests, and tracked
+background tasks have settled. Only then are the renderer and backend stopped.
+If the installer launch fails, the frontend invokes native service recovery and
+refreshes the per-launch API token and backend URLs.
+
+The updater plugin dependencies are declared, but the lockfiles cannot be
+regenerated in this GitHub-only editing environment. Run
+desktop/refresh-updater-lockfiles.ps1 from the repository checkout, then commit
+the resulting dashboard/package-lock.json and desktop/src-tauri/Cargo.lock.
+The release artifact-generation switch remains off until the encrypted GitHub
+Actions signing secrets and release manifest workflow are configured. This is
+intentional: existing CI uses locked dependency installs and must not be
+weakened to accommodate stale lockfiles.
+
+
+## 9.11 Updater plugin and Settings UI groundwork (2026-11-18)
+
+The Tauri updater plugin is now registered in the native shell, its frontend
+package is declared, and the default desktop capability grants the plugin's
+documented updater workflow permission set. The Settings surface has a manual
+update check, release-note display, download progress, and a separate install
+action.
+
+The update package is downloaded and signature-verified before services are
+stopped. Immediately before installation, the frontend checks its own known
+busy states and the native command asks the backend maintenance gate to confirm
+that backend jobs, uploads, publications, in-flight requests, and tracked
+background tasks have settled. Only then are the renderer and backend stopped.
+If the installer launch fails, the frontend invokes native service recovery and
+refreshes the per-launch API token and backend URLs.
+
+The updater plugin dependencies are declared, but the lockfiles cannot be
+regenerated in this GitHub-only editing environment. Run
+desktop/refresh-updater-lockfiles.ps1 from the repository checkout, then commit
+the resulting dashboard/package-lock.json and desktop/src-tauri/Cargo.lock.
+The release artifact-generation switch remains off until the encrypted GitHub
+Actions signing secrets and release manifest workflow are configured. This is
+intentional: existing CI uses locked dependency installs and must not be
+weakened to accommodate stale lockfiles.
