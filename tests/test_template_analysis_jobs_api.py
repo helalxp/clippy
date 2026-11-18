@@ -300,3 +300,47 @@ def test_review_endpoint_rejects_jobs_without_ai_report(tmp_path, monkeypatch):
             ),
         ))
     assert unavailable.value.status_code == 409
+
+
+
+def test_review_endpoint_accepts_typed_corrections_without_mutating_report(tmp_path, monkeypatch):
+    from template_system.reference_report import (
+        EvidenceFrame,
+        NormalizedBox,
+        ReferenceStyleReport,
+        TextRegionObservation,
+        TypographyObservation,
+    )
+
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"reference-video")
+    job = store.create(staged, original_filename="reference.mp4")
+    original = ReferenceStyleReport(text_regions=[TextRegionObservation(
+        id="caption-1",
+        role="caption",
+        visible_text="Original",
+        box=NormalizedBox(x=0.1, y=0.7, width=0.8, height=0.1),
+        typography=TypographyObservation(),
+        evidence=[EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+        confidence="medium",
+    )]).model_dump(mode="json")
+    store.save_report(job["id"], {
+        "schema_version": 1,
+        "deterministic": {"samples": [{"asset_id": "reference_frame_001", "timestamp_ms": 1000}]},
+        "ai_status": "complete",
+        "ai_report": original,
+    })
+
+    response = asyncio.run(app_module.update_template_analysis_review(
+        job["id"],
+        app_module.TemplateAnalysisReviewRequest(
+            target_type="text_regions",
+            target_id="caption-1",
+            decision="accepted",
+            correction={"visible_text": "Human corrected caption"},
+        ),
+    ))
+
+    assert response["review"]["items"][0]["correction"]["visible_text"] == "Human corrected caption"
+    assert store.get_report(job["id"])["ai_report"] == original
