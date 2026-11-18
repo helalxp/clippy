@@ -3457,6 +3457,7 @@ def _public_template_analysis_job(
     result = {key: job.get(key) for key in public_fields}
     if include_report:
         result["report"] = store.get_report(job["id"])
+        result["review"] = store.get_review(job["id"])
     return result
 
 
@@ -3613,6 +3614,35 @@ async def get_template_analysis_job(job_id: str):
         raise HTTPException(status_code=404, detail="Template analysis job not found.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class TemplateAnalysisReviewRequest(BaseModel):
+    target_type: str
+    target_id: str
+    decision: str
+    note: Optional[str] = None
+
+
+@app.patch("/api/template-analysis/jobs/{job_id}/review")
+async def update_template_analysis_review(
+    job_id: str,
+    update: TemplateAnalysisReviewRequest,
+):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    from template_system.reviews import ReviewDecisionRequest, apply_review_decision
+
+    store = _template_analysis_store()
+    try:
+        request = ReviewDecisionRequest.model_validate(update.model_dump())
+        review = apply_review_decision(store, job_id, request)
+        return {"review": review}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/template-analysis/jobs/{job_id}/cancel")

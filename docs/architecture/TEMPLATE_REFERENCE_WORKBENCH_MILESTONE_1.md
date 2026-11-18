@@ -143,3 +143,15 @@ Before declaring reference analysis accurate enough to drive reusable templates:
 7. Repeat representative tests after changing the sample strategy, Gemini model or prompts.
 
 Only after this milestone passes should the team connect approved analysis to template recipe synthesis and then redesign preview/final render parity.
+
+
+## 10. Human review layer
+
+The visual report remains the immutable provider result. Human decisions are stored separately in \`review.json\`, keyed by finding type and stable finding ID.
+
+- Each supported finding can be accepted or rejected.
+- The decision stores a UTC timestamp and an optional note.
+- Repeated decisions update the same record rather than creating duplicate entries.
+- A review can only target a finding present in the saved AI report, and its evidence is revalidated before the decision is stored.
+- The selected-job detail API returns review decisions; the lightweight job-list API remains small.
+- The first review UI exposes Accept/Reject controls. Typed correction fields and recipe conversion are deliberately separate next steps. The original provider report is never overwritten by a human decision.

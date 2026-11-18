@@ -239,6 +239,79 @@ class AnalysisJobStore:
             raise FileNotFoundError(asset_id)
         return matches[0]
 
+    def get_review(self, job_id: str) -> dict[str, Any]:
+        """Read human-review decisions kept separately from the immutable AI report."""
+        directory = self._job_dir(job_id)
+        path = directory / "review.json"
+        if path.is_symlink():
+            raise ValueError("template review path cannot be a symbolic link")
+        with self._lock(str(path)):
+            if not path.exists():
+                return {
+                    "schema_version": 1,
+                    "job_id": job_id,
+                    "updated_at": None,
+                    "items": [],
+                }
+            if not path.is_file():
+                raise ValueError("template review path is not a file")
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError("template review document is corrupt") from exc
+            if (
+                payload.get("schema_version") != 1
+                or payload.get("job_id") != job_id
+                or not isinstance(payload.get("items"), list)
+            ):
+                raise ValueError("template review document has an unsupported shape")
+            return payload
+
+    def record_review(self, job_id: str, item: dict[str, Any]) -> dict[str, Any]:
+        """Atomically upsert one decision by finding type and stable identifier."""
+        required = {"target_type", "target_id", "decision", "note", "reviewed_at"}
+        if not isinstance(item, dict) or set(item) != required:
+            raise ValueError("template review item has an invalid shape")
+        if item["decision"] not in {"accepted", "rejected"}:
+            raise ValueError("template review decision must be accepted or rejected")
+        path = self._job_dir(job_id) / "review.json"
+        with self._lock(str(path)):
+            if path.is_symlink():
+                raise ValueError("template review path cannot be a symbolic link")
+            if path.exists():
+                if not path.is_file():
+                    raise ValueError("template review path is not a file")
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise ValueError("template review document is corrupt") from exc
+                if payload.get("schema_version") != 1 or payload.get("job_id") != job_id:
+                    raise ValueError("template review document has an unsupported shape")
+                if not isinstance(payload.get("items"), list):
+                    raise ValueError("template review document items are invalid")
+            else:
+                payload = {
+                    "schema_version": 1,
+                    "job_id": job_id,
+                    "updated_at": None,
+                    "items": [],
+                }
+
+            key = (item["target_type"], item["target_id"])
+            matches = [
+                index for index, current in enumerate(payload["items"])
+                if (current.get("target_type"), current.get("target_id")) == key
+            ]
+            if len(matches) > 1:
+                raise ValueError("template review document contains duplicate finding decisions")
+            if matches:
+                payload["items"][matches[0]] = item
+            else:
+                payload["items"].append(item)
+            payload["updated_at"] = _now()
+            self._atomic_json(path, payload)
+            return payload
+
     def list(self) -> list[dict[str, Any]]:
         jobs: list[dict[str, Any]] = []
         for directory in self.jobs_root.iterdir():

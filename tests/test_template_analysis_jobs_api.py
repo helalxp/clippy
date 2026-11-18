@@ -227,3 +227,76 @@ def test_get_endpoint_returns_report_for_selected_job(tmp_path, monkeypatch):
     response = asyncio.run(app_module.get_template_analysis_job(job["id"]))
 
     assert response["job"]["report"] == report
+
+
+def test_review_endpoint_records_decisions_without_mutating_ai_report(tmp_path, monkeypatch):
+    from template_system.reference_report import (
+        EvidenceFrame,
+        NormalizedBox,
+        ReferenceStyleReport,
+        TextRegionObservation,
+        TypographyObservation,
+    )
+
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"reference-video")
+    job = store.create(staged, original_filename="reference.mp4")
+    original = ReferenceStyleReport(
+        text_regions=[TextRegionObservation(
+            id="caption-1",
+            role="caption",
+            visible_text="Original",
+            box=NormalizedBox(x=0.1, y=0.7, width=0.8, height=0.1),
+            typography=TypographyObservation(),
+            evidence=[EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+            confidence="medium",
+        )]
+    ).model_dump(mode="json")
+    store.save_report(job["id"], {
+        "schema_version": 1,
+        "deterministic": {"samples": [{"asset_id": "reference_frame_001", "timestamp_ms": 1000}]},
+        "ai_status": "complete",
+        "ai_report": original,
+    })
+
+    accepted = asyncio.run(app_module.update_template_analysis_review(
+        job["id"],
+        app_module.TemplateAnalysisReviewRequest(
+            target_type="text_regions", target_id="caption-1", decision="accepted"
+        ),
+    ))
+    rejected = asyncio.run(app_module.update_template_analysis_review(
+        job["id"],
+        app_module.TemplateAnalysisReviewRequest(
+            target_type="text_regions", target_id="caption-1", decision="rejected",
+            note="This text region was misidentified.",
+        ),
+    ))
+
+    assert accepted["review"]["items"][0]["decision"] == "accepted"
+    assert rejected["review"]["items"][0]["decision"] == "rejected"
+    assert rejected["review"]["items"][0]["note"] == "This text region was misidentified."
+    assert store.get_report(job["id"])["ai_report"] == original
+
+
+def test_review_endpoint_rejects_jobs_without_ai_report(tmp_path, monkeypatch):
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"reference-video")
+    job = store.create(staged, original_filename="reference.mp4")
+    store.save_report(job["id"], {
+        "schema_version": 1,
+        "deterministic": {"samples": []},
+        "ai_status": "not_consented",
+        "ai_report": None,
+    })
+
+    with pytest.raises(HTTPException) as unavailable:
+        asyncio.run(app_module.update_template_analysis_review(
+            job["id"],
+            app_module.TemplateAnalysisReviewRequest(
+                target_type="overview", target_id="overview", decision="accepted"
+            ),
+        ))
+    assert unavailable.value.status_code == 409

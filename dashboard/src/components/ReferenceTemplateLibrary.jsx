@@ -82,6 +82,26 @@ function EvidenceFrame({ jobId, sample, box = null, boxes = null, onSelect = nul
   );
 }
 
+function ReviewControls({ review, onDecision, disabled = false }) {
+  const decision = review?.decision || 'pending';
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-rule pt-3">
+      <span className="eyebrow mr-1">Human review</span>
+      <span className={'text-xs font-medium ' + (decision === 'accepted' ? 'text-emerald-700' : decision === 'rejected' ? 'text-danger' : 'text-muted')}>
+        {titleCase(decision)}
+      </span>
+      <button type="button" disabled={disabled} onClick={() => onDecision('accepted')}
+        className={'rounded-input px-2.5 py-1 text-xs border ' + (decision === 'accepted' ? 'border-emerald-600 bg-emerald-500/10 text-emerald-800' : 'border-rule text-ink2 hover:bg-paper2') + ' disabled:opacity-50'}>
+        Accept
+      </button>
+      <button type="button" disabled={disabled} onClick={() => onDecision('rejected')}
+        className={'rounded-input px-2.5 py-1 text-xs border ' + (decision === 'rejected' ? 'border-danger bg-danger/10 text-danger' : 'border-rule text-ink2 hover:bg-paper2') + ' disabled:opacity-50'}>
+        Reject
+      </button>
+    </div>
+  );
+}
+
 function EvidenceStrip({ jobId, evidence = [], sampleById, onSelect, box = null, boxes = null }) {
   const entries = Array.isArray(evidence) ? evidence : [];
   if (!entries.length) return <p className="readout mt-2">No sampled evidence was attached to this finding.</p>;
@@ -119,6 +139,7 @@ export default function ReferenceTemplateLibrary() {
   const [submitting, setSubmitting] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [selectedJobDetail, setSelectedJobDetail] = useState(null);
+  const [reviewBusyKey, setReviewBusyKey] = useState('');
   const videoRef = useRef(null);
 
   const loadJobDetail = useCallback(async (jobId) => {
@@ -177,6 +198,10 @@ export default function ReferenceTemplateLibrary() {
   const visual = report?.ai_report || null;
   const samples = deterministic?.samples || [];
   const measurements = deterministic?.visual_measurements || [];
+  const reviewByKey = useMemo(
+    () => new Map((selectedJob?.review?.items || []).map((item) => [item.target_type + ':' + item.target_id, item])),
+    [selectedJob?.review],
+  );
   const sampleById = useMemo(
     () => new Map(samples.map((sample) => [sample.asset_id, sample])),
     [samples],
@@ -230,6 +255,25 @@ export default function ReferenceTemplateLibrary() {
       setError('');
     } catch (e) {
       setError(e?.detail || e?.message || 'Could not delete reference analysis.');
+    }
+  };
+
+  const updateReview = async (targetType, targetId, decision) => {
+    if (!selectedJobId) return;
+    const key = targetType + ':' + targetId;
+    setReviewBusyKey(key);
+    try {
+      const response = await apiJson('/api/template-analysis/jobs/' + selectedJobId + '/review', {
+        method: 'PATCH',
+        body: JSON.stringify({ target_type: targetType, target_id: String(targetId), decision }),
+      });
+      setSelectedJobDetail((current) => current?.id === selectedJobId
+        ? { ...current, review: response.review }
+        : current);
+    } catch (e) {
+      setError(e?.detail || e?.message || 'Could not save the review decision.');
+    } finally {
+      setReviewBusyKey('');
     }
   };
 
@@ -485,6 +529,7 @@ export default function ReferenceTemplateLibrary() {
                         {visual.editorial_style && <p className="text-sm text-muted mt-2">{visual.editorial_style}</p>}
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
                         {visual.overview_evidence?.length > 0 && <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />}
+                        {visual.overview_evidence?.length > 0 && <ReviewControls review={reviewByKey.get('overview:overview')} onDecision={(decision) => updateReview('overview', 'overview', decision)} disabled={reviewBusyKey === 'overview:overview'} />}
                       </div>
 
                       {visual.color_palette?.length > 0 && (
@@ -497,6 +542,7 @@ export default function ReferenceTemplateLibrary() {
                                 <span className="text-xs text-ink2">{item.hex_color} · {titleCase(item.role)}</span>
                                 <Confidence value={item.confidence} />
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
+                                <ReviewControls review={reviewByKey.get('color_palette:' + index)} onDecision={(decision) => updateReview('color_palette', String(index), decision)} disabled={reviewBusyKey === 'color_palette:' + index} />
                               </div>
                             ))}
                           </div>
@@ -513,6 +559,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.colors?.length > 0 && <div className="flex gap-1.5 mt-2">{item.colors.map((color, index) => <span key={color + index} className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
+                                <ReviewControls review={reviewByKey.get('backgrounds:' + item.id)} onDecision={(decision) => updateReview('backgrounds', item.id, decision)} disabled={reviewBusyKey === 'backgrounds:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -529,6 +576,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.subject_regions?.length > 0 && <div className="mt-2 space-y-1">{item.subject_regions.map((box, index) => <div key={index}><span className="readout">Subject {index + 1}: </span><BoxSummary box={box} /></div>)}</div>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} boxes={item.subject_regions} />
+                                <ReviewControls review={reviewByKey.get('compositions:' + item.id)} onDecision={(decision) => updateReview('compositions', item.id, decision)} disabled={reviewBusyKey === 'compositions:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -575,7 +623,8 @@ export default function ReferenceTemplateLibrary() {
                                 )}
                                 {region.animation_notes && <p className="text-xs text-muted mt-2">{region.animation_notes}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={region.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={region.box} />
-                              </article>
+                                  <ReviewControls review={reviewByKey.get('text_regions:' + region.id)} onDecision={(decision) => updateReview('text_regions', region.id, decision)} disabled={reviewBusyKey === 'text_regions:' + region.id} />
+                            </article>
                             ))}
                           </div>
                         </div>
@@ -591,6 +640,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 <BoxSummary box={item.box} />
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} box={item.box} />
+                                <ReviewControls review={reviewByKey.get('graphic_overlays:' + item.id)} onDecision={(decision) => updateReview('graphic_overlays', item.id, decision)} disabled={reviewBusyKey === 'graphic_overlays:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -607,6 +657,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="text-xs text-muted mt-1">{item.description}</p>
                                 {item.start_ms != null && item.end_ms != null && <p className="readout mt-2">{formatSeconds(item.start_ms / 1000)}–{formatSeconds(item.end_ms / 1000)}</p>}
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
+                                <ReviewControls review={reviewByKey.get('effects:' + item.id)} onDecision={(decision) => updateReview('effects', item.id, decision)} disabled={reviewBusyKey === 'effects:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -622,6 +673,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><p className="readout mt-1">Around {formatSeconds(item.at_ms / 1000)} {item.duration_ms != null ? '· ' + item.duration_ms + ' ms' : ''}</p>{item.notes && <p className="text-xs text-muted mt-1">{item.notes}</p>}</div>
                                 <Confidence value={item.confidence} />
                                 <EvidenceStrip jobId={selectedJob.id} evidence={item.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
+                                <ReviewControls review={reviewByKey.get('transitions:' + item.id)} onDecision={(decision) => updateReview('transitions', item.id, decision)} disabled={reviewBusyKey === 'transitions:' + item.id} />
                               </div>
                             ))}
                           </div>
@@ -639,6 +691,7 @@ export default function ReferenceTemplateLibrary() {
                                 <p className="readout mt-2">{titleCase(scene.content_type)} · {titleCase(scene.mood)} mood · {titleCase(scene.energy)} energy · {titleCase(scene.editorial_role)}</p>
                                 <div className="mt-2"><Confidence value={scene.confidence} /></div>
                                 <EvidenceStrip jobId={selectedJob.id} evidence={scene.evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
+                                <ReviewControls review={reviewByKey.get('scenes:' + scene.index)} onDecision={(decision) => updateReview('scenes', String(scene.index), decision)} disabled={reviewBusyKey === 'scenes:' + scene.index} />
                               </div>
                             ))}
                           </div>
