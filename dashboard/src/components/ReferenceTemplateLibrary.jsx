@@ -484,6 +484,7 @@ export default function ReferenceTemplateLibrary() {
                         {visual.visual_identity && <p className="text-sm text-muted mt-2">{visual.visual_identity}</p>}
                         {visual.editorial_style && <p className="text-sm text-muted mt-2">{visual.editorial_style}</p>}
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
+                        <EvidenceStrip jobId={selectedJob.id} evidence={visual.overview_evidence} sampleById={sampleById} onSelect={seekReferenceFrame} />
                       </div>
 
                       {visual.color_palette?.length > 0 && (
@@ -644,9 +645,6 @@ export default function ReferenceTemplateLibrary() {
                         </div>
                       )}
 
-                      {visual.audio_treatment?.length > 0 && (
-                        <div><h4 className="text-sm font-semibold text-ink mb-2">Audio notes</h4><ul className="list-disc pl-5 text-xs text-muted space-y-1">{visual.audio_treatment.map((note, i) => <li key={i}>{note}</li>)}</ul></div>
-                      )}
                       {visual.limitations?.length > 0 && (
                         <div className="rounded-input bg-amber-500/10 p-3">
                           <h4 className="text-xs font-semibold text-ink mb-2">AI analysis limitations</h4>

@@ -270,3 +270,16 @@ def test_cancelled_queued_job_marks_gemini_cancelled_when_consent_was_given(tmp_
     result = store.get(job["id"])
     assert result["status"] == "cancelled"
     assert result["ai_status"] == "cancelled"
+
+
+def test_source_path_rejects_manifest_path_traversal(tmp_path):
+    import json
+
+    store, job = _create_job(tmp_path)
+    manifest_path = store._manifest_path(job["id"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["source_file"] = "../outside.mp4"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="manifest path is unsafe"):
+        store.source_path(job["id"])

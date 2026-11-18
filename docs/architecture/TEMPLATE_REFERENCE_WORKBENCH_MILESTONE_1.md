@@ -124,7 +124,7 @@ No template ID or recipe is passed into normal generation at this stage.
 - Font family names are ranked visual candidates, not recoverable source-font identity. The original font may be impossible to identify from a flattened video.
 - Text and subject bounding boxes are visual estimates. They need human verification before being used as exact render coordinates.
 - A vision model looking at still frames cannot prove motion paths, speed ramps or transition duration unless the evidence supports those claims.
-- Audio content, music, sound effects, voice processing and audio ducking are **not analyzed** in this milestone. Only audio stream metadata is measured.
+- Audio content, music, sound effects, voice processing and audio ducking are **not analyzed** in this milestone. The visual report schema excludes audio claims; only audio stream metadata is measured.
 - The report is viewable but does not yet have the full claim-review/correction workflow or a save-reviewed-report-as-template action.
 - There is no managed/cloud template library, template application, preview/final renderer parity or clip-generation integration.
 - Job data currently persists until the user deletes it. A configurable automatic retention policy is a follow-up.

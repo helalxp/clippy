@@ -166,3 +166,89 @@ def test_scene_observation_requires_confidence_and_valid_evidence():
     )])
 
     assert validate_report_evidence(report, [evidence]).scenes[0].confidence == "medium"
+
+
+def test_overview_conclusions_require_evidence():
+    with pytest.raises(ValidationError, match="overview findings require"):
+        ReferenceStyleReport(summary="A bold, high-energy podcast editing style.")
+
+
+def test_overview_evidence_must_be_in_the_supplied_frame_set():
+    report = ReferenceStyleReport(
+        summary="A bold, high-energy podcast editing style.",
+        overview_evidence=[
+            EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)
+        ],
+    )
+
+    with pytest.raises(ValueError, match="overview references evidence"):
+        validate_report_evidence(
+            report,
+            [EvidenceFrame(asset_id="reference_frame_002", timestamp_ms=2000)],
+        )
+
+
+def test_scene_evidence_must_fall_inside_claimed_scene_interval():
+    from template_system.reference_report import SceneObservation
+
+    report = ReferenceStyleReport(scenes=[SceneObservation(
+        index=0,
+        start_ms=0,
+        end_ms=500,
+        description="A presenter is on screen.",
+        confidence="medium",
+        evidence=[EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+    )])
+
+    with pytest.raises(ValueError, match="outside its scene interval"):
+        validate_report_evidence(
+            report,
+            [EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+        )
+
+
+def test_transition_timestamp_must_be_supported_by_its_evidence_window():
+    from template_system.reference_report import TransitionObservation
+
+    report = ReferenceStyleReport(transitions=[TransitionObservation(
+        id="transition-1",
+        kind="cut",
+        at_ms=3000,
+        evidence=[
+            EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000),
+            EvidenceFrame(asset_id="reference_frame_002", timestamp_ms=2000),
+        ],
+        confidence="low",
+    )])
+
+    with pytest.raises(ValueError, match="outside its cited evidence window"):
+        validate_report_evidence(
+            report,
+            [
+                EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000),
+                EvidenceFrame(asset_id="reference_frame_002", timestamp_ms=2000),
+            ],
+        )
+
+
+def test_single_frame_transition_must_use_exact_observed_timestamp():
+    from template_system.reference_report import TransitionObservation
+
+    report = ReferenceStyleReport(transitions=[TransitionObservation(
+        id="transition-1",
+        kind="flash",
+        at_ms=1500,
+        evidence=[EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+        confidence="low",
+    )])
+
+    with pytest.raises(ValueError, match="exact observed timestamp"):
+        validate_report_evidence(
+            report,
+            [EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+        )
+
+
+def test_audio_treatment_is_not_part_of_visual_report_contract():
+    with pytest.raises(ValidationError, match="audio_treatment"):
+        ReferenceStyleReport.model_validate({"audio_treatment": ["Bass boost detected"]})

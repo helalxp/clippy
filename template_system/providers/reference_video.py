@@ -78,6 +78,8 @@ class GeminiReferenceAnalyzer:
             "as unknown unless separately measured.\n"
             "- Omit absent properties. Never fill a field with a guess to satisfy the schema.\n"
             "- Keep IDs stable and unique within each list. Use concise, useful descriptions.\n\n"
+            "- If you provide any summary, visual_identity, editorial_style or overall_pacing conclusion, cite its supporting frames in overview_evidence. Do not provide unsupported global conclusions.\\n"
+            "- Do not return audio_treatment; audio is outside this visual analysis.\\n\\n"
             f"VIDEO FACTS:\n{json.dumps(result.probe.to_dict(), sort_keys=True)}\n\n"
             f"DETERMINISTIC CUT CANDIDATES (seconds):\n{json.dumps(list(result.scene_boundaries_seconds))}\n\n"
             f"SUPPLIED FRAMES (only valid evidence references):\n{json.dumps(frames, sort_keys=True)}\n\n"

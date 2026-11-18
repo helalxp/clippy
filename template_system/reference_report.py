@@ -186,8 +186,18 @@ class ReferenceStyleReport(ReportModel):
     effects: list[EffectObservation] = Field(default_factory=list, max_length=128)
     transitions: list[TransitionObservation] = Field(default_factory=list, max_length=256)
     scenes: list[SceneObservation] = Field(default_factory=list, max_length=128)
-    audio_treatment: list[str] = Field(default_factory=list, max_length=32)
+    overview_evidence: list[EvidenceFrame] = Field(default_factory=list, max_length=12)
     limitations: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def overview_requires_evidence(self) -> "ReferenceStyleReport":
+        has_overview = bool(
+            self.summary or self.visual_identity or self.editorial_style
+            or self.overall_pacing not in {"", "unknown"}
+        )
+        if has_overview and not self.overview_evidence:
+            raise ValueError("overview findings require at least one evidence frame")
+        return self
 
 
 def validate_report_evidence(
@@ -206,6 +216,9 @@ def validate_report_evidence(
         *report.backgrounds,
         *report.compositions,
     ]
+    for evidence in report.overview_evidence:
+        if (evidence.asset_id, evidence.timestamp_ms) not in valid:
+            raise ValueError("overview references evidence that was not supplied to the model")
     for finding in findings:
         for evidence in finding.evidence:
             if (evidence.asset_id, evidence.timestamp_ms) not in valid:
@@ -213,4 +226,19 @@ def validate_report_evidence(
                 raise ValueError(
                     f"finding {identifier!r} references evidence that was not supplied to the model"
                 )
+        timestamps = [item.timestamp_ms for item in finding.evidence]
+        if isinstance(finding, TextRegionObservation) and finding.first_seen_ms is not None:
+            if any(ts < finding.first_seen_ms or ts > finding.last_seen_ms for ts in timestamps):
+                raise ValueError(f"text finding {finding.id!r} has evidence outside its observed visibility interval")
+        elif isinstance(finding, EffectObservation) and finding.start_ms is not None:
+            if any(ts < finding.start_ms or ts > finding.end_ms for ts in timestamps):
+                raise ValueError(f"effect finding {finding.id!r} has evidence outside its observed interval")
+        elif isinstance(finding, SceneObservation):
+            if any(ts < finding.start_ms or ts > finding.end_ms for ts in timestamps):
+                raise ValueError(f"scene finding {finding.index!r} has evidence outside its scene interval")
+        elif isinstance(finding, TransitionObservation):
+            if len(timestamps) == 1 and finding.at_ms != timestamps[0]:
+                raise ValueError(f"transition finding {finding.id!r} must cite the exact observed timestamp when only one frame is supplied")
+            if len(timestamps) > 1 and not min(timestamps) <= finding.at_ms <= max(timestamps):
+                raise ValueError(f"transition finding {finding.id!r} falls outside its cited evidence window")
     return report

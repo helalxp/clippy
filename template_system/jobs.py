@@ -214,9 +214,17 @@ class AnalysisJobStore:
 
     def source_path(self, job_id: str) -> Path:
         payload = self.get(job_id)
-        path = self._job_dir(job_id) / payload["source_file"]
+        source_name = payload.get("source_file")
+        if not isinstance(source_name, str) or not re.fullmatch(
+            r"source\\.(?:mp4|mov|mkv|webm|m4v|avi)", source_name
+        ):
+            raise ValueError("reference source manifest path is unsafe")
+        directory = self._job_dir(job_id).resolve(strict=True)
+        path = directory / source_name
         if path.is_symlink() or not path.is_file():
             raise FileNotFoundError("reference source is no longer available")
+        if not path.resolve(strict=True).is_relative_to(directory):
+            raise ValueError("reference source path escapes its job directory")
         return path
 
     def evidence_path(self, job_id: str, asset_id: str) -> Path:
