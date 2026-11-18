@@ -578,3 +578,28 @@ Next implementation order:
    update artifact sizes, and active-work behavior.
 
 No application source code was changed as part of this audit.
+
+### 9.9 Signing key and initial configuration
+
+The user generated a Tauri minisign keypair locally and supplied the public key.
+The public key is now embedded in `desktop/src-tauri/tauri.conf.json` under
+`plugins.updater.pubkey`. The private key and password have not been supplied
+to the repository or this workflow and must remain in GitHub Actions Secrets.
+
+The configuration groundwork also now declares:
+
+- Stable update metadata endpoint:
+  `https://github.com/helalxp/clippy/releases/latest/download/latest.json`.
+- Tauri updater Windows installer UI mode: `passive`.
+- NSIS install mode: `currentUser`, explicitly preserving the current
+  per-user installation contract.
+
+This is configuration groundwork only. The updater plugin dependency and
+registration, updater artifact generation, release manifest, CI signing
+secrets, and runtime-safe install flow are not enabled yet. In particular,
+`bundle.createUpdaterArtifacts` remains unset until the signing workflow is
+ready, so ordinary builds are not made dependent on an unavailable private key.
+
+The stable endpoint must be paired with release automation that publishes
+`latest.json` for stable releases and marks the correct stable release as
+GitHub's latest release. Prereleases must not replace the stable endpoint.
