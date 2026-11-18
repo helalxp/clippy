@@ -111,3 +111,42 @@ def test_review_cannot_create_a_sidecar_for_a_missing_job(tmp_path):
                 "reviewed_at": "2026-11-18T00:00:00+00:00",
             },
         )
+
+
+def test_review_document_rejects_duplicate_items_and_naive_timestamps(tmp_path):
+    from template_system.reviews import ReviewDocument
+
+    job_id = "tjob_0123456789abcdef0123456789abcdef"
+    item = {
+        "target_type": "overview",
+        "target_id": "overview",
+        "decision": "accepted",
+        "note": None,
+        "reviewed_at": "2026-11-18T12:00:00+00:00",
+    }
+    with pytest.raises(ValueError, match="duplicate finding decisions"):
+        ReviewDocument.model_validate({
+            "schema_version": 1,
+            "job_id": job_id,
+            "updated_at": "2026-11-18T12:00:00+00:00",
+            "items": [item, item],
+        })
+
+    naive = dict(item)
+    naive["reviewed_at"] = "2026-11-18T12:00:00"
+    with pytest.raises(ValueError, match="timezone"):
+        ReviewDocument.model_validate({
+            "schema_version": 1,
+            "job_id": job_id,
+            "updated_at": None,
+            "items": [naive],
+        })
+
+
+def test_get_review_rejects_corrupt_review_sidecar(tmp_path):
+    store, job = _store_with_report(tmp_path, _report())
+    review_path = store._job_dir(job["id"]) / "review.json"
+    review_path.write_text('{"schema_version": 9, "items": []}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="review document is invalid"):
+        store.get_review(job["id"])

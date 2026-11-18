@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .reference_report import EvidenceFrame, ReferenceStyleReport, validate_report_evidence
 
@@ -18,6 +18,46 @@ ReviewTargetType = Literal[
     "overview", "color_palette", "backgrounds", "compositions",
     "text_regions", "graphic_overlays", "effects", "transitions", "scenes",
 ]
+
+
+class ReviewItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target_type: ReviewTargetType
+    target_id: str = Field(min_length=1, max_length=80)
+    decision: Literal["accepted", "rejected"]
+    note: str | None = Field(default=None, max_length=1000)
+    reviewed_at: datetime
+
+    @field_validator("reviewed_at")
+    @classmethod
+    def reviewed_at_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("review timestamps must include a timezone")
+        return value
+
+
+class ReviewDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    job_id: str = Field(pattern=r"^tjob_[a-f0-9]{32}$")
+    updated_at: datetime | None = None
+    items: list[ReviewItem] = Field(default_factory=list, max_length=1024)
+
+    @field_validator("updated_at")
+    @classmethod
+    def updated_at_is_timezone_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("review timestamps must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def finding_keys_are_unique(self) -> "ReviewDocument":
+        keys = [(item.target_type, item.target_id) for item in self.items]
+        if len(keys) != len(set(keys)):
+            raise ValueError("review document contains duplicate finding decisions")
+        return self
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -83,11 +123,11 @@ def apply_review_decision(store, job_id: str, request: ReviewDecisionRequest) ->
     if not _target_exists(report, request.target_type, request.target_id):
         raise KeyError(f"visual finding not found: {request.target_type}/{request.target_id}")
 
-    item = {
-        "target_type": request.target_type,
-        "target_id": request.target_id,
-        "decision": request.decision,
-        "note": request.note or None,
-        "reviewed_at": datetime.now(timezone.utc).isoformat(),
-    }
-    return store.record_review(job_id, item)
+    item = ReviewItem(
+        target_type=request.target_type,
+        target_id=request.target_id,
+        decision=request.decision,
+        note=request.note or None,
+        reviewed_at=datetime.now(timezone.utc),
+    )
+    return store.record_review(job_id, item.model_dump(mode="json"))

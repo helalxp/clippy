@@ -83,21 +83,33 @@ function EvidenceFrame({ jobId, sample, box = null, boxes = null, onSelect = nul
 }
 
 function ReviewControls({ review, onDecision, disabled = false }) {
+  const [note, setNote] = useState(review?.note || '');
   const decision = review?.decision || 'pending';
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-rule pt-3">
-      <span className="eyebrow mr-1">Human review</span>
-      <span className={'text-xs font-medium ' + (decision === 'accepted' ? 'text-emerald-700' : decision === 'rejected' ? 'text-danger' : 'text-muted')}>
-        {titleCase(decision)}
-      </span>
-      <button type="button" disabled={disabled} onClick={() => onDecision('accepted')}
-        className={'rounded-input px-2.5 py-1 text-xs border ' + (decision === 'accepted' ? 'border-emerald-600 bg-emerald-500/10 text-emerald-800' : 'border-rule text-ink2 hover:bg-paper2') + ' disabled:opacity-50'}>
-        Accept
-      </button>
-      <button type="button" disabled={disabled} onClick={() => onDecision('rejected')}
-        className={'rounded-input px-2.5 py-1 text-xs border ' + (decision === 'rejected' ? 'border-danger bg-danger/10 text-danger' : 'border-rule text-ink2 hover:bg-paper2') + ' disabled:opacity-50'}>
-        Reject
-      </button>
+    <div className="mt-3 space-y-2 border-t border-rule pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="eyebrow mr-1">Human review</span>
+        <span className={'text-xs font-medium ' + (decision === 'accepted' ? 'text-emerald-700' : decision === 'rejected' ? 'text-danger' : 'text-muted')}>
+          {titleCase(decision)}
+        </span>
+        <button type="button" disabled={disabled} onClick={() => onDecision('accepted', note)}
+          className={'rounded-input px-2.5 py-1 text-xs border ' + (decision === 'accepted' ? 'border-emerald-600 bg-emerald-500/10 text-emerald-800' : 'border-rule text-ink2 hover:bg-paper2') + ' disabled:opacity-50'}>
+          Accept
+        </button>
+        <button type="button" disabled={disabled} onClick={() => onDecision('rejected', note)}
+          className={'rounded-input px-2.5 py-1 text-xs border ' + (decision === 'rejected' ? 'border-danger bg-danger/10 text-danger' : 'border-rule text-ink2 hover:bg-paper2') + ' disabled:opacity-50'}>
+          Reject
+        </button>
+      </div>
+      <input
+        value={note}
+        onChange={(event) => setNote(event.target.value)}
+        placeholder="Optional review note"
+        aria-label="Optional review note"
+        maxLength={1000}
+        disabled={disabled}
+        className="input-field !py-2 text-xs max-w-xl"
+      />
     </div>
   );
 }
@@ -258,7 +270,7 @@ export default function ReferenceTemplateLibrary() {
     }
   };
 
-  const updateReview = async (targetType, targetId, decision) => {
+  const updateReview = async (targetType, targetId, decision, note = '') => {
     if (!selectedJobId) return;
     const key = targetType + ':' + targetId;
     setReviewBusyKey(key);
@@ -266,7 +278,7 @@ export default function ReferenceTemplateLibrary() {
       const response = await apiJson('/api/template-analysis/jobs/' + selectedJobId + '/review', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_type: targetType, target_id: String(targetId), decision }),
+        body: JSON.stringify({ target_type: targetType, target_id: String(targetId), decision, note }),
       });
       setSelectedJobDetail((current) => current?.id === selectedJobId
         ? { ...current, review: response.review }
