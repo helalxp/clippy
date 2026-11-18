@@ -36,6 +36,22 @@
     "resources": {
       "resources/app-payload.zip": "app-payload.zip",
       "resources/app-payload.sha256": "app-payload.sha256"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENBNUJCMEVGOEY4MzEzRjMK\nUldUekU0T1A3N0JieXVDTlZ0L1RkOVlhU3BOekI4NVdmeGdjRW9KRjQvTklqZE9EdzdCaHlBTzMK",
+      "endpoints": [
+        "https://github.com/helalxp/clippy/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
