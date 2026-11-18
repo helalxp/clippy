@@ -149,9 +149,9 @@ This prevents several source-level version mismatches, but it cannot create a mi
 
 The actual Windows Actions run remains the authoritative validation of this workflow.
 
-### 5.6 Branch roles and merge timing
+### 5.6 Historical branch roles and promotion (completed)
 
-`windows-installer-release` is the integration target and `windows-installer-hardening` is the isolated implementation branch. The draft pull request is #10. The branches currently share a merge base at the current integration-branch head, so the hardening branch is ahead without the target containing unique commits. The pull request currently reports `mergeable: true`. Do not merge until both user test PCs pass.
+The branch arrangement described in the original installer audit is historical and no longer an active merge instruction. The installer work was promoted through `windows-installer-release` into `main`; the v0.2.3 release and subsequent main integration validation are recorded below. PR #10 and the old branch relationship must not be treated as pending work. All new installer and application work should use short-lived branches from the latest `main`, following RELEASING.md.
 
 ### 5.7 Runtime download resilience
 
