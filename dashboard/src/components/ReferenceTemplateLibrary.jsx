@@ -435,6 +435,21 @@ export default function ReferenceTemplateLibrary() {
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
                       </div>
 
+                      {visual.color_palette?.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-ink mb-3">Observed style palette ({visual.color_palette.length})</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {visual.color_palette.map((item, index) => (
+                              <div key={item.hex_color + index} className="flex items-center gap-2 rounded-input border border-rule px-2 py-1.5">
+                                <span className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: item.hex_color }} />
+                                <span className="text-xs text-ink2">{item.hex_color} · {titleCase(item.role)}</span>
+                                <Confidence value={item.confidence} />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {visual.backgrounds?.length > 0 && (
                         <div>
                           <h4 className="text-sm font-semibold text-ink mb-3">Background treatment ({visual.backgrounds.length})</h4>
@@ -587,6 +602,7 @@ export default function ReferenceTemplateLibrary() {
                                 <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">Scene {scene.index + 1}</span><span className="readout">{formatSeconds(scene.start_ms / 1000)}–{formatSeconds(scene.end_ms / 1000)}</span></div>
                                 <p className="text-xs text-muted mt-1">{scene.description}</p>
                                 <p className="readout mt-2">{titleCase(scene.content_type)} · {titleCase(scene.mood)} mood · {titleCase(scene.energy)} energy · {titleCase(scene.editorial_role)}</p>
+                                <div className="mt-2"><Confidence value={scene.confidence} /></div>
                               </div>
                             ))}
                           </div>

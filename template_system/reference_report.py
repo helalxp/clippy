@@ -136,6 +136,7 @@ class SceneObservation(ReportModel):
     mood: str = Field(default="unknown", max_length=80)
     energy: Literal["low", "medium", "high", "variable", "unknown"] = "unknown"
     editorial_role: str = Field(default="unknown", max_length=100)
+    confidence: Confidence
     evidence: list[EvidenceFrame] = Field(min_length=1, max_length=12)
 
     @model_validator(mode="after")
@@ -143,6 +144,13 @@ class SceneObservation(ReportModel):
         if self.end_ms <= self.start_ms:
             raise ValueError("scene end_ms must be greater than start_ms")
         return self
+
+
+class ColorObservation(ReportModel):
+    hex_color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    role: Literal["background", "accent", "caption", "hook", "overlay", "dominant", "other"] = "dominant"
+    evidence: list[EvidenceFrame] = Field(min_length=1, max_length=12)
+    confidence: Confidence
 
 
 class BackgroundObservation(ReportModel):
@@ -170,7 +178,7 @@ class ReferenceStyleReport(ReportModel):
     visual_identity: str = Field(default="", max_length=1500)
     editorial_style: str = Field(default="", max_length=1500)
     overall_pacing: str = Field(default="unknown", max_length=300)
-    color_palette: list[str] = Field(default_factory=list, max_length=12)
+    color_palette: list[ColorObservation] = Field(default_factory=list, max_length=12)
     backgrounds: list[BackgroundObservation] = Field(default_factory=list, max_length=64)
     compositions: list[CompositionObservation] = Field(default_factory=list, max_length=64)
     text_regions: list[TextRegionObservation] = Field(default_factory=list, max_length=128)
@@ -194,6 +202,7 @@ def validate_report_evidence(
         *report.effects,
         *report.transitions,
         *report.scenes,
+        *report.color_palette,
         *report.backgrounds,
         *report.compositions,
     ]

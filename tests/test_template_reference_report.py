@@ -130,3 +130,39 @@ def test_report_rejects_background_claim_with_unprovided_evidence():
             report,
             [EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
         )
+
+
+def test_palette_colors_require_valid_evidence_and_confidence():
+    from template_system.reference_report import ColorObservation
+
+    report = ReferenceStyleReport(color_palette=[ColorObservation(
+        hex_color="#FFCC33",
+        role="accent",
+        evidence=[EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+        confidence="high",
+    )])
+
+    assert validate_report_evidence(
+        report,
+        [EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)],
+    ).color_palette[0].hex_color == "#FFCC33"
+
+
+def test_scene_observation_requires_confidence_and_valid_evidence():
+    from template_system.reference_report import SceneObservation
+
+    evidence = EvidenceFrame(asset_id="reference_frame_001", timestamp_ms=1000)
+    report = ReferenceStyleReport(scenes=[SceneObservation(
+        index=0,
+        start_ms=0,
+        end_ms=2500,
+        description="A presenter speaks directly to the camera.",
+        content_type="talking_head",
+        mood="informative",
+        energy="medium",
+        editorial_role="explanation",
+        confidence="medium",
+        evidence=[evidence],
+    )])
+
+    assert validate_report_evidence(report, [evidence]).scenes[0].confidence == "medium"

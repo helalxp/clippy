@@ -73,6 +73,7 @@ class GeminiReferenceAnalyzer:
             "- Describe background treatment explicitly: original footage, blurred duplicate, solid fill, gradient, image/video background, or unknown.\n"
             "- Describe composition explicitly: subject framing, split/stacked/screen/picture-in-picture arrangements, with normalized subject-region boxes where visible.\n"
             "- For text, report entrance/reveal animation only when sampled evidence supports it; otherwise use unknown.\n"
+            "- For each palette color, provide a valid hex value, a visual role (background/accent/caption/hook/overlay/dominant/other), confidence and frame evidence.\n"
             "- Do not infer audio effects from silent frames. Audio treatment may be described only "
             "as unknown unless separately measured.\n"
             "- Omit absent properties. Never fill a field with a guess to satisfy the schema.\n"
