@@ -191,3 +191,39 @@ def test_delete_endpoint_rejects_active_job(tmp_path, monkeypatch):
 
     assert rejected.value.status_code == 409
     assert store.source_path(job["id"]).read_bytes() == b"do-not-delete"
+
+
+def test_list_endpoint_omits_saved_report_payload(tmp_path, monkeypatch):
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"reference-video")
+    job = store.create(staged, original_filename="reference.mp4")
+    store.save_report(job["id"], {
+        "schema_version": 1,
+        "deterministic": {"technical": {"duration_seconds": 15}},
+        "ai_status": "complete",
+        "ai_report": {"summary": "large report payload"},
+    })
+
+    response = asyncio.run(app_module.list_template_analysis_jobs())
+
+    assert response["jobs"][0]["id"] == job["id"]
+    assert "report" not in response["jobs"][0]
+
+
+def test_get_endpoint_returns_report_for_selected_job(tmp_path, monkeypatch):
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"reference-video")
+    job = store.create(staged, original_filename="reference.mp4")
+    report = {
+        "schema_version": 1,
+        "deterministic": {"technical": {"duration_seconds": 15}},
+        "ai_status": "not_consented",
+        "ai_report": None,
+    }
+    store.save_report(job["id"], report)
+
+    response = asyncio.run(app_module.get_template_analysis_job(job["id"]))
+
+    assert response["job"]["report"] == report

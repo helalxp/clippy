@@ -255,7 +255,7 @@ export default function ReferenceTemplateLibrary() {
             This workbench analyzes references only; it does not change clip generation.
           </p>
         </div>
-        <button onClick={() => load()} disabled={loading} className="btn-ghost px-4 py-2 text-sm shrink-0">
+        <button onClick={() => { load(); if (selectedJobId) loadJobDetail(selectedJobId); }} disabled={loading} className="btn-ghost px-4 py-2 text-sm shrink-0">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
