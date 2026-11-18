@@ -18,9 +18,9 @@ def _post(path):
 
 @pytest.fixture(autouse=True)
 def reset_maintenance_state(monkeypatch):
-    monkeypatch.setattr(app_module, "_DATA_MOVE_PENDING", False)
-    monkeypatch.setattr(app_module, "_DATA_MOVE_ACTIVE_REQUESTS", 0)
-    monkeypatch.setattr(app_module, "_DATA_MOVE_ACTIVE_BACKGROUND_TASKS", 0)
+    monkeypatch.setattr(app_module, "_MAINTENANCE_PENDING", False)
+    monkeypatch.setattr(app_module, "_MAINTENANCE_ACTIVE_REQUESTS", 0)
+    monkeypatch.setattr(app_module, "_MAINTENANCE_ACTIVE_BACKGROUND_TASKS", 0)
     monkeypatch.setattr(app_module, "jobs", {})
     monkeypatch.setattr(app_module, "pending_uploads", {})
     monkeypatch.setattr(app_module, "publish_jobs", {})
@@ -30,12 +30,12 @@ def test_update_prepare_and_cancel_reopen_request_admission():
     prepared = _post("/api/desktop/update/prepare")
     assert prepared.status_code == 200
     assert prepared.json()["ready"] is True
-    assert app_module._DATA_MOVE_PENDING is True
+    assert app_module._MAINTENANCE_PENDING is True
 
     cancelled = _post("/api/desktop/update/cancel")
     assert cancelled.status_code == 200
     assert cancelled.json()["cancelled"] is True
-    assert app_module._DATA_MOVE_PENDING is False
+    assert app_module._MAINTENANCE_PENDING is False
 
 
 @pytest.mark.parametrize(
@@ -54,7 +54,7 @@ def test_update_prepare_refuses_active_work_and_releases_gate(monkeypatch, state
 
     assert response.status_code == 409
     assert "active" in response.json()["detail"].lower()
-    assert app_module._DATA_MOVE_PENDING is False
+    assert app_module._MAINTENANCE_PENDING is False
 
 
 def test_update_and_data_move_cannot_prepare_at_the_same_time():
@@ -63,4 +63,4 @@ def test_update_and_data_move_cannot_prepare_at_the_same_time():
 
     conflicting = _post("/api/library/storage/prepare-move")
     assert conflicting.status_code == 409
-    assert app_module._DATA_MOVE_PENDING is True
+    assert app_module._MAINTENANCE_PENDING is True
