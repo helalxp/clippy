@@ -449,6 +449,49 @@ async fn start_services(app: tauri::AppHandle) -> Result<ServiceStatus, String> 
 }
 
 #[tauri::command]
+async fn prepare_update_install(app: tauri::AppHandle) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = INSTALL_OPERATION
+            .lock()
+            .map_err(|_| "Installation worker unavailable")?;
+        let root = installation::user_root()?;
+        let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
+        let state = app.state::<Mutex<Supervisor>>();
+        let mut supervisor = state
+            .lock()
+            .map_err(|_| "Service supervisor is unavailable".to_string())?;
+
+        // The backend atomically blocks new work and confirms that existing
+        // requests, jobs, uploads, and publications have settled before either
+        // managed process is stopped for the Windows installer.
+        supervisor.prepare_update()?;
+        supervisor.stop()
+    })
+    .await
+    .map_err(|error| format!("Update preparation worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn restore_services_after_update_failure(
+    app: tauri::AppHandle,
+) -> Result<ServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = INSTALL_OPERATION
+            .lock()
+            .map_err(|_| "Installation worker unavailable")?;
+        let root = installation::user_root()?;
+        let _installation = installation::InstallationLock::acquire(&root, "Install", 300_000)?;
+        let state = app.state::<Mutex<Supervisor>>();
+        state
+            .lock()
+            .map_err(|_| "Service supervisor is unavailable".to_string())?
+            .start()
+    })
+    .await
+    .map_err(|error| format!("Service recovery worker failed: {error}"))?
+}
+
+#[tauri::command]
 fn get_api_token(app: tauri::AppHandle) -> Result<String, String> {
     let state = app.state::<Mutex<Supervisor>>();
     let result = state
@@ -925,6 +968,8 @@ pub fn run() {
         .manage(Mutex::new(SetupLifecycle::default()))
         .invoke_handler(tauri::generate_handler![
             start_services,
+            prepare_update_install,
+            restore_services_after_update_failure,
             stop_services,
             service_status,
             get_api_token,
