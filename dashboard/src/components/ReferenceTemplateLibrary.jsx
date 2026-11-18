@@ -418,6 +418,36 @@ export default function ReferenceTemplateLibrary() {
                         {visual.overall_pacing && <p className="text-sm text-muted mt-2"><strong className="text-ink2">Pacing:</strong> {visual.overall_pacing}</p>}
                       </div>
 
+                      {visual.backgrounds?.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-ink mb-3">Background treatment ({visual.backgrounds.length})</h4>
+                          <div className="space-y-2">
+                            {visual.backgrounds.map((item) => (
+                              <div key={item.id} className="rounded-input border border-rule p-3">
+                                <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)}</span><Confidence value={item.confidence} /></div>
+                                <p className="text-xs text-muted mt-1">{item.description}</p>
+                                {item.colors?.length > 0 && <div className="flex gap-1.5 mt-2">{item.colors.map((color, index) => <span key={color + index} className="w-5 h-5 rounded-full border border-black/10" style={{ backgroundColor: color }} />)}</div>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {visual.compositions?.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-ink mb-3">Composition and framing ({visual.compositions.length})</h4>
+                          <div className="space-y-2">
+                            {visual.compositions.map((item) => (
+                              <div key={item.id} className="rounded-input border border-rule p-3">
+                                <div className="flex justify-between gap-2"><span className="text-sm font-medium text-ink">{titleCase(item.kind)} · {titleCase(item.framing)}</span><Confidence value={item.confidence} /></div>
+                                <p className="text-xs text-muted mt-1">{item.description}</p>
+                                {item.subject_regions?.length > 0 && <div className="mt-2 space-y-1">{item.subject_regions.map((box, index) => <div key={index}><span className="readout">Subject {index + 1}: </span><BoxSummary box={box} /></div>)}</div>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {visual.text_regions?.length > 0 && (
                         <div>
                           <h4 className="text-sm font-semibold text-ink mb-3">Typography and text placement ({visual.text_regions.length})</h4>
@@ -434,10 +464,12 @@ export default function ReferenceTemplateLibrary() {
                                 </div>
                                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                   {region.typography?.fill_color && <span className="readout">Fill {region.typography.fill_color}</span>}
+                                  {region.typography?.highlight_color && <span className="readout">Highlight {region.typography.highlight_color}</span>}
                                   {region.typography?.outline_color && <span className="readout">Outline {region.typography.outline_color}</span>}
                                   <span className="readout">Stroke {region.typography?.outline_strength || 'unknown'}</span>
                                   <span className="readout">Shadow {region.typography?.shadow || 'unknown'}</span>
                                   <span className="readout">Alignment {region.typography?.alignment || 'unknown'}</span>
+                                  <span className="readout">Animation {titleCase(region.animation || 'unknown')}</span>
                                 </div>
                                 {region.typography?.font_candidates?.length > 0 && (
                                   <div className="mt-3">

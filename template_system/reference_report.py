@@ -50,6 +50,7 @@ class TypographyObservation(ReportModel):
     style: Literal["normal", "italic", "oblique", "unknown"] = "unknown"
     size_ratio: float | None = Field(default=None, gt=0, le=0.3)
     fill_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    highlight_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     outline_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     outline_strength: Literal["none", "thin", "medium", "heavy", "unknown"] = "unknown"
     shadow: Literal["none", "subtle", "strong", "unknown"] = "unknown"
@@ -67,6 +68,8 @@ class TextRegionObservation(ReportModel):
     typography: TypographyObservation
     first_seen_ms: int | None = Field(default=None, ge=0)
     last_seen_ms: int | None = Field(default=None, ge=0)
+    animation: Literal["none", "fade", "slide", "pop", "typewriter", "word_by_word", "karaoke_highlight", "pulse", "other", "unknown"] = "unknown"
+    animation_notes: str = Field(default="", max_length=400)
     evidence: list[EvidenceFrame] = Field(min_length=1, max_length=12)
     confidence: Confidence
     notes: str = Field(default="", max_length=600)
@@ -142,6 +145,25 @@ class SceneObservation(ReportModel):
         return self
 
 
+class BackgroundObservation(ReportModel):
+    id: str = Field(min_length=1, max_length=80)
+    kind: Literal["original_footage", "blurred_duplicate", "solid_color", "gradient", "image", "video", "other", "unknown"]
+    description: str = Field(min_length=1, max_length=500)
+    colors: list[str] = Field(default_factory=list, max_length=8)
+    evidence: list[EvidenceFrame] = Field(min_length=1, max_length=12)
+    confidence: Confidence
+
+
+class CompositionObservation(ReportModel):
+    id: str = Field(min_length=1, max_length=80)
+    kind: Literal["single_subject", "picture_in_picture", "split_screen", "side_by_side", "stacked", "screen_recording", "collage", "other", "unknown"]
+    framing: Literal["extreme_closeup", "closeup", "medium", "wide", "full_frame", "unknown"] = "unknown"
+    description: str = Field(min_length=1, max_length=500)
+    subject_regions: list[NormalizedBox] = Field(default_factory=list, max_length=8)
+    evidence: list[EvidenceFrame] = Field(min_length=1, max_length=12)
+    confidence: Confidence
+
+
 class ReferenceStyleReport(ReportModel):
     schema_version: Literal[1] = 1
     summary: str = Field(default="", max_length=2000)
@@ -149,6 +171,8 @@ class ReferenceStyleReport(ReportModel):
     editorial_style: str = Field(default="", max_length=1500)
     overall_pacing: str = Field(default="unknown", max_length=300)
     color_palette: list[str] = Field(default_factory=list, max_length=12)
+    backgrounds: list[BackgroundObservation] = Field(default_factory=list, max_length=64)
+    compositions: list[CompositionObservation] = Field(default_factory=list, max_length=64)
     text_regions: list[TextRegionObservation] = Field(default_factory=list, max_length=128)
     graphic_overlays: list[GraphicOverlayObservation] = Field(default_factory=list, max_length=64)
     effects: list[EffectObservation] = Field(default_factory=list, max_length=128)
@@ -170,6 +194,8 @@ def validate_report_evidence(
         *report.effects,
         *report.transitions,
         *report.scenes,
+        *report.backgrounds,
+        *report.compositions,
     ]
     for finding in findings:
         for evidence in finding.evidence:
