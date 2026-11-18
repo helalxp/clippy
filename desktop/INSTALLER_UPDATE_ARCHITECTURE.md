@@ -85,9 +85,16 @@ Do not embed every large runtime component inside the object that the applicatio
 
 Use two coordinated update layers:
 
-### Layer A: desktop shell update
+### Layer A: signed application installer update (implemented in PR #21)
 
-Use the Tauri updater for the relatively small signed desktop shell update. Configure a stable update endpoint, platform target, version, and public verification key. Keep the private signing key outside the repository and CI logs.
+Use the official Tauri updater to discover, verify, download, and launch the signed
+NSIS installer. The current installer embeds the replaceable application
+payload, so this is a full-installer update rather than a small shell-only
+package or binary delta. Configure a stable update endpoint, Windows platform
+target, version, and public verification key. Keep the private signing key
+outside the repository and CI logs. The app payload activation is health-gated
+and retains the previous payload until runtime and backend/renderer checks
+pass.
 
 ### Layer B: application component updater
 

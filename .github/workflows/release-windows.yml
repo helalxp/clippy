@@ -57,10 +57,11 @@ jobs:
           echo "Required Tauri updater signing secrets are present."
 
   build-python-runtimes:
+    needs: [validate, validate-signing]
     runs-on: windows-latest
     timeout-minutes: 90
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         variant: [cpu, cuda]
     steps:

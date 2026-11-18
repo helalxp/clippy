@@ -654,14 +654,11 @@ background tasks have settled. Only then are the renderer and backend stopped.
 If the installer launch fails, the frontend invokes native service recovery and
 refreshes the per-launch API token and backend URLs.
 
-The updater plugin dependencies are declared, but the lockfiles cannot be
-regenerated in this GitHub-only editing environment. Run
-desktop/refresh-updater-lockfiles.ps1 from the repository checkout, then commit
-the resulting dashboard/package-lock.json and desktop/src-tauri/Cargo.lock.
-The release artifact-generation switch remains off until the encrypted GitHub
-Actions signing secrets and release manifest workflow are configured. This is
-intentional: existing CI uses locked dependency installs and must not be
-weakened to accommodate stale lockfiles.
+The frontend and Rust updater dependencies have been regenerated and committed
+in their lockfiles. The release build enables updater artifact generation
+through its dedicated Tauri configuration overlay, requires the configured
+Tauri signing secrets, and publishes a verified static updater manifest. The
+ordinary developer installer build remains independent of the private key.
 
 
 
