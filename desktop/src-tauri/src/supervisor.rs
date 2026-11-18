@@ -618,13 +618,13 @@ impl Supervisor {
             .ok_or_else(|| "Clippy data directory is unavailable because services are not running.".to_string())
     }
 
-    pub fn prepare_data_move(&self) -> Result<(), String> {
+    fn post_backend_maintenance(&self, path: &str, operation: &str) -> Result<(), String> {
         if self.backend_port == 0 {
-            return Err("Clippy services must be running before data can be moved.".into());
+            return Err("Clippy services must be running before this maintenance operation.".into());
         }
         let token = self.api_token.as_deref()
             .ok_or_else(|| "Clippy's local API token is unavailable.".to_string())?;
-        let url = format!("http://{BACKEND_HOST}:{}/api/library/storage/prepare-move", self.backend_port);
+        let url = format!("http://{BACKEND_HOST}:{}{path}", self.backend_port);
         match ureq::post(&url)
             .timeout(Duration::from_secs(65))
             .set("X-Clippy-Token", token)
@@ -633,16 +633,37 @@ impl Supervisor {
             Ok(response) if response.status() == 200 => Ok(()),
             Ok(response) => {
                 let body = response.into_string().unwrap_or_default();
-                Err(format!("Clippy refused the data move: {body}"))
+                Err(format!("Clippy refused {operation}: {body}"))
             }
             Err(ureq::Error::Status(status, response)) => {
                 let body = response.into_string().unwrap_or_default();
-                Err(format!("Clippy refused the data move (HTTP {status}): {body}"))
+                Err(format!("Clippy refused {operation} (HTTP {status}): {body}"))
             }
             Err(ureq::Error::Transport(error)) => {
-                Err(format!("Could not check whether Clippy is idle: {error}"))
+                Err(format!("Could not verify that Clippy is idle before {operation}: {error}"))
             }
         }
+    }
+
+    pub fn prepare_update(&self) -> Result<(), String> {
+        self.post_backend_maintenance(
+            "/api/desktop/update/prepare",
+            "the update because work is still active",
+        )
+    }
+
+    pub fn cancel_update_prepare(&self) -> Result<(), String> {
+        self.post_backend_maintenance(
+            "/api/desktop/update/cancel",
+            "cancelling the prepared update",
+        )
+    }
+
+    pub fn prepare_data_move(&self) -> Result<(), String> {
+        self.post_backend_maintenance(
+            "/api/library/storage/prepare-move",
+            "the data move because work is still active",
+        )
     }
 
     pub fn api_token(&self) -> Result<String, String> {
