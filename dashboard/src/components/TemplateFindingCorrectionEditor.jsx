@@ -85,7 +85,8 @@ function readPath(object, path) {
 
 function initialFieldValue(finding, field) {
   if (field.path === 'typography.font_family') {
-    return finding?.human_font_family || finding?.typography?.font_candidates?.[0]?.family || '';
+    // AI candidates are suggestions only. A human must type/confirm the family explicitly.
+    return finding?.human_font_family || '';
   }
   const value = readPath(finding, field.path);
   if (field.path === 'colors' && Array.isArray(value)) return value.join(', ');
@@ -208,7 +209,13 @@ export default function TemplateFindingCorrectionEditor({
                     min={field.min}
                     max={field.max}
                     step={field.step}
-                    placeholder={field.path === 'colors' ? '#FFFFFF, #000000' : ''}
+                    placeholder={
+                      field.path === 'colors'
+                        ? '#FFFFFF, #000000'
+                        : field.path === 'typography.font_family'
+                          ? (finding?.typography?.font_candidates?.[0]?.family || 'Enter confirmed font family')
+                          : ''
+                    }
                     className="input-field text-xs"
                     disabled={disabled}
                   />
