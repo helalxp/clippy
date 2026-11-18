@@ -33,7 +33,7 @@ The following files and changes from PR #6 are withheld because they couple the 
 - The old branch's CI workflow changes.
 - The old implementation tracker/spec/stage documents, which are superseded by the current product blueprint.
 
-The API and edit-locking tests from PR #6 are also withheld for now because they test application routes/decorators that are intentionally not being ported. They must be rewritten against the current main API and the staged analysis-workbench design.
+The API and edit-locking tests from PR #6 are withheld for now because they test application routes/decorators that are intentionally not being ported. Two mixed domain/API test files were initially copied with those route tests still present; the first CI run exposed the coupling. The stale route-only cases have now been removed from the foundation suite and must be replaced by tests for the new analysis-job API when that API is implemented.
 
 ## Explicit non-claims
 
