@@ -1,6 +1,6 @@
 # Windows Installer and Update Architecture
 
-Status: v0.2.3 installer and first-run runtime delivery shipped and validated; in-app component updater remains future work
+Status: v0.2.3 installer/runtime delivery shipped; PR #21 implements a signed full-installer in-app updater, with signed-release and real Windows upgrade validation pending
 Scope: Windows desktop packaging, runtime delivery, installation, repair, and updates.
 Out of scope for this migration: accounts, billing, cloud authorization, and brand workspaces.
 
@@ -22,8 +22,8 @@ Out of scope for this migration: accounts, billing, cloud authorization, and bra
 - On first launch, `setup-runtime.ps1` downloads a release-published CPU or NVIDIA/CUDA 12.8 Python runtime archive. CUDA selection checks the minimum Windows driver and GPU compute capability before choosing the CUDA package. Windows CI assembles the archive from official CPython 3.12.10 and the pinned application requirements, then verifies imports and relocation before publishing it with a SHA-256 sidecar. Customer machines do not run pip or install Python packages individually.
 - Node 22.23.3 and FFmpeg essentials are provisioned by first-run setup and verified against publisher SHA-256 sidecars. The Remotion browser is stored outside replaceable app payloads, verified by Authenticode publisher and recorded SHA-256, then reused across app updates.
 - The runtime is installed under `%LOCALAPPDATA%\Clippy\runtime`; application payload is extracted under `%LOCALAPPDATA%\Clippy\app\current`.
-- The current release notes describe a manual installer update. There is no configured Tauri updater in the inspected Tauri configuration.
-- The installer payload hash detects accidental corruption. Authenticode signing is supported when both certificate secrets are configured. The current workflow warns and continues unsigned when neither is configured, and fails if only one is provided. Configure both secrets for signed public distribution. This is still separate from the future signed component-manifest updater.
+- PR #21 adds the Tauri 2 updater plugin, a Settings UI, the stable GitHub `latest.json` endpoint, an embedded public verification key, and a signed NSIS installer manifest. The updater installs the complete NSIS installer; it is not a binary delta or independent runtime-component updater.
+- Tauri updater signing is mandatory and uses `TAURI_SIGNING_PRIVATE_KEY` plus `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Optional Authenticode signing uses separate certificate secrets. The final installer is Tauri-signed after any Authenticode modification so the detached updater signature matches the published bytes.
 - The setup script selects the prebuilt CUDA 12.8 archive only when the NVIDIA driver is at least 570.65 and compute capability is at least 7.0; otherwise it selects the CPU archive. Both runtime variants are built independently and checked for package imports, relocation, and required CUDA DLLs. The installed CUDA path is smoke-tested with a real PyTorch kernel and CTranslate2 device enumeration.
 
 ## Target installation layout
@@ -162,7 +162,13 @@ An app release declares a compatibility range for each runtime component. Keep t
 
 ## Current release behavior versus target
 
-Until the component updater is implemented and validated, releases remain manual full-installer upgrades. Do not advertise small/delta updates or automatic updates yet.
+PR #21 implements the first in-app update layer: Tauri checks the stable GitHub Releases manifest, verifies the signed full NSIS installer, downloads it, and launches the installer after the app has confirmed it is safe to stop services. On next startup, the embedded application payload is activated transactionally. The previous payload is retained until runtime checks and backend/renderer health pass; failed startup rolls back the app payload and retries service startup.
+
+This is not a small/delta update and it does not independently update Python, PyTorch/CUDA, Node, FFmpeg, Remotion, or browser components. Healthy unchanged runtimes are intended to be reused through the existing runtime reconciliation path.
+
+The first updater-enabled release must be installed manually by existing v0.3.0 users because that version does not contain the updater plugin or public key. The proposed smoke-test sequence is prerelease `v0.3.1-rc.1` installed manually, followed by stable `v0.3.1` discovered and installed in-app.
+
+Runtime component updates are not covered by the application-payload rollback transaction. Keep runtime inputs/contracts unchanged for the first updater rollout. A future runtime-changing updater release requires a separate cross-component runtime transaction or an explicit delivery guard.
 
 
 ## Verified v0.2.3 release baseline

@@ -37,6 +37,25 @@ jobs:
           npm run build
 
 
+  validate-signing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require Tauri updater signing credentials
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY repository secret."
+            exit 1
+          fi
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secret."
+            exit 1
+          fi
+          echo "Required Tauri updater signing secrets are present."
+
   build-python-runtimes:
     runs-on: windows-latest
     timeout-minutes: 90
@@ -70,7 +89,7 @@ jobs:
           retention-days: 2
 
   build-and-publish:
-    needs: [validate, build-python-runtimes]
+    needs: [validate, validate-signing, build-python-runtimes]
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -97,19 +116,6 @@ jobs:
       - name: Validate release version
         shell: pwsh
         run: ./desktop/validate-version.ps1 -ExpectedVersion "$env:GITHUB_REF_NAME"
-
-      - name: Require updater signing credentials
-        shell: pwsh
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
-            throw "Missing TAURI_SIGNING_PRIVATE_KEY repository secret. Configure the encrypted Tauri updater private key before creating a release."
-          }
-          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
-            throw "Missing TAURI_SIGNING_PRIVATE_KEY_PASSWORD repository secret. Configure the updater key password before creating a release."
-          }
 
       - name: Download verified Python runtime packages
         uses: actions/download-artifact@v4

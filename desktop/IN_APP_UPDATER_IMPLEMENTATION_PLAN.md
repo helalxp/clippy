@@ -1,6 +1,6 @@
 # In-App Updater Feature Implementation Plan
 
-**Status:** Proposed implementation plan  
+**Status:** Implemented in PR #21; Windows CI and NSIS build passed, signed tag build and real Windows upgrade smoke test pending  
 **Target branch:** `feature/in-app-updater-plan`  
 **Base branch:** `main`  
 **Base commit:** `30e7686de84612446562799376e8e2c4649864ac`  
@@ -664,30 +664,7 @@ intentional: existing CI uses locked dependency installs and must not be
 weakened to accommodate stale lockfiles.
 
 
-## 9.11 Updater plugin and Settings UI groundwork (2026-11-18)
 
-The Tauri updater plugin is now registered in the native shell, its frontend
-package is declared, and the default desktop capability grants the plugin's
-documented updater workflow permission set. The Settings surface has a manual
-update check, release-note display, download progress, and a separate install
-action.
-
-The update package is downloaded and signature-verified before services are
-stopped. Immediately before installation, the frontend checks its own known
-busy states and the native command asks the backend maintenance gate to confirm
-that backend jobs, uploads, publications, in-flight requests, and tracked
-background tasks have settled. Only then are the renderer and backend stopped.
-If the installer launch fails, the frontend invokes native service recovery and
-refreshes the per-launch API token and backend URLs.
-
-The updater plugin dependencies are declared, but the lockfiles cannot be
-regenerated in this GitHub-only editing environment. Run
-desktop/refresh-updater-lockfiles.ps1 from the repository checkout, then commit
-the resulting dashboard/package-lock.json and desktop/src-tauri/Cargo.lock.
-The release artifact-generation switch remains off until the encrypted GitHub
-Actions signing secrets and release manifest workflow are configured. This is
-intentional: existing CI uses locked dependency installs and must not be
-weakened to accommodate stale lockfiles.
 
 
 ## 9.12 Signed Windows updater release pipeline (2026-11-18)
@@ -711,12 +688,11 @@ the draft release, and verifies the manifest version, installer URL, signature,
 and uploaded asset sizes before publication. Stable tags are marked latest;
 SemVer prerelease tags are not.
 
-This pipeline has not yet been exercised by a signed tag build. Before the
-first updater-enabled release, configure both GitHub Actions secrets using the
-contents of the encrypted private key file and its password. Never commit or
-paste either secret. The first updater-enabled release still requires a manual
-installation by users on the older 0.3.0 build, which does not contain the
-updater plugin/public key.
+The user has configured both GitHub Actions signing secrets. A signed tag
+build is still required to validate the key/password pair and exercise the
+complete release artifact flow. Never commit or paste either secret. The first
+updater-enabled release still requires a manual installation by users on the
+older 0.3.0 build, which does not contain the updater plugin/public key.
 
 
 The release manifest generator now has focused Pester coverage for its Windows
@@ -725,3 +701,33 @@ platform entry, final installer URL, signature contents, release notes, RFC
 Windows validation workflow also parses the new PowerShell scripts and updater
 configuration overlay. These checks do not require signing secrets or build
 the CPU/CUDA runtime matrix.
+
+
+## 9.13 Startup health-gated application payload transaction (2026-11-18)
+
+The application payload swap is now transactional across startup health checks.
+
+- Activation retains the previous known-good payload as `app/current.previous`
+  rather than deleting it immediately after the directory swap.
+- The startup gate validates the activated payload, checks the managed runtime,
+  and starts the backend and renderer before committing the new payload.
+- Only after those checks pass does the native `commit_app_payload` command
+  discard the previous payload.
+- If startup fails, the gate invokes `rollback_app_payload`, restores the
+  previous payload, and retries service startup against it.
+- Native payload transaction tests cover activation, commit, rollback, and
+  recovery behavior. The implementation also rejects symlink/reparse paths
+  before mutating payload directories.
+
+The transaction boundary is intentionally limited to the replaceable
+application payload. It does not provide atomic rollback across all managed
+runtime components. Runtime setup currently validates and activates components
+individually, so a future runtime-changing update could leave a partially
+updated runtime set if a later component or service fails. The current PR does
+not change runtime inputs compared with v0.3.0; keep the first updater rollout
+application-only until a separate runtime transaction or delivery guard exists.
+
+The current PR head passed Windows dashboard build, PowerShell installer and
+payload contract tests, backend syntax validation, Rust compilation and unit
+tests, and the complete NSIS installer build. A signed tag build and an actual
+in-app update on a Windows installation remain release gates.
