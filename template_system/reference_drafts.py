@@ -10,11 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
+import os
 import re
 import uuid
-from datetime import datetime, timezone
-from statistics import median
+from datetime import datetime
 from typing import Any
 
 from PIL import Image
@@ -141,7 +140,7 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
         elif item.kind == "blurred_duplicate":
             add("background.mode", "blur", item, review_item, rationale)
         elif item.kind == "solid_color":
-            if color:
+            if color and re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
                 add("background.mode", "solid", item, review_item, rationale)
                 add("background.color", color, item, review_item, rationale)
             else:
@@ -174,16 +173,14 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
             continue
 
         group = "hook" if is_hook else "captions"
-        add(f"{group}.enabled", True, item, review_item, "An accepted text region identifies this text treatment")
         if is_hook:
-            if item.visible_text:
-                add("hook.text", item.visible_text, item, review_item, "Visible hook text from the accepted finding")
-            else:
-                # Avoid producing an enabled hook that the canonical recipe cannot validate.
+            if not item.visible_text or len(item.visible_text) > 240:
                 candidates.setdefault("_limitations", []).append({
-                    "value": f"Accepted hook finding {item.id} had no readable text; it was not enabled in the recipe."
+                    "value": f"Accepted hook finding {item.id} had missing or overlong text; it was not enabled in the recipe."
                 })
-                candidates[f"{group}.enabled"].pop()
+                continue
+            add("hook.enabled", True, item, review_item, "An accepted text region identifies this hook treatment")
+            add("hook.text", item.visible_text, item, review_item, "Visible hook text from the accepted finding")
             entrance = {
                 "none": "none", "fade": "fade", "slide": "slide_up", "pop": "pop",
             }.get(item.animation)
@@ -198,6 +195,7 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
             if typography.background_color:
                 add("hook.background_color", typography.background_color, item, review_item, "Observed hook text backing color")
         else:
+            add("captions.enabled", True, item, review_item, "An accepted caption region identifies this caption treatment")
             if item.animation == "karaoke_highlight":
                 add("captions.word_highlight", True, item, review_item, "Observed karaoke-style word highlighting")
             elif item.animation == "none":
@@ -213,8 +211,8 @@ def _make_claim_candidates(report: ReferenceStyleReport, review: ReviewDocument)
             add(f"{group}.font_color" if not is_hook else "hook.color", typography.fill_color, item, review_item, "Accepted text fill color")
         if typography.highlight_color and not is_hook:
             add("captions.highlight_color", typography.highlight_color, item, review_item, "Accepted caption highlight color")
-        if typography.outline_color:
-            add(f"{group}.outline_color" if not is_hook else "captions.outline_color", typography.outline_color, item, review_item, "Accepted text outline color")
+        if typography.outline_color and not is_hook:
+            add("captions.outline_color", typography.outline_color, item, review_item, "Accepted caption outline color")
 
         confirmed_font = _human_font(review_item)
         if confirmed_font:
@@ -286,8 +284,13 @@ def _compile_interpretation(report: ReferenceStyleReport, review: ReviewDocument
             review_note="; ".join(notes)[:500] or None,
         ))
 
+    # A solid background is invalid in the canonical recipe without a color.
+    if any(item.value == "solid" for item in claims if item.property_path == "background.mode") and not any(item.property_path == "background.color" for item in claims):
+        claims = [item for item in claims if item.property_path != "background.mode"]
+        limitations.append("A solid background had conflicting or unavailable color evidence; the background mode was left unchanged.")
+
     provider_id = "gemini"
-    model_id = "gemini-3.1-flash-lite"
+    model_id = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
     return TemplateInterpretation(
         provider_id=provider_id,
         model_id=model_id,
