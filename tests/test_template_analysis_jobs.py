@@ -62,6 +62,9 @@ def test_cancelled_queued_job_is_not_started(tmp_path):
     assert result["status"] == "cancelled"
     assert result["stage"] == "cancelled"
 
+    assert result["ai_status"] == "cancelled"
+    assert result["ai_error"] == "Cancellation was requested before analysis began."
+
 
 def test_deterministic_analysis_is_kept_when_gemini_is_not_consented(tmp_path, monkeypatch):
     import template_system.analysis as analysis_module
@@ -256,3 +259,14 @@ def test_recovery_does_not_resurrect_a_cancelled_job(tmp_path):
     assert recovered["cancel_requested"] is True
     assert report["ai_status"] == "cancelled"
     assert report["deterministic"]["technical"]["duration_seconds"] == 5
+
+
+def test_cancelled_queued_job_marks_gemini_cancelled_when_consent_was_given(tmp_path):
+    store, job = _create_job(tmp_path, consent=True)
+    store.request_cancel(job["id"])
+
+    execute_reference_analysis_job(store, job["id"])
+
+    result = store.get(job["id"])
+    assert result["status"] == "cancelled"
+    assert result["ai_status"] == "cancelled"

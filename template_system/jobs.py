@@ -386,7 +386,15 @@ def execute_reference_analysis_job(
 
     item = store.get(job_id)
     if item.get("cancel_requested"):
-        store.update(job_id, status="cancelled", stage="cancelled", completed_at=_now())
+        store.update(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            progress=100,
+            ai_status="cancelled",
+            ai_error="Cancellation was requested before analysis began.",
+            completed_at=_now(),
+        )
         return
     source_path = store.source_path(job_id)
     evidence_dir = store._job_dir(job_id) / "evidence"
@@ -493,7 +501,15 @@ def execute_reference_analysis_job(
             ai_status=ai_status, ai_error=ai_error,
         )
     except ReferenceAnalysisCancelled:
-        store.update(job_id, status="cancelled", stage="cancelled", completed_at=_now())
+        store.update(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            progress=100,
+            ai_status="cancelled",
+            ai_error="Analysis was cancelled before completion.",
+            completed_at=_now(),
+        )
     except Exception as exc:
         store.update(
             job_id, status="failed", stage="failed",
