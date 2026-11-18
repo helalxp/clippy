@@ -3621,6 +3621,7 @@ class TemplateAnalysisReviewRequest(BaseModel):
     target_id: str
     decision: str
     note: Optional[str] = None
+    correction: Optional[Dict[str, Any]] = None
 
 
 @app.patch("/api/template-analysis/jobs/{job_id}/review")
@@ -3634,7 +3635,7 @@ async def update_template_analysis_review(
 
     store = _template_analysis_store()
     try:
-        request = ReviewDecisionRequest.model_validate(update.model_dump())
+        request = ReviewDecisionRequest.model_validate(update.model_dump(exclude_unset=True))
         review = apply_review_decision(store, job_id, request)
         return {"review": review}
     except FileNotFoundError:
