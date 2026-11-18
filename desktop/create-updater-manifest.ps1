@@ -36,10 +36,11 @@ if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
 }
 
 $installer = Get-Item -LiteralPath $InstallerPath
-$signature = (Get-Content -LiteralPath $SignaturePath -Raw -Encoding UTF8).Trim()
-if ([string]::IsNullOrWhiteSpace($signature)) {
+$signatureContent = Get-Content -LiteralPath $SignaturePath -Raw -Encoding UTF8
+if ([string]::IsNullOrWhiteSpace($signatureContent)) {
     throw "Tauri updater signature is empty: $SignaturePath"
 }
+$signature = $signatureContent.Trim()
 
 $notes = Get-Content -LiteralPath $ReleaseNotesPath -Raw -Encoding UTF8
 $escapedAssetName = [System.Uri]::EscapeDataString($installer.Name)
