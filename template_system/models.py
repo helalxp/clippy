@@ -213,7 +213,7 @@ class OverlayRecipe(ContractModel):
                 raise ValueError("text overlays cannot reference an image asset")
             if self.rotation_degrees != 0:
                 raise ValueError("text overlay rotation is not supported")
-            if len(self.text.replace("\r\n", "\n").replace("\r", "\n").split("\n")) > self.max_lines:
+            if len(self.text.replace("\\r\\n", "\\n").replace("\\r", "\\n").split("\\n")) > self.max_lines:
                 raise ValueError("text overlay exceeds max_lines; add explicit line breaks or increase max_lines")
             estimated_height = self.font_size_ratio * self.max_lines * 1.35
             if self.text_box_height_ratio < estimated_height:

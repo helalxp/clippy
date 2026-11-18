@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import struct
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,3 +83,102 @@ def test_rejects_overlapping_tables():
 def test_rejects_payload_above_size_limit():
     with pytest.raises(ValueError, match="25 MB"):
         inspect_font_payload(b"\x00\x01\x00\x00" + b"\0" * (25 * 1024 * 1024))
+
+
+class FakeUpload:
+    def __init__(self, payload, content_type):
+        self.payload = payload
+        self.content_type = content_type
+        self.filename = "untrusted-font.bin"
+        self.closed = False
+
+    async def read(self, size=-1):
+        return self.payload[:size]
+
+    async def close(self):
+        self.closed = True
+
+
+class FakeRequest:
+    def __init__(self, owner_id, form_data=None):
+        self.owner_id = owner_id
+        self.headers = {}
+        self.query_params = {}
+        self.form_data = form_data or {}
+
+    async def form(self, **kwargs):
+        assert kwargs == {"max_files": 1, "max_fields": 1}
+        return self.form_data
+
+
+async def async_noop(*args, **kwargs):
+    return None
+
+
+async def owner_id(request):
+    return request.owner_id
+
+
+def test_font_asset_upload_is_owner_scoped_and_revision_safe(tmp_path, monkeypatch):
+    import app as app_module
+    from template_system.models import TemplateDocument
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", owner_id)
+
+    document = TemplateDocument(id="tpl_font_upload01", name="Font upload fixture")
+    owner = FakeRequest("font-owner")
+    asyncio.run(app_module.create_template(document.to_storage_dict(), owner))
+
+    payload = make_sfnt()
+    upload = FakeUpload(payload, "font/ttf")
+    request = FakeRequest(
+        "font-owner",
+        {"file": upload, "expected_revision": "1"},
+    )
+    result = asyncio.run(app_module.upload_template_asset(document.id, request))
+
+    asset = result["asset"]
+    assert asset["media_type"] == "font/ttf"
+    assert asset["path"] == f"assets/{asset['id']}.ttf"
+    assert asset["width"] is None and asset["height"] is None
+    assert asset["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert result["template_revision"] == 2
+    assert upload.closed is True
+
+    scope = hashlib.sha256(b"font-owner").hexdigest()[:32]
+    stored = tmp_path / "libraries" / scope / document.id / asset["path"]
+    assert stored.read_bytes() == payload
+
+    served = asyncio.run(app_module.get_template_asset(document.id, asset["id"], owner))
+    assert Path(served.path) == stored
+    assert served.media_type == "font/ttf"
+
+
+def test_font_upload_rejects_mismatched_mime_without_mutating_template(tmp_path, monkeypatch):
+    import app as app_module
+    from fastapi import HTTPException
+    from template_system.models import TemplateDocument
+
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "TEMPLATE_LIBRARY_DIR", str(tmp_path / "libraries"))
+    monkeypatch.setattr(app_module, "require_managed_entitlement", async_noop)
+    monkeypatch.setattr(app_module, "_owner_id", owner_id)
+
+    document = TemplateDocument(id="tpl_font_mime001", name="Font MIME fixture")
+    owner = FakeRequest("font-owner")
+    asyncio.run(app_module.create_template(document.to_storage_dict(), owner))
+
+    request = FakeRequest(
+        "font-owner",
+        {
+            "file": FakeUpload(make_sfnt(), "font/otf"),
+            "expected_revision": "1",
+        },
+    )
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(app_module.upload_template_asset(document.id, request))
+    assert rejected.value.status_code == 415
+    assert asyncio.run(app_module.get_template(document.id, owner))["template"]["assets"] == []

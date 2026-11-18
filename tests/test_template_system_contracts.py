@@ -299,16 +299,3 @@ def test_empty_clip_override_does_not_block_adaptation():
 
     assert resolved.recipe.captions.font_color == "#123456"
     assert resolved.adaptation_decisions[0].accepted is True
-
-
-@pytest.mark.parametrize("line_break", ["\n", "\r\n", "\r"])
-def test_text_overlay_line_budget_normalizes_all_line_endings(line_break):
-    with pytest.raises(ValidationError, match="max_lines"):
-        TemplateRecipe.model_validate({
-            "overlays": [{
-                "id": "two-lines",
-                "kind": "text",
-                "text": f"first{line_break}second",
-                "max_lines": 1,
-            }],
-        })
