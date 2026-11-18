@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
@@ -3446,6 +3446,27 @@ def _template_analysis_store():
     return AnalysisJobStore(Path(DATA_DIR) / "template-analysis")
 
 
+
+def _template_system_storage():
+    from template_system.storage import LocalTemplateStorage
+    return LocalTemplateStorage(Path(DATA_DIR) / "templates")
+
+
+def _public_template_system_document(document) -> Dict[str, Any]:
+    return {
+        "id": document.id,
+        "revision": document.revision,
+        "name": document.name,
+        "description": document.description,
+        "category": document.category,
+        "tags": list(document.tags),
+        "updated_at": document.updated_at.isoformat(),
+        "origin": document.origin.model_dump(mode="json"),
+        "capabilities": [item.model_dump(mode="json") for item in document.capabilities],
+        "recipe": document.recipe.model_dump(mode="json"),
+    }
+
+
 def _public_template_analysis_job(
     store, job: Dict[str, Any], *, include_report: bool = False
 ) -> Dict[str, Any]:
@@ -3647,6 +3668,57 @@ async def update_template_analysis_review(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+
+
+
+class TemplateAnalysisDraftRequest(BaseModel):
+    class Config:
+        extra = "forbid"
+
+    name: Optional[str] = Field(default=None, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    category: Optional[str] = Field(default=None, max_length=80)
+    tags: List[str] = Field(default_factory=list, max_length=40)
+
+
+@app.post("/api/template-analysis/jobs/{job_id}/draft-template", status_code=201)
+async def save_template_analysis_draft(job_id: str, request: TemplateAnalysisDraftRequest):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    from template_system.reference_drafts import ReferenceDraftError, save_reviewed_reference_template
+
+    analysis_store = _template_analysis_store()
+    template_storage = _template_system_storage()
+    try:
+        document = save_reviewed_reference_template(
+            analysis_store,
+            template_storage,
+            job_id,
+            name=request.name,
+            description=request.description,
+            category=request.category,
+            tags=request.tags,
+        )
+        return {"template": _public_template_system_document(document)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except ReferenceDraftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/template-library/templates")
+async def list_template_system_documents():
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    try:
+        documents = _template_system_storage().list()
+        return {"templates": [_public_template_system_document(item) for item in documents]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read local template library: {exc}") from exc
 
 
 @app.post("/api/template-analysis/jobs/{job_id}/cancel")
