@@ -145,6 +145,7 @@ def test_source_endpoint_serves_only_the_job_original_video(tmp_path, monkeypatc
     assert isinstance(response, app_module.FileResponse)
     assert Path(response.path) == store.source_path(job["id"])
     assert response.media_type == "video/mp4"
+    assert "content-disposition" not in response.headers
 
 
 def test_source_and_evidence_query_token_allowlist_is_exact():

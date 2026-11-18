@@ -3647,7 +3647,7 @@ async def get_template_analysis_source(job_id: str):
         raise HTTPException(status_code=404, detail="Reference source video not found.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return FileResponse(path, media_type=media_type, filename=path.name)
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/api/template-analysis/jobs/{job_id}/evidence/{asset_id}")
@@ -3661,7 +3661,7 @@ async def get_template_analysis_evidence(job_id: str, asset_id: str):
         raise HTTPException(status_code=404, detail="Reference evidence frame not found.")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return FileResponse(path, media_type="image/png", filename=f"{asset_id}.png")
+    return FileResponse(path, media_type="image/png")
 
 
 class ReferenceTemplateUpdate(BaseModel):
