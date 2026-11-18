@@ -652,13 +652,6 @@ impl Supervisor {
         )
     }
 
-    pub fn cancel_update_prepare(&self) -> Result<(), String> {
-        self.post_backend_maintenance(
-            "/api/desktop/update/cancel",
-            "cancelling the prepared update",
-        )
-    }
-
     pub fn prepare_data_move(&self) -> Result<(), String> {
         self.post_backend_maintenance(
             "/api/library/storage/prepare-move",
