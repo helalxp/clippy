@@ -130,3 +130,33 @@ def test_list_endpoint_returns_durable_analysis_jobs(tmp_path, monkeypatch):
 
     assert [job["id"] for job in response["jobs"]] == [created["id"]]
     assert "source_file" not in response["jobs"][0]
+
+
+def test_source_endpoint_serves_only_the_job_original_video(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    store = _configure(monkeypatch, tmp_path)
+    staged = store.new_upload_path(".mp4")
+    staged.write_bytes(b"reference-video-source")
+    job = store.create(staged, original_filename="reference.mp4")
+
+    response = asyncio.run(app_module.get_template_analysis_source(job["id"]))
+
+    assert isinstance(response, app_module.FileResponse)
+    assert Path(response.path) == store.source_path(job["id"])
+    assert response.media_type == "video/mp4"
+
+
+def test_source_and_evidence_query_token_allowlist_is_exact():
+    assert app_module._TEMPLATE_ANALYSIS_SOURCE_PATH_RE.fullmatch(
+        "/api/template-analysis/jobs/tjob_0123456789abcdef0123456789abcdef/source"
+    )
+    assert not app_module._TEMPLATE_ANALYSIS_SOURCE_PATH_RE.fullmatch(
+        "/api/template-analysis/jobs/tjob_0123456789abcdef0123456789abcdef/source/extra"
+    )
+    assert app_module._TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE.fullmatch(
+        "/api/template-analysis/jobs/tjob_0123456789abcdef0123456789abcdef/evidence/reference_frame_001"
+    )
+    assert not app_module._TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE.fullmatch(
+        "/api/template-analysis/jobs/tjob_0123456789abcdef0123456789abcdef/evidence/../job.json"
+    )
