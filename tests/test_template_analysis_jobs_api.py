@@ -105,7 +105,7 @@ def test_upload_endpoint_requires_key_when_gemini_consent_is_enabled(
 
     assert rejected.value.status_code == 400
     assert store.list() == []
-    assert upload.closed is False
+    assert upload.closed is True
 
 
 def test_upload_endpoint_rejects_unsupported_file_extension(tmp_path, monkeypatch):
