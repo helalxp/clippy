@@ -118,7 +118,21 @@ export default function ReferenceTemplateLibrary() {
   const [geminiConsent, setGeminiConsent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState(null);
+  const [selectedJobDetail, setSelectedJobDetail] = useState(null);
   const videoRef = useRef(null);
+
+  const loadJobDetail = useCallback(async (jobId) => {
+    if (!jobId) {
+      setSelectedJobDetail(null);
+      return;
+    }
+    try {
+      const data = await apiJson('/api/template-analysis/jobs/' + jobId);
+      if (data.job?.id === jobId) setSelectedJobDetail(data.job);
+    } catch (e) {
+      setError(e?.detail || e?.message || 'Could not load the selected analysis report.');
+    }
+  }, []);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -137,6 +151,7 @@ export default function ReferenceTemplateLibrary() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadJobDetail(selectedJobId); }, [selectedJobId, loadJobDetail]);
 
   const hasActiveJobs = useMemo(
     () => jobs.some((job) => ['queued', 'running'].includes(job.status)),
@@ -145,11 +160,17 @@ export default function ReferenceTemplateLibrary() {
 
   useEffect(() => {
     if (!hasActiveJobs) return undefined;
-    const timer = window.setInterval(() => load(true), 1800);
+    const timer = window.setInterval(() => {
+      load(true);
+      if (selectedJobId) loadJobDetail(selectedJobId);
+    }, 1800);
     return () => window.clearInterval(timer);
-  }, [hasActiveJobs, load]);
+  }, [hasActiveJobs, load, loadJobDetail, selectedJobId]);
 
-  const selectedJob = jobs.find((job) => job.id === selectedJobId) || null;
+  const selectedJobSummary = jobs.find((job) => job.id === selectedJobId) || null;
+  const selectedJob = selectedJobSummary
+    ? { ...selectedJobSummary, ...(selectedJobDetail?.id === selectedJobId ? selectedJobDetail : {}) }
+    : null;
   const report = selectedJob?.report || null;
   const aiStatus = selectedJob?.ai_status || report?.ai_status || 'pending';
   const deterministic = report?.deterministic || null;
@@ -204,6 +225,7 @@ export default function ReferenceTemplateLibrary() {
     try {
       await apiJson('/api/template-analysis/jobs/' + jobId, { method: 'DELETE' });
       setJobs((current) => current.filter((item) => item.id !== jobId));
+      setSelectedJobDetail((current) => current?.id === jobId ? null : current);
       setSelectedJobId((current) => current === jobId ? null : current);
       setError('');
     } catch (e) {
@@ -215,6 +237,7 @@ export default function ReferenceTemplateLibrary() {
     try {
       const data = await apiJson('/api/template-analysis/jobs/' + jobId + '/cancel', { method: 'POST' });
       setJobs((current) => current.map((item) => item.id === jobId ? data.job : item));
+      setSelectedJobDetail((current) => current?.id === jobId ? { ...current, ...data.job } : current);
     } catch (e) {
       setError(e?.detail || e?.message || 'Could not cancel analysis.');
     }

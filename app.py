@@ -3446,14 +3446,17 @@ def _template_analysis_store():
     return AnalysisJobStore(Path(DATA_DIR) / "template-analysis")
 
 
-def _public_template_analysis_job(store, job: Dict[str, Any]) -> Dict[str, Any]:
+def _public_template_analysis_job(
+    store, job: Dict[str, Any], *, include_report: bool = False
+) -> Dict[str, Any]:
     public_fields = (
         "id", "name", "category", "original_filename", "source_size_bytes",
         "source_sha256", "gemini_consent", "status", "stage", "progress",
         "ai_status", "ai_error", "error", "created_at", "updated_at", "completed_at",
     )
     result = {key: job.get(key) for key in public_fields}
-    result["report"] = store.get_report(job["id"])
+    if include_report:
+        result["report"] = store.get_report(job["id"])
     return result
 
 
@@ -3605,7 +3608,7 @@ async def get_template_analysis_job(job_id: str):
     _reference_templates_local_only()
     store = _template_analysis_store()
     try:
-        return {"job": _public_template_analysis_job(store, store.get(job_id))}
+        return {"job": _public_template_analysis_job(store, store.get(job_id), include_report=True)}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Template analysis job not found.")
     except ValueError as exc:
