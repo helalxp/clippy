@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
@@ -2507,6 +2507,9 @@ def _purge_local_jobs_for_user(user_id) -> int:
 async def lifespan(app: FastAPI):
     # Rehydrate finished jobs from disk before serving (survives restarts).
     _recover_jobs_from_disk()
+    # Resume durable reference-analysis jobs independently from generation jobs.
+    if not BILLING_ENABLED:
+        _resume_template_analysis_jobs()
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
     # reservations must survive the orphan sweep so the resumed run can settle them.
     _resumed_reservation_ids = _resume_interrupted_jobs()
@@ -2602,6 +2605,12 @@ _LIBRARY_MEDIA_PATH_RE = re.compile(
     r"^/api/library/projects/[0-9a-f-]{36}/(?:thumbnail|clips/[0-9a-f-]+/(?:thumbnail|video))$",
     re.IGNORECASE,
 )
+_TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE = re.compile(
+    r"^/api/template-analysis/jobs/tjob_[a-f0-9]{32}/evidence/reference_frame_[0-9]{3}$"
+)
+_TEMPLATE_ANALYSIS_SOURCE_PATH_RE = re.compile(
+    r"^/api/template-analysis/jobs/tjob_[a-f0-9]{32}/source$"
+)
 
 
 def _assert_data_storage_available() -> None:
@@ -2620,8 +2629,11 @@ async def require_desktop_api_token(request: Request, call_next):
     # session token in the query string only for exact read-only Library media routes.
     media_paths = ("/videos/", "/thumbnails/", "/reference-templates-media/")
     library_media = _LIBRARY_MEDIA_PATH_RE.fullmatch(request.url.path) is not None
+    template_evidence_media = _TEMPLATE_ANALYSIS_EVIDENCE_PATH_RE.fullmatch(request.url.path) is not None
+    template_source_media = _TEMPLATE_ANALYSIS_SOURCE_PATH_RE.fullmatch(request.url.path) is not None
     if not supplied and request.method in ("GET", "HEAD") and (
         request.url.path.startswith(media_paths) or library_media
+        or template_evidence_media or template_source_media
     ):
         supplied = request.query_params.get("token", "")
     if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
@@ -3426,6 +3438,366 @@ async def delete_upload(upload_id: str, request: Request):
 # library is outside uploads/ and output/, so neither job retention sweep can
 # silently delete a style the user has saved for future work.
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Template reference-analysis workbench
+# --------------------------------------------------------------------------- #
+_TEMPLATE_ANALYSIS_TASKS: dict[str, asyncio.Task] = {}
+_TEMPLATE_ANALYSIS_SEMAPHORE = asyncio.Semaphore(1)
+
+
+def _template_analysis_store():
+    from template_system.jobs import AnalysisJobStore
+    return AnalysisJobStore(Path(DATA_DIR) / "template-analysis")
+
+
+
+def _template_system_storage():
+    from template_system.storage import LocalTemplateStorage
+    return LocalTemplateStorage(Path(DATA_DIR) / "templates")
+
+
+def _public_template_system_document(document) -> Dict[str, Any]:
+    return {
+        "id": document.id,
+        "revision": document.revision,
+        "name": document.name,
+        "description": document.description,
+        "category": document.category,
+        "tags": list(document.tags),
+        "updated_at": document.updated_at.isoformat(),
+        "origin": document.origin.model_dump(mode="json"),
+        "capabilities": [item.model_dump(mode="json") for item in document.capabilities],
+        "recipe": document.recipe.model_dump(mode="json"),
+    }
+
+
+def _public_template_analysis_job(
+    store, job: Dict[str, Any], *, include_report: bool = False
+) -> Dict[str, Any]:
+    public_fields = (
+        "id", "name", "category", "original_filename", "source_size_bytes",
+        "source_sha256", "gemini_consent", "status", "stage", "progress",
+        "ai_status", "ai_error", "error", "created_at", "updated_at", "completed_at",
+    )
+    result = {key: job.get(key) for key in public_fields}
+    if include_report:
+        result["report"] = store.get_report(job["id"])
+        result["review"] = store.get_review(job["id"])
+    return result
+
+
+async def _run_template_analysis_job(job_id: str, api_key: str | None = None):
+    from template_system.jobs import execute_reference_analysis_job
+    from template_system.providers.reference_video import GeminiReferenceAnalyzer
+
+    store = _template_analysis_store()
+    async with _TEMPLATE_ANALYSIS_SEMAPHORE:
+        try:
+            analyzer_factory = None
+            if api_key:
+                analyzer_factory = lambda **kwargs: GeminiReferenceAnalyzer(api_key=api_key, **kwargs)
+            await asyncio.to_thread(
+                execute_reference_analysis_job, store, job_id,
+                analyzer_factory=analyzer_factory,
+            )
+        except Exception as exc:
+            try:
+                store.update(
+                    job_id, status="failed", stage="failed",
+                    error=f"{type(exc).__name__}: {str(exc)[:1500]}",
+                    completed_at=datetime.now(timezone.utc).isoformat(),
+                )
+            except Exception:
+                pass
+
+
+def _schedule_template_analysis_job(job_id: str, api_key: str | None = None) -> None:
+    existing = _TEMPLATE_ANALYSIS_TASKS.get(job_id)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(
+        _run_template_analysis_job(job_id, api_key),
+        name=f"template-analysis-{job_id}",
+    )
+    _TEMPLATE_ANALYSIS_TASKS[job_id] = task
+
+    def finished(done: asyncio.Task) -> None:
+        if _TEMPLATE_ANALYSIS_TASKS.get(job_id) is done:
+            _TEMPLATE_ANALYSIS_TASKS.pop(job_id, None)
+        if not done.cancelled():
+            try:
+                done.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(finished)
+
+
+def _resume_template_analysis_jobs() -> None:
+    try:
+        store = _template_analysis_store()
+        for job_id in store.recover_interrupted():
+            _schedule_template_analysis_job(job_id)
+    except Exception as exc:
+        print(f"[template-analysis] Could not resume pending jobs: {exc}")
+
+
+@app.post("/api/template-analysis/jobs", status_code=202)
+async def create_template_analysis_job(
+    request: Request,
+    video: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    category: Optional[str] = Form(None),
+    rights_confirmed: bool = Form(False),
+    gemini_consent: bool = Form(False),
+):
+    """Queue reference-video analysis without coupling it to /api/process."""
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    if not rights_confirmed:
+        await video.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Confirm that you own this reference video or have permission to analyze it.",
+        )
+
+    original_name = os.path.basename(video.filename or "reference.mp4")
+    suffix = os.path.splitext(original_name)[1].lower()
+    if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}:
+        await video.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Upload an MP4, MOV, MKV, WebM, M4V, or AVI reference video.",
+        )
+
+    api_key = None
+    if gemini_consent:
+        try:
+            api_key = await resolve_gemini(request)
+        except Exception:
+            await video.close()
+            raise
+        if not api_key and not os.environ.get("GEMINI_API_KEY"):
+            await video.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Add a Gemini API key before enabling AI visual analysis.",
+            )
+
+    store = _template_analysis_store()
+    staged = store.new_upload_path(suffix)
+    size = 0
+    limit = MAX_FILE_SIZE_MB * 1024 * 1024
+    try:
+        with staged.open("xb") as output:
+            while chunk := await video.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Reference video exceeds the {MAX_FILE_SIZE_MB} MB upload limit.",
+                    )
+                output.write(chunk)
+        if size <= 0:
+            raise HTTPException(status_code=400, detail="The reference video is empty.")
+        try:
+            job = store.create(
+                staged,
+                original_filename=original_name,
+                name=name or "",
+                category=category or "Uncategorized",
+                gemini_consent=gemini_consent,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _schedule_template_analysis_job(job["id"], api_key)
+        return {"job": _public_template_analysis_job(store, job)}
+    finally:
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            pass
+        await video.close()
+
+
+@app.get("/api/template-analysis/jobs")
+async def list_template_analysis_jobs():
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    store = _template_analysis_store()
+    return {"jobs": [_public_template_analysis_job(store, job) for job in store.list()]}
+
+
+@app.get("/api/template-analysis/jobs/{job_id}")
+async def get_template_analysis_job(job_id: str):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    store = _template_analysis_store()
+    try:
+        return {"job": _public_template_analysis_job(store, store.get(job_id), include_report=True)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class TemplateAnalysisReviewRequest(BaseModel):
+    class Config:
+        extra = "forbid"
+
+    target_type: str
+    target_id: str
+    decision: str
+    note: Optional[str] = None
+    correction: Optional[Dict[str, Any]] = None
+
+
+@app.patch("/api/template-analysis/jobs/{job_id}/review")
+async def update_template_analysis_review(
+    job_id: str,
+    update: TemplateAnalysisReviewRequest,
+):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    from template_system.reviews import ReviewDecisionRequest, apply_review_decision
+
+    store = _template_analysis_store()
+    try:
+        request = ReviewDecisionRequest.model_validate(update.model_dump(exclude_unset=True))
+        review = apply_review_decision(store, job_id, request)
+        return {"review": review}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+
+
+
+class TemplateAnalysisDraftRequest(BaseModel):
+    class Config:
+        extra = "forbid"
+
+    name: Optional[str] = Field(default=None, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    category: Optional[str] = Field(default=None, max_length=80)
+    tags: List[str] = Field(default_factory=list, max_length=40)
+
+
+@app.post("/api/template-analysis/jobs/{job_id}/draft-template", status_code=201)
+async def save_template_analysis_draft(job_id: str, request: TemplateAnalysisDraftRequest):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    from template_system.reference_drafts import ReferenceDraftError, save_reviewed_reference_template
+
+    analysis_store = _template_analysis_store()
+    template_storage = _template_system_storage()
+    try:
+        document = await asyncio.to_thread(
+            save_reviewed_reference_template,
+            analysis_store,
+            template_storage,
+            job_id,
+            name=request.name,
+            description=request.description,
+            category=request.category,
+            tags=request.tags,
+        )
+        return {"template": _public_template_system_document(document)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except ReferenceDraftError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/template-library/templates")
+async def list_template_system_documents():
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    try:
+        documents = await asyncio.to_thread(_template_system_storage().list)
+        return {"templates": [_public_template_system_document(item) for item in documents]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read local template library: {exc}") from exc
+
+
+@app.post("/api/template-analysis/jobs/{job_id}/cancel")
+async def cancel_template_analysis_job(job_id: str):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    store = _template_analysis_store()
+    try:
+        job = store.request_cancel(job_id)
+        return {"job": _public_template_analysis_job(store, job)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/template-analysis/jobs/{job_id}")
+async def delete_template_analysis_job(job_id: str):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    active_task = _TEMPLATE_ANALYSIS_TASKS.get(job_id)
+    if active_task is not None and not active_task.done():
+        raise HTTPException(
+            status_code=409,
+            detail="This analysis is still running. Cancel it and wait for it to finish before deleting it.",
+        )
+    store = _template_analysis_store()
+    try:
+        await asyncio.to_thread(store.delete, job_id)
+        return {"deleted": job_id}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Template analysis job not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/template-analysis/jobs/{job_id}/source")
+async def get_template_analysis_source(job_id: str):
+    """Serve the original reference uploaded for this analysis job."""
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    store = _template_analysis_store()
+    try:
+        path = store.source_path(job_id)
+        suffix = path.suffix.lower()
+        media_type = {
+            ".mp4": "video/mp4",
+            ".mov": "video/quicktime",
+            ".mkv": "video/x-matroska",
+            ".webm": "video/webm",
+            ".m4v": "video/mp4",
+            ".avi": "video/x-msvideo",
+        }.get(suffix, "application/octet-stream")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Reference source video not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return FileResponse(path, media_type=media_type)
+
+
+@app.get("/api/template-analysis/jobs/{job_id}/evidence/{asset_id}")
+async def get_template_analysis_evidence(job_id: str, asset_id: str):
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    store = _template_analysis_store()
+    try:
+        path = store.evidence_path(job_id, asset_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Reference evidence frame not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return FileResponse(path, media_type="image/png")
+
+
 class ReferenceTemplateUpdate(BaseModel):
     name: Optional[str] = None
     category: Optional[str] = None
