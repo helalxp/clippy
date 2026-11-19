@@ -700,7 +700,7 @@ Interpretation:
 Documents added on the cleanup branch:
 - [Local runtime, service and data contract](./docs/architecture/clippy-v1-local-runtime-contract.md) — commit `4d82e8dc7f`.
 - [Local API extraction map](./docs/architecture/clippy-local-api-extraction-map.md) — commit `470ee573f9`.
-- [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — commit `172df8dd53`.
+- [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — latest update commit `9ae53de65e` (includes v0.3.1 release-asset hashes, runtime build method and temporary workflow-artifact expiry evidence).
 - [Hosted-service retirement preflight](./docs/compliance/clippy-hosted-service-retirement-preflight.md) — commit `edbd91db2d`.
 
 ### Phase 1 findings to carry forward
@@ -722,17 +722,19 @@ Documents added on the cleanup branch:
 | P1-13 | The Tauri supervisor inherits the parent environment and does not explicitly force `BILLING_ENABLED=0` or clear hosted/AWS credentials | High | Make desktop launch local-only and test against hostile/stale environment variables before any local backend extraction is accepted |
 | P1-14 | The current `/api/projects/{job_id}/restore` endpoint is cloud/R2-only; LocalLibraryTab has no equivalent reopen-to-generator API | Medium | Decide whether local project rehydration is required in v1; implement and test a local contract or state its limit explicitly |
 | P1-15 | `app.py` mixes the local generation/edit/Library/render API with hosted and deferred social, thumbnail, UGC, MCP and public website routes | High | Use the source-derived extraction map to separate responsibility groups and characterization tests before deleting any route/module |
+| P1-16 | The v0.3.1 release workflow builds and validates CPU/CUDA Python runtimes and publishes checksummed assets, but does not generate SBOMs or a packaged third-party notice/corresponding-source bundle | High | Add a release-gated SBOM, notices and source/provenance package after exact artifact contents are inventoried; do not mistake selected import/DLL checks for a full dependency or licence audit |
+| P1-17 | Temporary v0.3.1 GitHub Actions runtime artifacts (`14501871618` CPU, `14501866919` CUDA) expire 2026-11-21 at 05:23:26Z and 05:28:51Z respectively | Medium | Decide whether the exact workflow ZIPs are needed for audit evidence and preserve them before expiry only if required; published release assets and hashes are durable and are already recorded in the licence inventory |
 
 ### Phase 1 validation record
 
 - Documentation/source review only.
 - No product source, test, workflow, runtime or installer files were changed.
-- No CI run was started: changes are Markdown documentation only.
-- No Windows validation was started: no Windows runtime/installer source was changed.
+- No CI run was started: all changes are Markdown-only; no product source, test, runtime or workflow was changed.
+- No Windows validation was started because no Windows installer/runtime source was changed.
 - Structural verification: all four Phase 1 documents were fetched back from the cleanup branch and their headings/contents checked.
 - Source route review covered local generation, Library, editing, renderer, hosted billing/R2 lifecycle, social, Thumbnail Studio, SaaS Shorts/UGC, MCP, public website tools and S3 callers.
-- No CI run was started: all changes remain Markdown documentation only. No Windows validation was started because no Windows runtime/installer source was changed.
-- Artifact-level SBOM, exact CUDA DLL inventory, Chrome archive licence inspection, FFmpeg immutable asset pinning and corresponding-source packaging remain open.
+- The v0.3.1 release workflow metadata and tagged runtime/payload build scripts were inspected. Published asset hashes and temporary workflow artifact IDs/expiry are recorded in the licence inventory. The large runtime artifacts were not downloaded or unpacked.
+- Artifact-level SBOM, exact transitive wheel/npm/Rust inventory, full CUDA DLL redistribution mapping, Chrome archive notice inspection, FFmpeg immutable asset pinning, and corresponding-source packaging remain open.
 
 ### Phase 1 owner decisions blocking closure
 
