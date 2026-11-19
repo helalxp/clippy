@@ -40,7 +40,17 @@ jobs:
   validate-signing:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
+      # Each Actions job starts with an empty workspace. This job reads the tagged
+      # Tauri config and runs a validator stored in that exact tagged source.
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
       - name: Require Tauri updater signing credentials
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

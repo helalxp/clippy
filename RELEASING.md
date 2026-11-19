@@ -112,9 +112,11 @@ The published `v0.3.0` build predates updater support, so users on it must manua
 
 The first candidate, `v0.3.1-rc.1`, was not published: the Windows installer was generated, but Tauri rejected the updater public key because its outer Base64 value contained a newline. PR [#22](https://github.com/helalxp/clippy/pull/22) corrected the key formatting and added early public-key and private/public key-pair validation. Do not move or reuse the existing `v0.3.1-rc.1` tag.
 
-The next rollout target is `v0.3.1-rc.2`. Create the tag only after the canonical version and every synchronized manifest pass validation on the merged `main` commit:
+The second candidate, `v0.3.1-rc.2`, was also not published. Release workflow run [#15](https://github.com/helalxp/clippy/actions/runs/44424600295) failed in `validate-signing`: that job invoked the checked-in updater-key validator without first checking out the tagged repository, so the runner reported `MODULE_NOT_FOUND`. The signing secrets were present and the tools installed; public-key validation and private/public key-pair verification never ran. The correction checks out the exact triggering tag before reading repository files, limits that job's token to read-only contents access, and tests this workflow requirement in the backend test suite. The rejected `v0.3.1-rc.2` tag remains unchanged.
 
-1. Publish `v0.3.1-rc.2` as a prerelease and manually install it over an existing `v0.3.0` installation.
+The next rollout target is `v0.3.1-rc.3`. Create the tag only after the canonical version and every synchronized manifest pass validation on the merged `main` commit:
+
+1. Publish `v0.3.1-rc.3` as a prerelease and manually install it over an existing `v0.3.0` installation.
 2. Verify startup, user-data preservation, managed-runtime reuse, and updater operation.
 3. Publish stable `v0.3.1`; the prerelease installation should discover it through the stable-only `releases/latest` endpoint and install it in-app.
 
