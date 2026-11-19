@@ -47,3 +47,47 @@ def test_release_signing_job_checks_out_tagged_source_before_running_validator()
     assert positions["checkout_ref"] < positions["validator_name"] < positions["validator_command"], (
         "The tagged repository must be checked out before the updater-key validator reads files."
     )
+
+def test_release_signing_job_decodes_tauri_signature_before_minisign_verification():
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+
+    try:
+        job_start = lines.index("  validate-signing:")
+    except ValueError as exc:
+        raise AssertionError("Release workflow is missing the validate-signing job.") from exc
+
+    job_end = next(
+        (
+            index
+            for index in range(job_start + 1, len(lines))
+            if re.match(r"^  [A-Za-z0-9_-]+:$", lines[index])
+        ),
+        len(lines),
+    )
+    job_lines = lines[job_start:job_end]
+
+    required_lines = {
+        "signature_temp_file": '          minisign_signature="$(mktemp "$RUNNER_TEMP/clippy-updater-signature.XXXXXX")"',
+        "cleanup": """          trap 'rm -f "$probe" "$probe.sig" "$minisign_signature" "$public_key"' EXIT""",
+        "decode": '          base64 --decode "$probe.sig" > "$minisign_signature"',
+        "decoded_signature_check": '          test -s "$minisign_signature"',
+        "verify_decoded_signature": '          minisign -Vm "$probe" -p "$public_key" -x "$minisign_signature"',
+    }
+    positions = {}
+    for key, expected_line in required_lines.items():
+        try:
+            positions[key] = job_lines.index(expected_line)
+        except ValueError as exc:
+            raise AssertionError(
+                f"validate-signing must contain the required decoded-signature handling line: {expected_line}"
+            ) from exc
+
+    assert positions["signature_temp_file"] < positions["cleanup"]
+    assert positions["cleanup"] < positions["decode"] < positions["decoded_signature_check"]
+    assert positions["decoded_signature_check"] < positions["verify_decoded_signature"], (
+        "Minisign must verify the decoded signature document emitted by Tauri."
+    )
+    assert '          minisign -Vm "$probe" -p "$public_key" -x "$probe.sig"' not in job_lines, (
+        "Do not pass Tauri's outer Base64 .sig representation directly to Minisign."
+    )
