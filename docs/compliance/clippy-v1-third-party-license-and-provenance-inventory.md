@@ -126,7 +126,69 @@ The following cannot be certified from `requirements.txt` or a package name alon
 - The exact Gyan FFmpeg binary and linked-library build configuration actually present on installed machines.
 - The source and licence for any assets in addition to the fonts listed above.
 
-## 8. Evidence links
+## 8. v0.3.1 release-asset provenance evidence
+
+The published v0.3.1 release and its build workflow provide immutable metadata for the exact published runtime assets. This is useful provenance, but it does **not** replace unpacking the runtime and enumerating its actual contents.
+
+### 8.1 Build method confirmed from the tagged source
+
+The `v0.3.1` source shows:
+
+- `desktop/build-python-runtime.ps1` builds separate `cpu` and `cuda` packages from the official CPython 3.12.10 embeddable archive.
+- The CPython source archive hash is pinned in the builder as `4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3`.
+- Python dependencies are installed into the runtime from `requirements.txt` using PyPI plus either the PyTorch CPU wheel index or the `cu128` index.
+- The CUDA runtime asserts that the PyTorch build reports CUDA 12.8 and checks for `cublas64_12.dll`, `cudnn64_9.dll`, and `cudart64_12.dll` under `torch\\lib`.
+- The build script performs Python import, faster-whisper/PyAV decode, relocation, and selected CUDA runtime checks. It does not generate an SBOM, enumerate every packaged DLL, or collect licence/notice texts.
+- `desktop/prepare-payload.ps1` installs production npm dependencies using the checked-in lockfiles. It checks that the Remotion package set matches the renderer version. It does not generate an npm SBOM or a full third-party notice bundle.
+- The same payload script clones bgutil tag `1.3.2`, builds the Node server, copies `build/`, production `node_modules/` and `package.json`, then deletes the clone. It does not currently copy the original Node server source or its licence text into the payload.
+- The runtime contract pins Chrome Headless Shell `144.0.7559.20` and its archive/executable SHA-256 values, but those hashes are not a substitute for the archive's third-party notices.
+- The runtime contract calls FFmpeg `gyan-release-essentials`; setup downloads the moving `ffmpeg-release-essentials.zip` and separately fetches its moving checksum sidecar. No immutable FFmpeg version/hash is recorded in the runtime contract.
+
+### 8.2 Published v0.3.1 release assets
+
+Release: [Clippy v0.3.1](https://github.com/helalxp/clippy/releases/tag/v0.3.1)  
+Release workflow run: [44463950724](https://github.com/helalxp/clippy/actions/runs/44463950724), successful on tag commit `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`.
+
+| Asset | Size (bytes) | SHA-256 digest recorded by GitHub |
+|---|---:|---|
+| `clippy-python-cpu.zip` | 715,222,574 | `e6d36c3576b5ba72eaf3cdeaf28254717b40cbd10228ce680840a2fb679df446` |
+| `clippy-python-cpu.manifest.json` | 450 | `73cf2dc49b7f3b98cb22110bf7f9095f8778378f49099287ff44e2c9623c5675` |
+| `clippy-python-cuda.part001` | 1,879,048,192 | `172e3386361d55eb768efeaa97a64ae25e57138737c0a8968baf36008a424a95` |
+| `clippy-python-cuda.part002` | 1,479,727,952 | `b10681b60438de33d453997c05a579f0c64abc2d6971b4071f0588b2e6da6720` |
+| `clippy-python-cuda.manifest.json` | 630 | `7ee9ea3f59ad8588ea5e4ffbc9ff217b0855aa7e0f15c27db23234849eb7c744` |
+| `Clippy_0.3.1_x64-setup.exe` | 156,271,236 | `d8f1f0c15841f5949b325d0c2d3547ba1df42d6f725ea98ea1447fe34a52929b` |
+
+Additional per-asset checksum files and the signed `latest.json` updater manifest are published beside these assets. The release entry contains their names, sizes and digests.
+
+The release workflow also uploaded temporary GitHub Actions artifacts for the two runtime builds:
+
+| Workflow artifact | Artifact ID | Size (bytes) | GitHub artifact digest | Expires (UTC) |
+|---|---:|---:|---|---|
+| `clippy-python-runtime-cpu` | `14501871618` | 701,379,781 | `92845044243e0b12970134bbe7af8c16763f15527a1ca86d22254e17cf97c0fd` | 2026-11-21 05:23:26 |
+| `clippy-python-runtime-cuda` | `14501866919` | 3,342,142,703 | `f0713cf8d724badc4a799030b87f6337badca4b46639de05149b546d9897f8b8` | 2026-11-21 05:28:51 |
+
+These are temporary workflow artifacts, distinct from the published release assets. The workflow artifact digests identify the GitHub artifact ZIPs, not the reconstructed runtime payloads. Their expiry is about two days after the current inspection date. Preserve them only if there is an explicit audit need; do not confuse their existence or a successful build with licence clearance. The published release assets themselves remain the durable versioned distribution records.
+
+### 8.3 What this evidence does and does not prove
+
+Confirmed:
+- Exact published installer and runtime release-asset names, byte sizes, and GitHub SHA-256 digests.
+- Exact Python runtime source version, CPython source archive hash, CPU/CUDA PyTorch wheel indexes, and checked-in dependency requirements used by the tagged builder.
+- Selected CUDA DLL presence and CUDA kernel/device smoke checks in the build/setup validation path.
+- Exact Remotion/Chrome browser version and browser archive/executable hashes in the runtime contract.
+
+Not yet verified:
+- Complete file list and package metadata inside the actual CPU and CUDA archives.
+- Complete native DLL dependency tree and every NVIDIA component's corresponding CUDA/cuDNN redistribution term.
+- Exact Python wheel versions and licence expressions after resolver installation, including all transitive packages.
+- Actual browser archive licence/third-party notice files.
+- All production npm dependencies and Rust crate dependencies as packaged.
+- Exact FFmpeg release, archive hash and linked-library build configuration installed by the moving download URL.
+- A complete SBOM, third-party notice bundle, or corresponding-source bundle attached to this release.
+
+Do not download the large CPU/CUDA workflow artifacts merely to make this Markdown inventory look complete. A controlled artifact-inspection process should work from a preserved copy of the exact published assets, generate the SBOM/notices, and record its own tooling/version and output hashes. The current local untracked `desktop/runtime-dist/` directory is protected user data and must not be inspected, overwritten or used as a substitute without explicit approval.
+
+## 9. Evidence links
 
 The following upstream sources were checked during this Phase 1 inventory:
 
@@ -142,7 +204,7 @@ The following upstream sources were checked during this Phase 1 inventory:
 - [Anton OFL source](https://github.com/google/fonts/blob/main/ofl/anton/OFL.txt) and [Noto Serif OFL source](https://github.com/google/fonts/blob/main/ofl/notoserif/OFL.txt).
 - [Montserrat OFL project](https://github.com/JulietaUla/Montserrat).
 
-## 9. Decisions needed before Phase 1 can close
+## 10. Decisions needed before Phase 1 can close
 
 1. **Ultralytics:** should Clippy obtain an Enterprise licence for the existing YOLO detector, or should the team replace the Ultralytics code/model with a commercially compatible person-detection alternative? Treating the whole product as AGPL is a third legal route but requires an explicit project-wide licensing decision, not a dependency-level switch.
 2. **Remotion operator eligibility:** is the entity/team that owns and distributes Clippy an individual, a non-profit, or a for-profit organisation with three or fewer people, or does it exceed that threshold? The pinned v4.0.447 licence text and current official FAQ both make the applicable organisation/headcount relevant. If the embedded product arrangement is ambiguous, obtain written confirmation from Remotion.
