@@ -89,13 +89,16 @@ jobs:
         run: |
           set -euo pipefail
           probe="$(mktemp "$RUNNER_TEMP/clippy-updater-signing-probe.XXXXXX")"
+          minisign_signature="$(mktemp "$RUNNER_TEMP/clippy-updater-signature.XXXXXX")"
           public_key="$RUNNER_TEMP/clippy-updater.pub"
-          trap 'rm -f "$probe" "$probe.sig" "$public_key"' EXIT
+          trap 'rm -f "$probe" "$probe.sig" "$minisign_signature" "$public_key"' EXIT
 
           printf '%s\n' 'Clippy updater signing preflight' > "$probe"
           tauri signer sign --app-version 0.0.0 "$probe"
           test -s "$probe.sig"
-          minisign -Vm "$probe" -p "$public_key" -x "$probe.sig"
+          base64 --decode "$probe.sig" > "$minisign_signature"
+          test -s "$minisign_signature"
+          minisign -Vm "$probe" -p "$public_key" -x "$minisign_signature"
           echo "Tauri updater private key successfully signed a probe verified by the configured public key."
 
   build-python-runtimes:
