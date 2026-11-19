@@ -48,141 +48,117 @@ The product direction is a normal Windows application:
 
 ## 2. Repository identity and Git state
 
-- GitHub repository: `helalxp/clippy`
-- Public repository.
-- Default branch: `main`
-- Main is based on customized OpenShorts.
-- The inspected repository reports these branches:
+- GitHub repository: `helalxp/clippy`.
+- Public repository; `main` is the authoritative product branch.
+- Current stable release at this inspection: `v0.3.1` (published 2026-11-19).
+- Cleanup baseline: `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`.
+- Active task branch: `chore/master-cleanup-phase-0`, a short-lived documentation/planning branch created from that baseline. Its changes are not yet merged into main.
 
-| Branch | Relationship to main at inspection | Purpose / known contents |
-|---|---|---|
-| `main` | Default branch | Current committed OpenShorts-derived application and feature work. Docker Compose is still the documented full-stack workflow. |
-| `codex/new-ui` | Behind main; no unique commits ahead in the comparison | Earlier workspace UI work. The UI merge is already represented in main history. Treat this as a historical/possibly stale branch, not a separate active feature line. |
-| `codex/reference-templates` | Diverged from main; contains a unique reference-template feature commit | Reference-template library feature and related cleanup. Adds `reference_templates.py`, `dashboard/src/components/ReferenceTemplateLibrary.jsx`, a template asset/manifest, and tests; modifies `app.py`, `layout_picker.py`, and `dashboard/src/App.jsx`; removes several temporary patch files. |
-| `windows-native-migration` | Diverged from main; contains the native Windows migration and reference-template work | Native Windows compatibility and desktop migration line. Adds Tauri/Rust desktop scaffold, bootstrap/downloader/supervisor, local model settings, platform compatibility, renderer path/server changes, runtime manifest, tests, and `AGENTS.md`. Also includes reference-template work. |
+### Remote branch inventory
 
-Branch relationships above are qualitative summaries of GitHub branch comparisons on 2026-11-09. Exact ahead/behind counts are intentionally omitted because the documentation commits themselves change those counts. Re-run comparisons before any merge or release; branch tips move.
+Remote refs observed on 2026-11-19 included main, the cleanup branch, release preparation/versioning branches, feature branches for Library/templates/updater, and release/Whisper signing/version fixes. They are not all necessarily active or merge-ready. Inspect each branch's tip and compare it with current main before using it; branch existence is not evidence of current ownership or readiness.
 
-### Mainline history observed
-Recent main commits included:
-- `97981a2` — Merge Clippy workspace UI
-- `c260c6b` — feat: introduce clippy workspace UI
-- `414973c` — Apply Clippy feature updates
-- `e81d1f7` — Save current OpenShorts modifications
-- `0789262` — Initial commit of customized OpenShorts
+### Mainline release evidence
 
-These messages are orientation only. Inspect commit diffs for the exact behavior of any change.
+The v0.3.1 source baseline has successful recorded runs:
+- General CI: [run 44463861746](https://github.com/helalxp/clippy/actions/runs/44463861746).
+- Windows desktop validation: [run 44463861590](https://github.com/helalxp/clippy/actions/runs/44463861590).
+- Windows release workflow: [run 44463950724](https://github.com/helalxp/clippy/actions/runs/44463950724).
+
+These results apply to that immutable source baseline. They do not prove later commits pass, establish commercial licensing clearance, or prove every hardware/driver combination works.
 
 ### Branch handling rules
-- Never assume a branch is merged because its feature appears in another branch.
-- Before starting work, run `git status --short`, `git branch --show-current`, `git branch -avv`, `git remote -v`, and inspect recent commits.
-- Compare feature branches with main before cherry-picking or merging.
-- Do not force-push, reset, clean, or discard local changes without explicit approval.
-- Do not apply an old patch blindly. Run `git apply --check` first and reconcile local diffs.
-- When a feature branch is not merged, clearly identify it as branch-only in reports and docs.
 
----
+- Treat `main` as the authoritative product branch.
+- Create short-lived feature/fix branches from current main and return through pull requests.
+- The cleanup branch is a deliberate task-specific exception, not a permanent integration or release branch.
+- Never assume a feature branch is merged because its implementation appears elsewhere.
+- Inspect `git status --short`, branch, remotes, recent commits, and relevant diffs before local work.
+- Do not force-push, reset, clean, or discard local changes without explicit approval.
+- Do not apply old patch files blindly; inspect current source and run `git apply --check` first.
 
 ## 3. Architecture overview
 
-The current mainline application has five cooperating boundaries: Tauri desktop shell, React WebView, local FastAPI/processing engine, Node/Remotion renderer, and persistent local data/managed runtime. The detailed current contract is `docs/architecture/clippy-v1-local-runtime-contract.md`. The branch-specific notes below are retained as historical context where they differ.
+The current mainline application has five cooperating boundaries: Tauri desktop shell, React WebView, local FastAPI/processing engine, Node/Remotion renderer, and persistent local data/managed runtime. The detailed service, token, data, and update contract is `docs/architecture/clippy-v1-local-runtime-contract.md`.
 
 ### A. React/Vite dashboard
-Location: `dashboard/`
+Location: `dashboard/`.
 
 Responsibilities:
-- Main user interface and navigation.
-- Clip generation forms and job progress/results.
-- Clip result cards and editing workflows.
-- Settings and user-provided API keys.
-- Local model settings UI on the Windows migration branch.
-- Reference-template library UI on the reference-template branch and Windows migration branch.
-- Calls backend APIs through a configurable API base URL or Vite development proxy.
-- Uses Remotion-related browser/player packages for preview-related UI where implemented.
+- Main user interface, generation workflow, progress/results, clip cards and editing workflows.
+- Local Library and project detail, reference-template UI, local model settings, runtime/setup status, and in-app updater UI.
+- Calls the local backend using the API base URL supplied at runtime by Tauri.
+- Uses the per-launch token supplied by Tauri for local backend requests.
+- Includes several hosted/deferred feature components which are being isolated or deferred by the v1 cleanup; do not treat their presence in the source as approval to keep them in the v1 navigation.
 
-Main entry/configuration files observed:
-- `dashboard/package.json`: React 18, Vite, Tailwind, Remotion player/media packages, Mediabunny, Zod.
-- `dashboard/src/App.jsx`: large top-level dashboard composition and workflow state.
-- `dashboard/vite.config.js`: dev proxy configuration for backend and renderer.
-- `dashboard/src/components/`: feature components; inspect actual directory for current inventory.
-- `dashboard/build-desktop.ps1` on the native branch: desktop-specific build helper.
+Key files:
+- `dashboard/src/App.jsx`: large current top-level workflow/state composition; a planned refactor target.
+- `dashboard/src/components/DesktopRuntimeGate.jsx`: payload/runtime/service startup and local API token setup.
+- `dashboard/src/config.js`, `dashboard/src/lib/api.js`: local API/media URL behavior.
+- `dashboard/src/components/LocalLibraryTab.jsx`, `LocalModelSettings.jsx`, `ReferenceTemplateLibrary.jsx`: retained local v1 surfaces.
+- `dashboard/vite.config.js`: development proxy; its web-development topology is not the Tauri production service-address contract.
 
-The dashboard's Vite dev proxy on main defaults to Docker service names:
-- Backend: `http://backend:8000`
-- Renderer: `http://renderer:3100`
-
-The native migration changes this assumption for desktop builds and uses loopback URLs. Do not hard-code Docker hostnames into desktop production code.
-
-### B. Python/FastAPI backend
-Main files include:
-- `app.py`: FastAPI application, HTTP endpoints, job queue/admission, subprocess creation, job status, file delivery, editing APIs, optional cloud integration.
+### B. Python/FastAPI backend and processing engine
+Main files:
+- `app.py`: FastAPI API, request validation, job queue/admission, child-process startup, job state, media delivery, editing routes, Library routes, and still-mixed hosted/deferred routes.
 - `main.py`: command-line processing pipeline executed as a child process per job.
-- `requirements.txt`: Python runtime dependencies.
-- `llm_backend.py`: OpenAI-compatible local/remote LLM routing.
-- `s3_uploader.py`: S3-compatible artifact/gallery operations.
-- `recut.py`, `layout_ranges.py`, `watermarked.py`, `media_auth.py`: editing/delivery support modules imported by `app.py`.
-- Additional pipeline modules are described in the subsystem map below.
+- `local_library.py`: permanent local project/clip Library, deliberately separate from temporary job output.
+- `clippy_local_models.py`: Whisper model selection, download, validation, and settings integration.
+- `reference_templates.py`: retained local reference-template persistence/API.
+- `llm_backend.py`, `platform_compat.py`, `media_auth.py`, `security_utils.py`: local LLM, platform, media-auth, and security support.
+- `requirements.txt`: pinned direct Python runtime dependencies.
 
-Backend architecture:
-1. FastAPI accepts uploads/URLs and validates requests.
-2. A queue/admission layer controls concurrency and job lifecycle.
-3. Each processing job runs `main.py` as a separate subprocess.
-4. The parent backend passes a sanitized child environment. In the inspected main `app.py`, `CHILD_ENV_DENYLIST` removes sensitive cloud/server credentials before the pipeline process is launched.
-5. The child performs transcription, scene analysis, moment selection, clipping, reframing, and rendering-related work.
-6. Job metadata and artifacts are written to the job output directory.
-7. The API exposes job state, logs, clip URLs, and editing/publishing actions.
+Backend lifecycle:
+1. FastAPI validates an upload/URL request and creates a temporary job workspace.
+2. Queue/admission code controls job execution and recovery.
+3. A job runs `main.py` as a child process with a purpose-built environment.
+4. The child performs transcription, scene analysis, moment selection, clip extraction, reframing, captions/hooks, and supporting processing.
+5. The backend and renderer produce deliverable media; the local Library separately archives durable project/clip state.
+6. The API exposes job status/logs, source/clip media, editing operations, and exports.
 
-Do not move secrets into child-process environments. Do not weaken upload validation, path validation, ownership checks, or authentication to make a feature work.
+**Extraction caveat:** `app.py` still mixes local v1 endpoints with hosted SaaS and deferred social/thumbnail/UGC/MCP/website routes. A confirmed local-mode S3 artifact-upload path and inherited cloud-environment risk are blockers tracked in `CLIPPY_CLEANUP_MASTER.md`. Do not remove `s3_uploader.py` blindly: deferred gallery helpers share that module.
 
-### C. Node.js / Remotion render service
-Location: `render-service/`
+### C. Node.js / Remotion renderer
+Location: `render-service/` and `remotion/`.
 
 Responsibilities:
-- Server-side video rendering and Remotion composition.
-- Receives render requests from the backend.
-- Bundles/uses Remotion compositions and renders output files.
-- Serves a local render API and media paths.
+- Receives render jobs from the local backend via the supervisor-provided renderer URL.
+- Validates composition settings and local media paths.
+- Bundles/uses Remotion compositions and writes rendered output into the shared configured output root.
+- Authenticates render/media calls using the per-launch token when configured.
 
-Main files observed:
-- `render-service/package.json`: Node ESM package with Express, Remotion bundler/renderer, TypeScript, tsx, Zod.
-- `render-service/src/server.ts`: HTTP server and render endpoints.
-- `render-service/src/bundle.ts`: Remotion bundle preparation.
-- `render-service/src/render-worker.ts`: render execution worker.
-- `render-service/src/paths.ts`: native-branch path resolution and validation.
-- `render-service/src/paths.test.ts`: native-branch path tests.
-- `render-service/run.ps1`, `start.ps1`, `start-renderer.bat`: Windows launch helpers on the migration branch.
-- `render-service/NATIVE-WINDOWS.md`: native renderer notes on the migration branch.
+Key files:
+- `render-service/src/server.ts`: HTTP/render API and process-local render job state.
+- `render-service/src/auth.ts`, `auth.test.ts`: local render token contract.
+- `render-service/src/paths.ts`, `paths.test.ts`: output/media path mapping and validation.
+- `render-service/src/bundle.ts`, `render-worker.ts`: Remotion bundle/render execution.
+- `remotion/src/index.ts`: composition entrypoint.
 
-On main, Docker Compose maps host port `13100` to renderer container port `3100`; the renderer's `PORT` is `3100`. The dashboard proxy defaults to the Docker service name and port `3100`. On the native migration branch, renderer communication is being adapted to local loopback paths and managed output directories. Always inspect the checked-out branch's configuration before assuming ports or paths.
+Renderer job status is held in a process-local `Map` and is lost on renderer restart. Define the needed recovery semantics before adding persistence or a queue; Redis is not an automatic requirement.
 
-### D. Tauri desktop shell (current mainline)
-Location: `desktop/src-tauri/`
+### D. Tauri desktop shell
+Location: `desktop/src-tauri/`; technology: Tauri 2 + Rust.
 
-Technology: Tauri 2 + Rust.
+Responsibilities:
+- Own the Windows application window and native integration.
+- Install/validate/repair the managed runtime and application payload.
+- Supervise local backend/renderer processes and their health/shutdown.
+- Allocate dynamic loopback ports and mint/pass the per-launch API token.
+- Manage logs, folder selection/reveal, streamed downloads, updater lifecycle, and safe data-folder relocation.
 
-Responsibilities intended/implemented in the scaffold:
-- Native Windows application window using the existing dashboard.
-- Start, stop, and report status for the local backend and renderer.
-- Resolve managed runtime/application/data paths.
-- Bootstrap/check local services and capture logs.
-- Keep local services bound to loopback.
-- Separate install payload from persistent per-user data.
+Current core Rust modules:
+- `bootstrap.rs`: runtime validation/setup.
+- `supervisor.rs`: managed paths, child process startup/health/shutdown.
+- `data_storage.rs`: configured data root, staged copy, per-file SHA-256 verification and relocation.
+- `installation.rs`: installation locks and legacy reference-template migration.
+- `payload_update.rs`: application payload activation/commit/rollback.
+- `lib.rs`, `main.rs`: Tauri commands and app shell.
 
-Files observed on `windows-native-migration`:
-- `desktop/src-tauri/Cargo.toml`, `Cargo.lock`: Rust dependencies.
-- `desktop/src-tauri/tauri.conf.json`: Tauri app/build configuration.
-- `desktop/src-tauri/src/main.rs`, `lib.rs`: shell entrypoints.
-- `desktop/src-tauri/src/bootstrap.rs`: first-run/runtime bootstrap orchestration.
-- `desktop/src-tauri/src/downloader.rs`: download support.
-- `desktop/src-tauri/src/supervisor.rs`: local process supervision.
-- `desktop/src-tauri/capabilities/default.json`: Tauri capabilities.
-- `desktop/README.md`: scope and scaffold limitations.
-- `desktop/FIRST_RUN_SETUP_CONTRACT.md`: first-run setup contract.
-- `desktop/build.ps1`, `build-tauri.ps1`: Windows build helpers.
+### E. Persistent data and managed runtime
 
-**Current status:** this implementation is in `main` and ships in v0.3.1. See `desktop/FIRST_RUN_SETUP_CONTRACT.md`, `desktop/INSTALLER_UPDATE_ARCHITECTURE.md`, `desktop/runtime-contract.json`, and `docs/architecture/clippy-v1-local-runtime-contract.md` for the current runtime and updater contracts.
+Installation root: `%LOCALAPPDATA%\\Clippy`. Default data root: `%LOCALAPPDATA%\\Clippy\\data`; the native data-move flow can relocate it to an external absolute directory.
 
----
+Keep the replaceable app payload and runtime separate from persistent data. User projects, uploads, local Library deliverables, reference templates, model weights/caches, settings, and logs must survive application updates. The data relocation path is a verified staged copy/atomic-pointer/health-check operation; do not replace it with a simple folder copy.
 
 ## 4. End-to-end clip pipeline
 
@@ -197,8 +173,8 @@ The core clip-generation flow, as described in the existing project engineering 
 7. **Reframing/layout** — choose crop/layout behavior and render a vertical composition.
 8. **Enhancement** — subtitles, hooks, optional effects, dubbing, watermark/background operations where enabled.
 9. **Final render** — backend and/or Remotion render service produces deliverable media.
-10. **Persist and deliver** — metadata and files are saved under the job output area; optional S3/R2/cloud behavior depends on configuration.
-11. **Publish** — optional Upload-Post integrations distribute/schedule content.
+10. **Persist and deliver** — temporary files use the configured job output root; durable projects/clip deliverables are archived in the local Library. The current implicit local-mode S3 artifact upload is a cleanup/security defect, not an intended v1 backup contract.
+11. **Publish** — social publishing and scheduling are deferred for v1; do not present them as an active v1 workflow.
 
 Do not assume every step runs for every job. Input type, settings, environment variables, feature flags, billing mode, and branch affect the actual path.
 
@@ -242,7 +218,7 @@ Preserve:
 - Existing caption/hook settings and metadata contracts.
 
 ### Watermark and background editing
-The project has historical feature work and bug reports around:
+The project has preserved custom user editing features and also has historical hosted-delivery functionality. The following concerns must remain separate:
 - Watermark upload during advanced/raw-footage setup.
 - Post-generation watermark editing: PNG/WebP upload, preview, draggable position, size/position controls, and final burned-in render.
 - Background editing: blurred moving footage behind the clip or a selected solid color.
