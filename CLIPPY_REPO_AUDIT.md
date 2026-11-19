@@ -6,6 +6,7 @@
 > **Default branch:** `main`  
 > **Purpose:** Shared technical orientation and audit ledger for Claude Code, Codex, Gemini CLI, Hermes, and other engineering agents.  
 > **Status:** This is a continuing engineering handover, not a certified line-by-line audit of every tracked source file or every branch. The sections based on the November 9 snapshot are historical unless explicitly revalidated. The current Windows installer state and verified release/promotion evidence are recorded immediately below; source, tests, Git history, and current CI remain authoritative.
+> **Current guide and release notice (2026-11-19):** this file is a dated technical audit/findings ledger, not the canonical startup or engineering guide. Read [CLIPPY_MASTER.md](./CLIPPY_MASTER.md) for current project-wide instructions and [CLIPPY_CLEANUP_MASTER.md](./CLIPPY_CLEANUP_MASTER.md) for the active v1 cleanup phases/scope. The latest stable release is **v0.3.1**, published 2026-11-19; the v0.2.3 release section and older branch inventories below are historical records and are superseded where they conflict with current main/source/CI. Preserve this audit history, but revalidate every finding before acting on it.
 
 ## Current Windows installer release status (2026-11-17)
 

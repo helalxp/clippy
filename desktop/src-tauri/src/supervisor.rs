@@ -9,6 +9,85 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Values belonging to the inherited hosted service must never enter the
+// desktop backend or renderer process. Keep this list aligned with
+// clippy_runtime_mode.HOSTED_ENV_DENYLIST.
+const HOSTED_ENV_DENYLIST: &[&str] = &[
+    "DATABASE_URL",
+    "POSTGRES_URL",
+    "POSTGRES_HOST",
+    "POSTGRES_PORT",
+    "POSTGRES_DB",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "PGHOST",
+    "PGPORT",
+    "PGDATABASE",
+    "PGUSER",
+    "PGPASSWORD",
+    "REDIS_URL",
+    "JWT_SECRET",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_PUBLISHABLE_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_API_KEY",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "EMAIL_FROM",
+    "ADMIN_EMAIL",
+    "REVIEW_LOGIN_EMAIL",
+    "REVIEW_LOGIN_PASSWORD",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "OPENAI_APPS_CHALLENGE",
+    "FRONTEND_URL",
+    "PUBLIC_API_URL",
+    "ALLOWED_ORIGINS",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "AGENTLEDGER_API_URL",
+    "AGENTLEDGER_API_KEY",
+    "AGENTLEDGER_TREASURY_ID",
+    "MANAGED_GEMINI_API_KEY",
+    "MANAGED_UPLOAD_POST_API_KEY",
+    "OPENSHORTS_LOGO_URL",
+    "R2_ENDPOINT",
+    "R2_BUCKET",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_PUBLIC_BASE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_SECURITY_TOKEN",
+    "AWS_PROFILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_CONFIG_FILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_S3_BUCKET",
+    "AWS_S3_PUBLIC_BUCKET",
+    "AWS_ENDPOINT_URL",
+    "AWS_ENDPOINT_URL_S3",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_ACCOUNT_ID",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "OPENPANEL_CLIENT_SECRET",
+];
+
+fn apply_local_only_environment(command: &mut Command) {
+    command
+        .env("CLIPPY_DESKTOP_MODE", "1")
+        .env("BILLING_ENABLED", "0");
+    for name in HOSTED_ENV_DENYLIST {
+        command.env_remove(*name);
+    }
+}
+
 // Keep the backend, renderer, and every descendant in one Windows Job
 // Object. Windows closes the job handle when Clippy is force-terminated; the
 // KILL_ON_JOB_CLOSE limit then reaps uvicorn workers, ffmpeg, Chromium, and
@@ -459,7 +538,8 @@ impl Supervisor {
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
         let renderer_stdout = renderer_log.try_clone().map_err(|e| e.to_string())?;
-        let mut backend = Command::new(&paths.python)
+        let mut backend_command = Command::new(&paths.python);
+        backend_command
             .args([
                 "-m",
                 "uvicorn",
@@ -516,7 +596,9 @@ impl Supervisor {
             .env("REMOTION_BROWSER_EXECUTABLE", &paths.browser_executable)
             .env("HOST", BACKEND_HOST)
             .env("PORT", backend_port_arg.clone())
-            .env("CLIPPY_API_TOKEN", &api_token)
+            .env("CLIPPY_API_TOKEN", &api_token);
+        apply_local_only_environment(&mut backend_command);
+        let mut backend = backend_command
             .stdout(Stdio::from(
                 backend_log.try_clone().map_err(|e| e.to_string())?,
             ))
@@ -529,7 +611,8 @@ impl Supervisor {
             return Err(error);
         }
 
-        let renderer = Command::new(&paths.node)
+        let mut renderer_command = Command::new(&paths.node);
+        renderer_command
             .arg(
                 paths
                     .root
@@ -549,7 +632,9 @@ impl Supervisor {
             .env_remove("NPM_CONFIG_USERCONFIG")
             .env("PATH", &child_path)
             .env("REMOTION_BROWSER_EXECUTABLE", &paths.browser_executable)
-            .env("REMOTION_BUNDLE_PATH", paths.root.join("remotion"))
+            .env("REMOTION_BUNDLE_PATH", paths.root.join("remotion"));
+        apply_local_only_environment(&mut renderer_command);
+        let renderer = renderer_command
             .stdout(Stdio::from(renderer_stdout))
             .stderr(Stdio::from(renderer_log))
             .spawn();
@@ -777,12 +862,53 @@ fn stop_child(child: &mut Option<Child>) {
 
 #[cfg(test)]
 mod managed_path_tests {
-    use super::{managed_child_path, RuntimePaths};
+    use super::{
+        apply_local_only_environment, managed_child_path, RuntimePaths, HOSTED_ENV_DENYLIST,
+    };
     use std::{
         env, fs,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn local_backend_and_renderer_environment_is_fail_closed() {
+        use std::process::Command;
+
+        let mut command = Command::new("python");
+        command.env("BILLING_ENABLED", "true");
+        for name in HOSTED_ENV_DENYLIST {
+            command.env(*name, "must-not-reach-desktop");
+        }
+
+        apply_local_only_environment(&mut command);
+
+        let configured: std::collections::HashMap<String, Option<String>> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            configured.get("CLIPPY_DESKTOP_MODE"),
+            Some(&Some("1".to_string()))
+        );
+        assert_eq!(
+            configured.get("BILLING_ENABLED"),
+            Some(&Some("0".to_string()))
+        );
+        for name in HOSTED_ENV_DENYLIST {
+            assert_eq!(
+                configured.get(*name),
+                Some(&None),
+                "hosted variable {name} must be removed from desktop children"
+            );
+        }
+    }
 
     #[test]
     #[cfg(windows)]
