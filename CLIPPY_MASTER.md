@@ -381,9 +381,10 @@ clippy/
 - `requirements.txt`: Python dependencies.
 - `dashboard/package.json`: frontend dependencies and scripts.
 - `render-service/package.json`: renderer dependencies and scripts.
-- `docker-compose.yml`: main-branch Docker topology.
-- `runtime-manifest.json`: native-branch runtime provisioning metadata; verify schema and signatures/checksums.
-- `.env.example` / `.env`: configuration; never expose secret values.
+- `desktop/runtime-contract.json`: source-controlled versions and immutable browser hashes for managed runtime components.
+- `%LOCALAPPDATA%\\Clippy\\runtime-manifest.json`: per-user installed runtime state, written only after component validation.
+- `docker-compose.yml` and related Docker files: legacy tracked infrastructure scheduled for removal in cleanup Phase 4; not the v1 workflow.
+- `.env.example` / `.env`: legacy development/self-host configuration under review; do not treat it as a supported customer desktop configuration or expose secret values.
 - `.gitignore`: generated files, secrets, caches, local outputs.
 - GitHub Actions workflows: inspect `.github/workflows/` before changing CI assumptions.
 
@@ -394,20 +395,33 @@ clippy/
 Always inspect the checked-out branch and local modifications first. These are baseline commands; adjust for the current branch and installed tools.
 
 ### Legacy Docker development (not the v1 workflow)
-```powershell
-docker compose up --build
-docker compose ps
-docker compose logs -f backend
-docker compose logs -f frontend
-docker compose logs -f renderer
-```
-Typical main-branch endpoints:
-- Dashboard: `http://localhost:5175`
-- Backend: `http://localhost:8000`
-- Backend readiness: `http://localhost:8000/health/ready`
-- Renderer host mapping: `http://localhost:13100` to container port `3100`
 
-Do not assume those endpoints are used by native desktop builds.
+Docker/Compose instructions below the historical snapshot have been deliberately removed from this guide. Docker remains in the current tree only as legacy material until cleanup Phase 4. Do not use Docker or WSL2 as the desktop product architecture, and do not add new Docker-dependent application paths. The supported product build and packaging path is the Windows-native Tauri workflow documented in `desktop/README.md`, `desktop/FIRST_RUN_SETUP_CONTRACT.md`, and `desktop/INSTALLER_UPDATE_ARCHITECTURE.md`.
+
+### Windows native desktop build
+
+From the repository root in PowerShell:
+
+```powershell
+./desktop/validate-version.ps1
+./desktop/build.ps1
+```
+
+The build scripts resolve paths relative to the repository and produce a Windows NSIS installer. Development prerequisites include Rust/MSVC/Windows SDK, WebView2, Node.js/npm, Python 3.12.10, Git, NSIS, and the required PowerShell/Pester tooling. These are developer prerequisites, not end-user requirements.
+
+To run the desktop app during development:
+
+```powershell
+cd desktop/src-tauri
+cargo tauri dev
+```
+
+Use the following subsystem contracts for more detailed steps and runtime behavior:
+- `desktop/FIRST_RUN_SETUP_CONTRACT.md`
+- `desktop/INSTALLER_UPDATE_ARCHITECTURE.md`
+- `desktop/runtime-contract.json`
+- `docs/architecture/windows-installer-operations-runbook.md`
+- `docs/architecture/clippy-v1-local-runtime-contract.md`
 
 ### Python
 ```powershell
@@ -436,7 +450,7 @@ npm run dev
 ```
 Check actual scripts in `render-service/package.json`; test script names may differ by branch.
 
-### Tauri (native migration branch)
+### Tauri (current Windows desktop)
 Developer prerequisites include Rust stable/MSVC, Visual Studio C++ Build Tools/Windows SDK, WebView2, and Node.js. These are development prerequisites, not intended end-user prerequisites.
 ```powershell
 cd desktop/src-tauri
