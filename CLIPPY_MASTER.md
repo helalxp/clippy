@@ -471,8 +471,10 @@ Inside Docker, also verify the container can see the GPU. On native Windows, tes
 ## 9. Security, privacy, and data integrity
 
 - Never print, paste, commit, or include API keys, tokens, passwords, cookies, signing secrets, database URLs, or private customer data.
-- Do not place server secrets in child pipeline processes. Preserve the `child_env()` denylist/isolation design.
+- Do not broadly inherit database, Stripe, OAuth, cloud-storage, or other server secrets into pipeline child processes. Preserve the `child_env()` denylist/isolation design. The backend may pass a resolved provider key to the specific job that needs it, but must not place every provider secret into the global child environment.
 - Validate uploaded files, MIME/type/extension, size, and paths. Do not trust user-supplied filenames.
+- Never store provider API secrets in plaintext or reversible-obfuscation browser storage. Use the documented Windows Credential Manager contract and verified migration path.
+- Desktop mode must be explicitly local-only and make no silent S3/R2/cloud upload. Keep remote storage opt-in and separately approved.
 - Prevent path traversal and arbitrary local-file access.
 - Keep local backend/renderer bound to loopback by default. Do not expose local services to the LAN without an explicit product requirement and security design.
 - Validate remote webhook/download URLs against SSRF and private-network access.
@@ -531,18 +533,18 @@ These notes are useful leads, not assertions about today's working tree.
 - The project began as a fork/customization of `mutonby/openshorts`.
 - Main includes an earlier Clippy workspace UI merge and feature-update commit.
 - Feature work has included background editing, custom watermarking, caption/hook controls, and preview changes. Earlier reports found background/watermark output issues and corrupted/empty preview behavior. Reproduce before changing.
-- The native migration branch has a Tauri scaffold, Windows compatibility work, local model settings, and renderer path changes. It is not yet a confirmed production installer.
-- The reference-template feature is one commit ahead of main on `codex/reference-templates` and is also included in the native migration branch comparison.
-- The `codex/new-ui` branch is behind main and has no unique commits ahead according to the comparison at inspection time.
-- Main's README is still the upstream-style OpenShorts product/installation README and describes Docker as the self-host setup. It is not yet a complete Clippy native desktop user manual.
+- The November 9 audit snapshot described the native migration as a branch-only scaffold. That statement was superseded by its merge into main and the published v0.3.1 installer on November 19.
+- The reference-template feature is part of the current main baseline and is explicitly retained for v1; preserve its local data through upgrades and relocation.
+- Older `codex/new-ui`, `codex/reference-templates`, and `windows-native-migration` branch comparisons in the November 9 snapshot are historical. Inspect current remote refs and commit relationships before using any of those branches.
+- The current root README is Clippy-branded but still contains stale v0.2.3 release links and legacy Docker/self-host guidance. Those user-facing version/scope changes are tracked for the later documentation/identity cleanup phase.
 - Main's former `CLAUDE.md` and the native branch's former `AGENTS.md` contained overlapping agent guidance. Their durable project-level instructions have been consolidated here; those files are now short pointers to this master guide. Subsystem/product documents remain separate where they serve a distinct purpose.
 
 ### Required next audits
 1. Generate an exact tracked-file tree with `git ls-files` on each active branch.
 2. Inventory every Markdown file and classify it as product documentation, subsystem architecture, agent instructions, or historical notes.
-3. Reconcile `main`, `codex/reference-templates`, and `windows-native-migration` before deciding which branch becomes the release base.
+3. Inspect any remaining feature branches against current `main`; do not revive a historical branch as the release base without an explicit decision.
 4. Audit current feature wiring and tests for watermark, background, captions, hooks, reference templates, and preview/rendering.
-5. Finish native runtime/bootstrap and clean-machine packaging validation.
+5. For every new runtime/installer release, validate clean-machine setup, CPU/CUDA selection, payload activation/rollback, and user-data preservation against that release candidate.
 6. Update this file whenever architecture, branch status, build commands, runtime paths, or product decisions change.
 
 ---
