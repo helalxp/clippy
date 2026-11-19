@@ -114,9 +114,11 @@ The first candidate, `v0.3.1-rc.1`, was not published: the Windows installer was
 
 The second candidate, `v0.3.1-rc.2`, was also not published. Release workflow run [#15](https://github.com/helalxp/clippy/actions/runs/44424600295) failed in `validate-signing`: that job invoked the checked-in updater-key validator without first checking out the tagged repository, so the runner reported `MODULE_NOT_FOUND`. The signing secrets were present and the tools installed; public-key validation and private/public key-pair verification never ran. PR [#23](https://github.com/helalxp/clippy/pull/23) implements the fix and was merged into `main` on 2026-11-19 as commit `1399053006103c7aa796114d3a25cded81b7b88b`: the job checks out the exact triggering tag before reading repository files, limits that job's token to read-only contents access, and tests this workflow requirement in the backend test suite. The rejected `v0.3.1-rc.2` tag remains unchanged.
 
-The next rollout target is `v0.3.1-rc.3`. Create the tag only after the canonical version and every synchronized manifest pass validation on the merged `main` commit:
+The third candidate, `v0.3.1-rc.3`, was not published. Release workflow run [#16](https://github.com/helalxp/clippy/actions/runs/44429332589) failed in `validate-signing` because Tauri's Base64-encoded detached signature was passed directly to Minisign. PR [#24](https://github.com/helalxp/clippy/pull/24) corrected the signature decoding and added a workflow contract regression test; it was merged into `main` on 2026-11-19 as commit `a9ee1e179e69eec101b759e565534f3c7b9a80d5`. The unpublished `v0.3.1-rc.3` tag remains unchanged.
 
-1. Publish `v0.3.1-rc.3` as a prerelease and manually install it over an existing `v0.3.0` installation.
+The next rollout target is `v0.3.1-rc.4`. Create the tag only after the canonical version and every synchronized manifest pass validation on the merged `main` commit:
+
+1. Publish `v0.3.1-rc.4` as a prerelease and manually install it over an existing `v0.3.0` installation.
 2. Verify startup, user-data preservation, managed-runtime reuse, and updater operation.
 3. Publish stable `v0.3.1`; the prerelease installation should discover it through the stable-only `releases/latest` endpoint and install it in-app.
 
