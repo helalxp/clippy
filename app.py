@@ -30,15 +30,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
-from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
+from s3_uploader import list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
 import watermarked
 import media_auth
 import reference_templates
 from platform_compat import job_subprocess_options
+from clippy_runtime_mode import configure_desktop_environment, billing_enabled
 
 load_dotenv()
+# Desktop launches must remain local even when a stale .env or parent process
+# contains hosted billing, account, storage, or infrastructure configuration.
+configure_desktop_environment()
 
 # Constants
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
@@ -192,7 +196,7 @@ for _stream in (sys.stdout, sys.stderr):
 # All paid-mode code lives in the optional `cloud/` package and is imported ONLY
 # when BILLING_ENABLED is set. With the flag off, the app behaves exactly as the
 # self-hosted BYOK app does today (no extra dependencies required).
-BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes")
+BILLING_ENABLED = billing_enabled()
 
 # Job/file retention (issue #46). Self-host defaults to 24h: the 1h sweep kept
 # deleting finished projects under users who never touched their env, and the
@@ -2981,11 +2985,8 @@ async def run_job(job_id, job_data):
             # committed. The UI must not advertise completion before persistence.
             jobs[job_id]['logs'].append("Process finished successfully.")
             
-            # Self-host: silent AWS S3 backup. Cloud mode stores to R2 instead
-            # (see _archive_managed_job), so skip the redundant/paid AWS upload.
-            if not BILLING_ENABLED:
-                loop = asyncio.get_event_loop()
-                loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
+            # Job outputs stay local. Durable persistence is provided by
+            # local_library.py; desktop jobs never perform an implicit remote backup.
             
             # Find result JSON
             json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))

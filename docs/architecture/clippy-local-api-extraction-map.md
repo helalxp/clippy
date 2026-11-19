@@ -124,7 +124,9 @@ This is a confirmed data-boundary issue in the current source:
 
 On machines without AWS credentials, the helper usually returns without uploading. That does not make the path safe: if credentials are present in the inherited environment (or a local `.env` file is loaded), generated clips and JSON metadata are sent to S3. This contradicts the expected local-first delivery boundary.
 
-**Required Phase 2 fix:** remove this implicit upload from the Clippy desktop path, remove the unnecessary `s3_uploader` import from the core API, and make the desktop environment explicitly reject/clear AWS/cloud configuration. Do not replace this with another silent remote backup. Local Library persistence remains handled by `local_library.py`.
+**Implemented in the initial Phase 2 boundary-hardening change:** the `upload_job_artifacts` import and successful-job call were removed from `app.py`. Local job completion now keeps generated MP4/JSON artifacts in the local workspace; durable Library persistence remains owned by `local_library.py`. No replacement remote backup was added.
+
+Important dependency correction: `app.py` still imports the other `s3_uploader.py` gallery helpers because the deferred SaaS Shorts/UGC routes call them. Therefore the module, `boto3`, and those route call sites are **not** removed in this slice. They remain deferred-feature dependencies to isolate before Phase 3/6 removal. The local job completion path has no `upload_job_artifacts` import or call; a Python AST regression test guards this boundary.
 
 Before deleting `s3_uploader.py` or the `boto3` dependency, first isolate its deferred UGC gallery functions and prove there is no remaining local-v1 caller. A future publishing/UGC feature may choose its own explicit object storage, consent and credentials.
 
@@ -132,7 +134,9 @@ Before deleting `s3_uploader.py` or the `boto3` dependency, first isolate its de
 
 The Rust supervisor sets `CLIPPY_DESKTOP_MODE=1`, but it does not currently set `BILLING_ENABLED=0` or clear the hosted-service environment. The backend process inherits ambient environment values. A machine with stale `BILLING_ENABLED=true` can cause `app.py` to try importing the hosted `cloud/` package even though the desktop payload does not include that package.
 
-**Required Phase 2 fix:** the Tauri backend launch contract must explicitly run local-only, remove hosted credential/config variables, and have a startup assertion that desktop mode cannot initialize billing, hosted auth, cloud storage or managed keys. Test with hostile/stale environment variables set before launching the backend.
+**Implemented in the initial Phase 2 boundary-hardening change:** Tauri now applies one local-only environment policy to both backend and renderer child processes. It sets `CLIPPY_DESKTOP_MODE=1` and `BILLING_ENABLED=0`, and removes the enumerated hosted database, Stripe, SMTP, OAuth, managed-key, R2, AWS, Cloudflare, Supabase, OpenPanel and operational-alert configuration. The Python backend reapplies the same policy immediately after `load_dotenv()`, so a stale local `.env` cannot re-enable billing or restore removed hosted variables. Non-desktop launches retain the previous billing-flag semantics while the hosted code still exists.
+
+Regression coverage added: `tests/test_clippy_runtime_mode.py` exercises desktop fail-closed behavior, environment preservation for local provider keys, and non-desktop compatibility; the supervisor Rust unit test inspects the actual `Command` environment configuration. Windows CI is required to compile/run the Rust test.
 
 ### 5.3 Per-launch API security must remain independent of hosted accounts
 

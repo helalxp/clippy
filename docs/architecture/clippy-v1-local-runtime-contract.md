@@ -69,6 +69,14 @@ Do not remove or weaken:
 - Browser archive/executable hash validation.
 - Per-user installation and data-preservation behavior.
 
+### 3.4 Explicit local-only child-process environment
+
+The Tauri supervisor constructs the backend and renderer process environments explicitly for desktop mode. Both children receive `CLIPPY_DESKTOP_MODE=1` and `BILLING_ENABLED=0`. The supervisor removes inherited hosted-service configuration and credentials for database/PostgreSQL, Redis, JWT, Stripe, SMTP, hosted Google OAuth, managed provider keys, AgentLedger, R2, AWS S3, Cloudflare, Supabase, OpenPanel and hosted operational alerts.
+
+The backend calls `configure_desktop_environment()` immediately after loading dotenv. This second boundary matters because `.env` loading occurs inside Python after Tauri starts the process. Desktop mode therefore overrides stale `BILLING_ENABLED` values and strips hosted credentials even when they are supplied by a developer's local dotenv file. The policy preserves local provider configuration such as `GEMINI_API_KEY` and the Clippy-managed data/model paths.
+
+The per-launch `CLIPPY_API_TOKEN`, loopback binding, local data paths, managed runtime paths, and provider key explicitly supplied for a generation request remain part of the desktop contract. Do not remove these while removing the hosted identity model.
+
 ## 4. Local network and authentication contract
 
 ### 4.1 Binding and ports

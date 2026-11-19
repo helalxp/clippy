@@ -8,7 +8,7 @@
 > **Baseline commit:** `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`  
 > **Baseline date:** 2026-11-19  
 > **Application version at baseline:** `0.3.1`  
-> **Current status:** Phase 0 COMPLETE. Phase 1 is PARTIALLY COMPLETE: four architecture/compliance documents are committed; owner licensing/service decisions and artifact-level evidence remain open.
+> **Current status:** Phase 0 COMPLETE. Phase 1 remains PARTIALLY COMPLETE: architecture and preliminary provenance records are committed; the owner has now decided to retire the inherited hosted implementation, while YOLO/Remotion licensing and artifact-level evidence remain open. Phase 2 is IN PROGRESS with a first local-only runtime boundary change; no later phase has started.
 >
 > **Change policy:** This document is the cleanup process record, not blanket permission to delete or rewrite code. Each phase must be completed and verified before the next phase starts. Source, tests, configuration, Git history, and current CI outrank historical audit claims.
 
@@ -181,7 +181,7 @@ Exit criteria:
 
 ### Phase 1 — Architecture contract, licensing, provenance, and retirement preflight
 
-**Status: PARTIALLY COMPLETE — architecture and retirement preflight are documented; owner licensing/service decisions and artifact-level compliance verification remain open.**
+**Status: PARTIALLY COMPLETE — architecture and retirement preflight are documented; the owner has approved repository retirement of the old hosted implementation. YOLO/Remotion licensing decisions and artifact-level compliance evidence remain open.**
 
 Objectives:
 - Define and document the stable contracts between Tauri, frontend, FastAPI, processing, renderer, and persistent data.
@@ -216,7 +216,7 @@ Exit gate:
 
 ### Phase 2 — Local backend extraction and contract tests
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS — initial local-only runtime boundary hardening**
 
 Objectives:
 - Convert the current mixed backend into an explicitly local desktop API.
@@ -242,7 +242,7 @@ Exit gate:
 
 ### Phase 3 — Remove hosted SaaS and cloud-only infrastructure
 
-**Status: NOT STARTED**
+**Status: NOT STARTED — source removal remains gated on Phase 2 exit criteria**
 
 Objectives:
 - Remove the inherited hosted SaaS product only after Phase 2 has disconnected it safely.
@@ -255,8 +255,10 @@ Candidate removals, subject to Phase 2 reference proof:
 - Cloud-only environment variables and test fixtures.
 
 Safety requirements:
-- Do not delete external customer data, buckets, databases, subscriptions, OAuth grants, or accounts during Git cleanup.
-- Preserve any legally required operational records and data-export/deletion obligations.
+- The owner has explicitly decided that Clippy will not migrate or maintain continuity for the old service's accounts, subscriptions, OAuth grants, projects, or hosted data. Repository cleanup may remove the inherited source after Phase 2 proves the local boundary.
+- Removing repository files does not shut down external hosts, cancel provider accounts, revoke credentials, or delete provider-held data. Those actions are outside Git cleanup and must not be falsely reported as complete.
+- Do not repurpose old customer data for the new Clippy cloud implementation. Any statutory, accounting, contractual, or privacy retention obligations remain applicable even though product migration/export is not required.
+- Build any future Clippy cloud implementation independently. Do not copy, modify, or derive it from the separately licensed inherited `cloud/` implementation.
 - Keep local Library and custom user editing features.
 - Do not remove an entire shared module such as `s3_uploader.py` until its retained imports/callers are separated. The current `upload_job_artifacts()` caller is a local-mode path and must be explicitly removed from Clippy desktop before the S3 helper/dependency can be retired.
 
@@ -634,7 +636,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | P0-10 | Renderer process-local job map loses status on process restart | Medium | Define expected lifecycle/recovery before deciding whether persistence is needed |
 | P0-11 | Dashboard lint and renderer test/build coverage in CI is not yet established | Medium | Verify in detailed validation matrix; add coverage where needed |
 | P0-12 | Local checkout contains two untracked items (`desktop/runtime-dist/` and `untangle-audit.md`) | High | Both are protected local working-tree content; do not stage, overwrite, delete, clean, or treat them as generated cleanup targets without an explicit owner decision |
-| P0-13 | Current compliance/retention docs describe a hosted OpenShorts Cloud service, subprocessors, customer data, Stripe and R2/S3 retention | Critical | Verify live-service status and obtain an owner-approved export/retention/shutdown plan before hosted-source or external-infrastructure retirement |
+| P0-13 | Historical compliance/retention docs describe the inherited hosted OpenShorts Cloud service, subprocessors, customer data, Stripe and R2/S3 retention | Critical | Owner has authorized removal of the inherited hosted source from Clippy and does not require product continuity or migration. External infrastructure shutdown and any mandatory record-retention duties remain separate from repository deletion. |
 
 ### 6.10 Phase 0 completion checklist
 
@@ -662,9 +664,9 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | Phase | Status | Summary |
 |---|---|---|
 | 0 — Baseline and repository map | COMPLETE | Main `61edcd5`, v0.3.1, architecture/inventory, CI/release evidence, risks and drift recorded; local branch and protected untracked paths confirmed. The local branch now needs to pull the newer Phase 1 documentation commits. |
-| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Four Phase 1 architecture/compliance documents and the canonical guide hierarchy are committed. The local S3 upload path and inherited environment risks are recorded for Phase 2. Owner decisions on Ultralytics, Remotion eligibility and hosted-service status, plus artifact-level licence/hash/source verification, remain before Phase 1 can close. |
-| 2 — Local backend extraction | NOT STARTED | Depends on Phase 1 contracts and safety review. |
-| 3 — Remove hosted SaaS | NOT STARTED | Depends on Phase 2. |
+| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Architecture/runtime/API boundaries and preliminary provenance are documented. Owner has directed retirement of the old hosted implementation and independent clean-room development for any future cloud service. YOLO/Remotion licensing and artifact-level licence/hash/source verification remain open release-clearance items. |
+| 2 — Local backend extraction | IN PROGRESS | Initial slice makes Tauri backend/renderer local-only, strips inherited hosted configuration after dotenv loading, removes the implicit S3 job-artifact upload, and adds Python/Rust regression tests. Phase 2 exit criteria are not yet met. |
+| 3 — Remove hosted SaaS | NOT STARTED | Remove the inherited hosted implementation only after Phase 2 local contracts, API dependencies, and tests prove it is disconnected. Owner does not require hosted account/data continuity for Clippy. |
 | 4 — Remove Docker | NOT STARTED | Depends on verified native workflow and Phase 2/3 disconnection. |
 | 5 — Engineering untangling | NOT STARTED | Focused refactoring with regression coverage. |
 | 6 — Deferred features | NOT STARTED | Four handoff docs and Under investigation UI states. |
@@ -758,3 +760,44 @@ Documents and guide updates committed on the cleanup branch:
 **Validation policy:** Follow the minimum-CI policy above; focused checks first. Windows validation is launched only when required, and its link is handed to the owner without continuous polling.
 
 **Next:** close the remaining Phase 1 evidence/owner gates. Phase 2 source work must not start until the required licence, runtime provenance, and hosted-service owner decisions are recorded; the confirmed S3/environment findings must be addressed first in the Phase 2 design.
+
+---
+
+## Phase 2 work log — initial local-only boundary hardening (2026-11-19)
+
+**Starting branch head:** `c71f91a18f2cdffdb6335416680be0c16f775c85` (`chore/master-cleanup-phase-0`).  
+**Scope:** first bounded Phase 2 slice only. No Phase 3 source-tree deletion, Docker removal, UI redesign, or unrelated refactor.
+
+### Owner direction recorded
+
+The owner confirmed that the inherited hosted OpenShorts implementation is to be removed from the Clippy repository after its desktop dependencies are disconnected. No continuity, account/subscription/OAuth migration, or customer-project migration is required for Clippy. Any future Clippy cloud service must be independently designed and implemented, without copying or deriving from the separately licensed inherited `cloud/` source. This does not itself shut down external provider infrastructure or override mandatory legal/accounting retention duties.
+
+### Changes in this slice
+
+- Added `clippy_runtime_mode.py`, a dependency-free runtime policy that forces `BILLING_ENABLED=0` in desktop mode and removes enumerated hosted-service configuration after dotenv loading.
+- Changed `app.py` to apply that policy immediately after `load_dotenv()` and to derive billing mode through the fail-closed helper.
+- Removed the `upload_job_artifacts` import and call from the successful local job path. Local job artifacts remain local; the permanent Library remains the durable local archive.
+- Kept the remaining `s3_uploader.py` functions and `boto3` dependency for now because the deferred UGC/SaaS Shorts endpoints still reference gallery functions. This shared dependency must be isolated before it can be deleted.
+- Changed the Tauri supervisor to apply the same local-only environment policy to both backend and renderer child processes, including explicit `CLIPPY_DESKTOP_MODE=1`, `BILLING_ENABLED=0`, and removal of hosted database/Stripe/SMTP/OAuth/managed-key/R2/AWS/Cloudflare/Supabase/OpenPanel/operations configuration.
+- Added Python tests for desktop-mode fail-closed behavior, hosted-variable removal, preservation of local provider/data settings, non-desktop compatibility, and absence of the job-artifact uploader from `app.py`.
+- Added a Rust unit test that inspects the actual backend/renderer `Command` environment policy.
+
+### Files changed
+
+- `app.py`
+- `clippy_runtime_mode.py` (new)
+- `tests/test_clippy_runtime_mode.py` (new)
+- `desktop/src-tauri/src/supervisor.rs`
+- `docs/architecture/clippy-local-api-extraction-map.md`
+- `docs/architecture/clippy-v1-local-runtime-contract.md`
+- `docs/compliance/clippy-hosted-service-retirement-preflight.md`
+- `CLIPPY_CLEANUP_MASTER.md`
+
+### Validation and remaining work
+
+- Source-level transformation checks: passed before commit (expected code anchors found exactly once; upload import/call absent from transformed `app.py`; both Tauri child commands receive the policy).
+- Python regression tests and Rust unit test: added, not yet executed in the product repository.
+- CI and Windows desktop validation: pending a pull request run. The Rust supervisor change requires Windows validation; no Windows pass is claimed here.
+- No full generation/render/Library end-to-end workflow has been run in this environment.
+- The hosted source tree, billing dependencies, cloud routers, Docker files, analytics, and deferred-feature implementation remain untouched in this slice.
+- Phase 1 remains PARTIALLY COMPLETE because the YOLO/Remotion licence decisions and artifact-level provenance checks remain unresolved. Do not declare the product release-ready or advance to Phase 3 while Phase 2 is still in progress.

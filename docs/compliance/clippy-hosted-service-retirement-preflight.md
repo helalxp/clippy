@@ -1,9 +1,22 @@
 # Hosted OpenShorts Service Retirement Preflight
 
-> **Status:** Open; external service status requires owner confirmation.  
+> **Status:** Owner has authorized retirement of the inherited hosted implementation from the Clippy repository. Repository source removal is gated on Phase 2 disconnection. External infrastructure shutdown remains a separate operational action.  
 > **Last repository inspection:** 2026-11-19.  
 > **Source baseline:** `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`.  
 > **Scope:** Separate the repository's Clippy v1 desktop extraction from the retirement of any existing OpenShorts Cloud service or its user data.
+
+## Owner decision recorded (2026-11-19)
+
+The product owner has explicitly decided:
+
+- The inherited OpenShorts hosted implementation is not part of Clippy's future product architecture and should be removed from the Clippy repository after the local desktop boundary is extracted and verified.
+- No continuity, account migration, subscription migration, OAuth-grant migration, customer-project export, or hosted-data migration is required for the Clippy product.
+- The future Clippy cloud service will be designed and implemented independently, on the owner's terms. The new implementation must not copy, modify, or derive from the separately licensed `cloud/` implementation.
+- The old cloud source is not to be retained as a foundation or reference implementation for the future service.
+
+This is an owner decision about product scope and repository cleanup. It does not itself shut down an external host, cancel a payment-provider agreement, revoke a third-party credential, or delete data held by an external provider. A Git deletion cannot perform those provider-side actions. Any mandatory statutory, accounting, privacy, contract, or data-retention duties remain applicable even though Clippy will not migrate the old service's data or accounts. No customer data or secrets are to be copied into the new Clippy implementation.
+
+The existing `cloud/LICENSE` identifies the old `cloud/` tree as OpenShorts Commercial Software, not covered by the root MIT licence. The clean-room boundary above avoids depending on a right to redistribute or offer a derivative hosted service from that code. The old directory will be removed from the working tree in Phase 3 after all Clippy desktop imports and runtime dependencies are disconnected. This cleanup does not rewrite historical Git commits.
 
 ## 1. Why this preflight exists
 
@@ -109,33 +122,26 @@ A Git commit deleting `cloud/` or a Docker Compose file does not stop a host, re
 
 ## 6. Owner verification checklist
 
-The service owner must answer these before Phase 3's destructive hosted-code removal is approved:
+The product-owner decision above closes the **Clippy product-continuity decision**: no migration or preservation of the old hosted product is required for the future Clippy architecture. The following are external operational facts, not prerequisites for removing the old source code from the Clippy repository. They remain explicitly unverified and are not performed by repository commits:
 
-- [ ] Is `openshorts.app` / OpenShorts Cloud still live or accepting users?
-- [ ] Are any accounts, paid/free subscriptions, outstanding invoices or refunds still active?
-- [ ] Is any customer project/media data still held in PostgreSQL, R2, S3, server disks, snapshots or backups?
-- [ ] Are production Hetzner/Contabo hosts or other hosting environments still running?
-- [ ] Is the PostgreSQL backup job installed, scheduled and successfully restorable? Where is its recovery key held?
-- [ ] Are Stripe webhooks, Google OAuth callbacks, SMTP, Upload-Post, Gemini, ElevenLabs, fal.ai, proxies, OpenPanel, Telegram and Cloudflare credentials still in active use?
-- [ ] Does the existing privacy policy/subprocessor register still describe a live service, or has a closure/transfer notice already been issued?
-- [ ] What customer notice, export, account closure, subscription cancellation, data deletion and legal retention process is required?
-- [ ] Who is authorised to approve and execute provider shutdowns and final data deletion?
+- Whether any OpenShorts hosts, databases, object-store buckets, DNS records, or provider accounts still exist.
+- Whether any legal/accounting records or personal-data copies must remain under a statutory or contractual retention rule.
+- Whether third-party provider subscriptions, credentials, and OAuth clients still need provider-side cancellation/revocation.
 
-Answers should be recorded without publishing secrets, customer identifiers or personal data in this repository.
+The owner has authorised deleting the inherited hosted implementation from the repository after Phase 2 disconnects it. Do not represent external account/data deletion as complete merely because source files are removed. Do not preserve old customer data for use in the new Clippy cloud service.
 
 ## 7. Phase gates
 
 ### Before Phase 2 backend extraction
-- Identify which hosted systems and service contracts are genuinely active.
-- Preserve an auditable copy of the current cloud/service source and historical operational documentation.
-- Keep cloud deletion out of scope while the local API separation is underway.
+- The local API/runtime/data contracts and shared-code dependency boundaries are documented.
+- The product owner's retirement decision is recorded.
+- Do not copy any old hosted customer data or restricted cloud implementation into the new product.
 
 ### Before Phase 3 hosted-source removal
 - Local API behavior is extracted and tested.
-- The owner confirms the live-service state.
-- If a hosted service exists, its customer/data/retention transition is completed or has a separately approved schedule and owner.
-- Historical legal/operational records are archived appropriately.
-- No cloud-only dependency remains in the packaged Clippy desktop workflow.
+- No Clippy desktop import, route, frontend caller, workflow, test, or runtime package depends on the old hosted subsystem.
+- The new local-only runtime has passed focused and Windows validation.
+- Required historical legal/operational records are retained in their proper recordkeeping location; no customer data is repurposed for the new service.
 
 ### Before external infrastructure shutdown
 - Customer and legal obligations are satisfied.
