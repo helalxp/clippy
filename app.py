@@ -37,6 +37,7 @@ import watermarked
 import media_auth
 import reference_templates
 from platform_compat import job_subprocess_options
+from community_highlights.api import router as community_highlights_router
 
 load_dotenv()
 
@@ -2548,6 +2549,7 @@ async def lifespan(app: FastAPI):
     # Cleanup (optional: cancel worker)
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(community_highlights_router)
 
 # Cloud mode: attach middleware + routers at import time (before the app serves).
 if BILLING_ENABLED:

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, FolderOpen, Menu, Lock, Rocket } from 'lucide-react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, FolderOpen, Menu, Lock, Rocket, MessageCircle } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import LocalModelSettings from './components/LocalModelSettings';
 import DesktopUpdaterCard from './components/DesktopUpdaterCard';
@@ -29,6 +29,8 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import ReferenceTemplateLibrary from './components/ReferenceTemplateLibrary';
 import AutopilotTab from './components/AutopilotTab';
+import CommunityHighlightsConnections from './components/CommunityHighlightsConnections';
+import CommunityHighlightsMonitor from './components/CommunityHighlightsMonitor';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
@@ -1309,12 +1311,13 @@ function App() {
     { id: 'history', ord: '03', icon: History, label: 'Library & History', short: 'library', section: 'Workspace' },
     { id: 'editor', ord: '04', icon: Terminal, label: 'Clip Editor', short: 'editor', section: 'Workspace' },
     { id: 'publishing', ord: '05', icon: Share2, label: 'Publishing Studio', short: 'publish', section: 'Workspace' },
-    { id: 'thumbnails', ord: '06', icon: Image, label: 'Thumbnail Studio', short: 'thumbnails', primary: true, section: 'Creative Tools' },
-    { id: 'saasshorts', ord: '07', icon: Sparkles, label: 'AI Shorts / UGC', short: 'ai shorts', byok: true, primary: true, section: 'Creative Tools' },
-    { id: 'ugc-gallery', ord: '08', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', section: 'Creative Tools' },
-    ...(billingEnabled ? [{ id: 'autopilot', ord: '09', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true, section: 'Creative Tools' }] : []),
-    { id: 'ai-agent', ord: '10', icon: Bot, label: 'AI Agents', short: 'agents', byok: true, section: 'Automation' },
-    { id: 'settings', ord: '11', icon: Settings, label: 'Settings & Integrations', short: 'settings', section: 'Automation' },
+    { id: 'community-highlights', ord: '06', icon: MessageCircle, label: 'Community Highlights', short: 'highlights', isNew: true, section: 'Workspace' },
+    { id: 'thumbnails', ord: '07', icon: Image, label: 'Thumbnail Studio', short: 'thumbnails', primary: true, section: 'Creative Tools' },
+    { id: 'saasshorts', ord: '08', icon: Sparkles, label: 'AI Shorts / UGC', short: 'ai shorts', byok: true, primary: true, section: 'Creative Tools' },
+    { id: 'ugc-gallery', ord: '09', icon: LayoutGrid, label: 'UGC Gallery', short: 'gallery', section: 'Creative Tools' },
+    ...(billingEnabled ? [{ id: 'autopilot', ord: '10', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true, section: 'Creative Tools' }] : []),
+    { id: 'ai-agent', ord: '11', icon: Bot, label: 'AI Agents', short: 'agents', byok: true, section: 'Automation' },
+    { id: 'settings', ord: '12', icon: Settings, label: 'Settings & Integrations', short: 'settings', section: 'Automation' },
   ];
   const navGroups = ['Workspace', 'Creative Tools', 'Automation'];
   const activeNav = navItems.find((n) => n.id === activeTab);
@@ -1668,6 +1671,35 @@ function App() {
         {/* Main Workspace */}
         <div className="flex-1 overflow-hidden relative">
 
+          {/* View: Community Highlights */}
+          {activeTab === 'community-highlights' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
+              <div className="max-w-4xl mx-auto space-y-7">
+                <div className="space-y-2">
+                  <p className="eyebrow flex items-center gap-2"><MessageCircle size={12} /> 12 · COMMUNITY HIGHLIGHTS</p>
+                  <h1 className="font-display lowercase text-3xl md:text-4xl text-ink">Community Highlights</h1>
+                  <p className="text-sm sm:text-base text-muted leading-relaxed max-w-2xl">
+                    Turn the moments your live chat reacts to into clips. Connect your streaming account, then monitor a live chat. Recording and highlight capture are still in development.
+                  </p>
+                </div>
+                <CommunityHighlightsConnections />
+                <CommunityHighlightsMonitor />
+                <div className="rounded-card border border-rule bg-paper2 p-5 sm:p-6">
+                  <div className="flex items-center gap-2 mb-2 text-ink2">
+                    <Activity size={16} className="text-brass" />
+                    <h2 className="font-medium">How it will work</h2>
+                  </div>
+                  <ol className="space-y-2 text-sm text-muted leading-relaxed list-decimal pl-5">
+                    <li>Paste a Twitch or YouTube live stream link.</li>
+                    <li>Choose the chat reactions and phrases that should trigger a highlight.</li>
+                    <li>Clippy keeps a rolling footage buffer and captures the moments around each trigger.</li>
+                    <li>Review, trim, and approve the highlights, or enable automatic processing.</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* View: Settings */}
           {activeTab === 'settings' && (
             <div className="h-full overflow-y-auto p-4 sm:p-8 max-w-2xl mx-auto animate-fade">
@@ -1680,6 +1712,7 @@ function App() {
                   <Shield size={12} className="text-ok shrink-0" /> Privacy: keys only live in your browser (sent to backend just to process)
                 </div>
               </div>
+              <CommunityHighlightsConnections compact />
               <DesktopUpdaterCard />
               {/* Local desktop installs manage their one-time runtime setup separately
                   from optional model weights. Cloud accounts do not expose local paths. */}
