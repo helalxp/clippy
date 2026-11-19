@@ -30,7 +30,7 @@ def test_release_signing_job_checks_out_tagged_source_before_running_validator()
     required_lines = {
         "checkout_name": "      - name: Check out tagged source",
         "checkout_action": "        uses: actions/checkout@v4",
-        "checkout_ref": "          ref: \${{ github.ref }}",
+        "checkout_ref": "          ref: ${{ github.ref }}",
         "validator_name": "      - name: Validate configured updater public key",
         "validator_command": '        run: node desktop/validate-updater-signing-key.mjs "$RUNNER_TEMP/clippy-updater.pub"',
     }
