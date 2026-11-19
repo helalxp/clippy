@@ -538,7 +538,8 @@ impl Supervisor {
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
         let renderer_stdout = renderer_log.try_clone().map_err(|e| e.to_string())?;
-        let mut backend_command = Command::new(&paths.python)
+        let mut backend_command = Command::new(&paths.python);
+        backend_command
             .args([
                 "-m",
                 "uvicorn",
@@ -610,7 +611,8 @@ impl Supervisor {
             return Err(error);
         }
 
-        let mut renderer_command = Command::new(&paths.node)
+        let mut renderer_command = Command::new(&paths.node);
+        renderer_command
             .arg(
                 paths
                     .root

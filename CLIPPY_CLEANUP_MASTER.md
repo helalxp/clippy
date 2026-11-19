@@ -796,8 +796,9 @@ The owner confirmed that the inherited hosted OpenShorts implementation is to be
 ### Validation and remaining work
 
 - Source-level transformation checks: passed before commit (expected code anchors found exactly once; upload import/call absent from transformed `app.py`; both Tauri child commands receive the policy).
-- Python regression tests and Rust unit test: added, not yet executed in the product repository.
-- CI and Windows desktop validation: pending a pull request run. The Rust supervisor change requires Windows validation; no Windows pass is claimed here.
+- Linux CI run [44596209153](https://github.com/helalxp/clippy/actions/runs/44596209153): SUCCESS. The full `pytest tests/` backend test suite passed, including the new runtime-mode regression tests; the dashboard production build passed.
+- First Windows desktop validation run [44596209019](https://github.com/helalxp/clippy/actions/runs/44596209019): FAILED at `cargo check`. Payload preparation, all 19 Pester runtime/payload tests, and Python `compileall` passed. Rust reported E0716 (temporary value dropped while borrowed) at the backend and renderer `Command::new(...).builder()` bindings in `supervisor.rs`; the tests and NSIS installer stages were skipped.
+- Root cause: `Command::args/.env` return a mutable reference. Assigning the chained reference returned from `Command::new(...)` to a local variable borrowed a temporary. The correction binds each owned `Command` first, configures it in a separate statement chain, then applies the local-only environment helper. This is a source fix, not a CI workaround. A second Windows validation run is required to prove it.
 - No full generation/render/Library end-to-end workflow has been run in this environment.
 - The hosted source tree, billing dependencies, cloud routers, Docker files, analytics, and deferred-feature implementation remain untouched in this slice.
 - Phase 1 remains PARTIALLY COMPLETE because the YOLO/Remotion licence decisions and artifact-level provenance checks remain unresolved. Do not declare the product release-ready or advance to Phase 3 while Phase 2 is still in progress.
