@@ -8,7 +8,7 @@
 > **Baseline commit:** `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`  
 > **Baseline date:** 2026-11-19  
 > **Application version at baseline:** `0.3.1`  
-> **Current status:** Phase 0 remote-repository baseline complete; local-checkout confirmation remains outstanding.
+> **Current status:** Phase 0 COMPLETE. Local checkout confirmed on `chore/master-cleanup-phase-0`; Phase 1 is IN PROGRESS.
 >
 > **Change policy:** This document is the cleanup process record, not blanket permission to delete or rewrite code. Each phase must be completed and verified before the next phase starts. Source, tests, configuration, Git history, and current CI outrank historical audit claims.
 
@@ -40,6 +40,19 @@ At the end of each phase, before advancing:
 7. Verify the document is committed on the cleanup branch.
 
 A phase is **complete** only when its exit criteria are met and the evidence is recorded here. If a required check is blocked, mark the phase **blocked** or **partially complete**, not complete.
+
+### Validation-efficiency policy
+
+The product owner requests that CI and Windows validation be kept to the minimum necessary without weakening release safety.
+
+- Prefer focused tests, static checks, and narrow builds for the specific files/contracts changed.
+- Do not run full CI for documentation-only changes or unrelated low-risk edits.
+- Run the full Linux CI suite at meaningful integration/phase gates or when a change spans enough surfaces that focused tests are not sufficient.
+- Run Windows desktop validation when a change affects Tauri/Rust, PowerShell setup, managed runtimes, installer/updater behavior, Windows path/process behavior, or a phase/release gate that depends on the packaged desktop.
+- Do not repeatedly run the same Windows workflow for unchanged code.
+- When Windows validation is needed, start it and provide the Actions URL to the product owner. Do not continuously poll or wait for completion; the owner will report the result. Record the run and its result in this file when supplied.
+- A running workflow is not a passed workflow. Do not advance past a gate that requires its result until the owner reports it.
+- Do not reduce or skip tests that directly cover changed behavior, data safety, security boundaries, or release contracts merely to save CI time.
 
 ### Status vocabulary
 
@@ -144,7 +157,7 @@ The sequence is intentional. Do not reorder destructive work ahead of the depend
 
 ### Phase 0 — Current-state baseline and repository map
 
-**Status: COMPLETE for the remote GitHub baseline; local checkout confirmation outstanding.**
+**Status: COMPLETE.**
 
 Objectives:
 - Inspect the actual current default-branch commit, version, tree, recent history, and release/CI state.
@@ -610,7 +623,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | P0-09 | Renderer token behavior depends on desktop token being configured; no-token mode intentionally skips token checks | High | Preserve supervisor token injection; add/retain explicit security tests during Phase 2/5 |
 | P0-10 | Renderer process-local job map loses status on process restart | Medium | Define expected lifecycle/recovery before deciding whether persistence is needed |
 | P0-11 | Dashboard lint and renderer test/build coverage in CI is not yet established | Medium | Verify in detailed validation matrix; add coverage where needed |
-| P0-12 | Local Windows checkout/worktree state has not been inspected from this session | High | Owner must confirm branch and working tree before local checkout or source editing |
+| P0-12 | Local checkout contains two untracked items (`desktop/runtime-dist/` and `untangle-audit.md`) | High | Both are protected local working-tree content; do not stage, overwrite, delete, clean, or treat them as generated cleanup targets without an explicit owner decision |
 
 ### 6.10 Phase 0 completion checklist
 
@@ -627,7 +640,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 - [ ] Confirm the user's local `D:\openshorts` current branch, remotes, and `git status --short`. This session can inspect and modify the GitHub repository but cannot read the user's Windows working tree.
 - [ ] After the cleanup branch is checked out locally, confirm that its HEAD contains this ledger and that there are no unexpected local modifications before any source editing.
 
-**Phase 0 result:** the remote source baseline and its current CI/release state are documented. No application source, tests, runtime scripts, workflows, or product behavior have been changed. The only repository change in this phase is this master cleanup document. The two local-checkout confirmation items above remain an owner-side preflight; no destructive operation is authorized by them.
+**Phase 0 result:** remote source baseline and CI/release evidence are documented; the owner confirmed the local cleanup branch and matching HEAD. The only repository change in Phase 0 is this master cleanup document. The local untracked items `desktop/runtime-dist/` and `untangle-audit.md` remain untouched and must be preserved. No application source, tests, runtime scripts, workflows, or product behavior changed.
 
 ---
 
@@ -647,7 +660,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | 9 — Full regression and Windows validation | NOT STARTED | Packaged behavior and upgrade/data preservation. |
 | 10 — Release readiness | NOT STARTED | Signed, validated and documented release. |
 
-### Owner-side checkout and safety confirmation
+### Local checkout confirmation and protected items
 
 From PowerShell in the existing repository directory:
 
@@ -661,4 +674,32 @@ git log -1 --oneline
 
 Do not switch branches if Git reports local modifications that you have not intentionally saved. Do not reset, clean, stash, or discard those changes as a shortcut. Report the status output so it can be reconciled safely.
 
-**Next phase is Phase 1.** Do not begin source deletion or broad refactoring until Phase 1's contracts, licensing, provenance, and retirement preflight are complete.
+### Local checkout confirmation and protected items
+
+Owner-reported PowerShell state:
+```text
+PS D:\\openshorts> git status --short
+?? desktop/runtime-dist/
+?? untangle-audit.md
+
+PS D:\\openshorts> git log -1 --oneline
+7e906b4 (HEAD -> chore/master-cleanup-phase-0, origin/chore/master-cleanup-phase-0) docs(cleanup): establish Clippy v1 master cleanup plan
+```
+
+Interpretation:
+- The checked-out branch and local HEAD match the cleanup branch commit.
+- The working tree has two untracked paths. They are not dirty tracked files, but their content is user-owned local state and is protected.
+- Do not add either path to a commit, overwrite it, delete it, clean it, or add an ignore rule without a separate explicit decision.
+- The file `untangle-audit.md` remains a local reference source. Do not assume it is part of the tracked repository simply because it is present in the working directory.
+
+
+### Phase 1 start record
+
+
+**Started:** 2026-11-19  
+**Starting cleanup commit:** `7e906b4abb1b89d6b5770a15c180ee2a485f9f74`  
+**Scope:** Architecture/runtime/security contracts, licence/provenance inventory, data migration/rollback requirements, and external-service retirement preflight.  
+**Code-change policy:** No product source or workflow edits during the initial Phase 1 investigation. Findings and contracts are documented first.  
+**Validation policy:** Follow the minimum-CI policy above; focused checks first. Windows validation is launched only when required, and its link is handed to the owner without continuous polling.
+
+**Next:** complete Phase 1 preflight. Do not start source deletion or broad refactoring before its contracts, licensing, provenance, and retirement requirements are resolved.
