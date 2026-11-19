@@ -8,7 +8,7 @@
 > **Baseline commit:** `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`  
 > **Baseline date:** 2026-11-19  
 > **Application version at baseline:** `0.3.1`  
-> **Current status:** Phase 0 COMPLETE. Local checkout confirmed on `chore/master-cleanup-phase-0`; Phase 1 is IN PROGRESS.
+> **Current status:** Phase 0 COMPLETE. Phase 1 is PARTIALLY COMPLETE: four architecture/compliance documents are committed; owner licensing/service decisions and artifact-level evidence remain open.
 >
 > **Change policy:** This document is the cleanup process record, not blanket permission to delete or rewrite code. Each phase must be completed and verified before the next phase starts. Source, tests, configuration, Git history, and current CI outrank historical audit claims.
 
@@ -200,7 +200,7 @@ Required work:
 - Define the local credential-storage design using Windows Credential Manager/DPAPI through a narrow Tauri interface.
 - Document local API and renderer token requirements.
 - Establish a storage/data migration and rollback plan.
-- Commit the current local runtime/service/data contract, preliminary licence/provenance inventory, and hosted-service retirement preflight.
+- Commit the local runtime/service/data contract, local API extraction map, preliminary licence/provenance inventory, and hosted-service retirement preflight.
 - Record the product owner's licensing choices and hosted-service status before starting destructive extraction.
 - Inventory the actual generated CPU/CUDA runtime artifacts, Chrome headless-shell archive, FFmpeg build, and all corresponding notices/source obligations before release clearance.
 
@@ -228,6 +228,8 @@ Required work:
 - Trace every `BILLING_ENABLED` branch and all cloud service call sites to determine the retained local behavior.
 - Separate local routes/services before removing shared code.
 - Remove cloud user resolution, cloud ownership/entitlement/quota assumptions from the local desktop execution path.
+- Force Tauri desktop mode to local-only regardless of inherited `BILLING_ENABLED`, AWS, Stripe, database, R2, or other hosted environment variables.
+- Remove the implicit local-mode AWS S3 job-artifact upload; prove successful desktop jobs make no unapproved remote storage request.
 - Preserve local upload/path safety, job admission/lifecycle, cancellation, process supervision, media serving, rendering, Library, reference-template, and updater APIs.
 - Replace hosted authentication UI/API semantics with a local application/settings/provider model.
 - Keep the per-launch desktop token and loopback-only network boundary.
@@ -256,7 +258,7 @@ Safety requirements:
 - Do not delete external customer data, buckets, databases, subscriptions, OAuth grants, or accounts during Git cleanup.
 - Preserve any legally required operational records and data-export/deletion obligations.
 - Keep local Library and custom user editing features.
-- Do not remove an entire shared module such as `s3_uploader.py` until its retained imports/callers are separated.
+- Do not remove an entire shared module such as `s3_uploader.py` until its retained imports/callers are separated. The current `upload_job_artifacts()` caller is a local-mode path and must be explicitly removed from Clippy desktop before the S3 helper/dependency can be retired.
 
 Exit gate:
 - No runtime import, endpoint, frontend call, test, or shipped dependency relies on the removed hosted SaaS subsystem.
@@ -660,7 +662,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | Phase | Status | Summary |
 |---|---|---|
 | 0 — Baseline and repository map | COMPLETE | Main `61edcd5`, v0.3.1, architecture/inventory, CI/release evidence, risks and drift recorded; local branch and protected untracked paths confirmed. The local branch now needs to pull the newer Phase 1 documentation commits. |
-| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Three Phase 1 documents are committed. Owner decisions on Ultralytics, Remotion eligibility and hosted-service status, plus artifact-level licence/hash/source verification, remain before Phase 1 can close. |
+| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Four Phase 1 documents are committed, including the source-derived local API route/seam map. The local S3 upload path and inherited environment risks are recorded for Phase 2. Owner decisions on Ultralytics, Remotion eligibility and hosted-service status, plus artifact-level licence/hash/source verification, remain before Phase 1 can close. |
 | 2 — Local backend extraction | NOT STARTED | Depends on Phase 1 contracts and safety review. |
 | 3 — Remove hosted SaaS | NOT STARTED | Depends on Phase 2. |
 | 4 — Remove Docker | NOT STARTED | Depends on verified native workflow and Phase 2/3 disconnection. |
@@ -697,6 +699,7 @@ Interpretation:
 
 Documents added on the cleanup branch:
 - [Local runtime, service and data contract](./docs/architecture/clippy-v1-local-runtime-contract.md) — commit `4d82e8dc7f`.
+- [Local API extraction map](./docs/architecture/clippy-local-api-extraction-map.md) — commit `470ee573f9`.
 - [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — commit `172df8dd53`.
 - [Hosted-service retirement preflight](./docs/compliance/clippy-hosted-service-retirement-preflight.md) — commit `edbd91db2d`.
 
@@ -715,6 +718,10 @@ Documents added on the cleanup branch:
 | P1-09 | Ultralytics' default Windows config/weights cache is outside Clippy's managed data root because the supervisor sets neither `YOLO_CONFIG_DIR` nor `YOLO_MODEL_PATH` | High | After the YOLO licensing decision, migrate cache/weights into managed model storage without losing existing files |
 | P1-10 | Dated repository privacy/retention documents describe an OpenShorts Cloud service and customer/subprocessor data flows; current live status is not independently verified | Critical | Owner confirms live-service status and approves any customer export, retention, shutdown or data-deletion plan |
 | P1-11 | Renderer job status is held in a process-local Map and is lost on renderer restart | Medium | Define required job recovery semantics before deciding on persistence in Phase 5 |
+| P1-12 | A successful job in local mode (`BILLING_ENABLED=false`) still calls `s3_uploader.upload_job_artifacts()`; when AWS credentials are present it attempts to upload MP4 and JSON artifacts to S3 without explicit user opt-in | Critical | Remove this implicit path from Clippy desktop, separate deferred UGC gallery S3 functions, and test that local generation performs no remote storage calls |
+| P1-13 | The Tauri supervisor inherits the parent environment and does not explicitly force `BILLING_ENABLED=0` or clear hosted/AWS credentials | High | Make desktop launch local-only and test against hostile/stale environment variables before any local backend extraction is accepted |
+| P1-14 | The current `/api/projects/{job_id}/restore` endpoint is cloud/R2-only; LocalLibraryTab has no equivalent reopen-to-generator API | Medium | Decide whether local project rehydration is required in v1; implement and test a local contract or state its limit explicitly |
+| P1-15 | `app.py` mixes the local generation/edit/Library/render API with hosted and deferred social, thumbnail, UGC, MCP and public website routes | High | Use the source-derived extraction map to separate responsibility groups and characterization tests before deleting any route/module |
 
 ### Phase 1 validation record
 
@@ -722,7 +729,9 @@ Documents added on the cleanup branch:
 - No product source, test, workflow, runtime or installer files were changed.
 - No CI run was started: changes are Markdown documentation only.
 - No Windows validation was started: no Windows runtime/installer source was changed.
-- Structural verification: all three new documents were fetched back from the cleanup branch and their headings/contents checked.
+- Structural verification: all four Phase 1 documents were fetched back from the cleanup branch and their headings/contents checked.
+- Source route review covered local generation, Library, editing, renderer, hosted billing/R2 lifecycle, social, Thumbnail Studio, SaaS Shorts/UGC, MCP, public website tools and S3 callers.
+- No CI run was started: all changes remain Markdown documentation only. No Windows validation was started because no Windows runtime/installer source was changed.
 - Artifact-level SBOM, exact CUDA DLL inventory, Chrome archive licence inspection, FFmpeg immutable asset pinning and corresponding-source packaging remain open.
 
 ### Phase 1 owner decisions blocking closure
@@ -740,4 +749,4 @@ Documents added on the cleanup branch:
 **Code-change policy:** No product source or workflow edits during the initial Phase 1 investigation. Findings and contracts are documented first.  
 **Validation policy:** Follow the minimum-CI policy above; focused checks first. Windows validation is launched only when required, and its link is handed to the owner without continuous polling.
 
-**Next:** complete Phase 1 preflight. Do not start source deletion or broad refactoring before its contracts, licensing, provenance, and retirement requirements are resolved.
+**Next:** close the remaining Phase 1 evidence/owner gates. Phase 2 source work must not start until the required licence, runtime provenance, and hosted-service owner decisions are recorded; the confirmed S3/environment findings must be addressed first in the Phase 2 design.
