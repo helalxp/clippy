@@ -702,7 +702,7 @@ Documents and guide updates committed on the cleanup branch:
 - [Local API extraction map](./docs/architecture/clippy-local-api-extraction-map.md) — `470ee573f9`.
 - [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — latest update `9ae53de65e` (v0.3.1 release asset hashes and temporary workflow-artifact expiry evidence).
 - [Hosted-service retirement preflight](./docs/compliance/clippy-hosted-service-retirement-preflight.md) — `edbd91db2d`.
-- [Canonical project guide](./CLIPPY_MASTER.md) — latest update `5ffea5c9e0` (current v0.3.1 mainline, current architecture map, native build workflow, and corrected security/historical guidance).
+- [Canonical project guide](./CLIPPY_MASTER.md) — latest update `8e54b29e44` (current v0.3.1 mainline, current architecture map, native build workflow, and corrected v1 watermark/GPU/security guidance).
 - [Agent entry points](./AGENTS.md) and [Claude instructions](./CLAUDE.md) — `f93eaa31a3`, `2abdf678bc`.
 - [Supporting audit header](./CLIPPY_REPO_AUDIT.md) and [README engineering references](./README.md) — `b2bbad4515`, `024a049a90`.
 
@@ -733,6 +733,7 @@ Documents and guide updates committed on the cleanup branch:
 
 - No product source, test, workflow, runtime or installer files were changed.
 - No CI run was started: all changes are Markdown-only; no product source, test, runtime or workflow was changed.
+- The canonical guide's detailed dashboard/backend/renderer/Tauri map and repository/branch overview were refreshed from the current mainline tree. Older native-migration roadmap and project-structure material is explicitly marked historical.
 - No Windows validation was started because no Windows installer/runtime source was changed.
 - Structural verification: all four Phase 1 documents were fetched back from the cleanup branch and their headings/contents checked.
 - Canonical documentation hierarchy reconciled: `CLIPPY_MASTER.md` is the project guide; `CLIPPY_CLEANUP_MASTER.md` is the active cleanup ledger; `CLIPPY_REPO_AUDIT.md` is a dated supporting audit record; `AGENTS.md`, `CLAUDE.md`, and the root README engineering links now point to the same hierarchy.
