@@ -3,10 +3,24 @@
 >
 > Repository: https://github.com/helalxp/clippy  
 > Default branch: `main`  
-> Last repository inspection: 2026-11-09  
+> Last repository inspection: 2026-11-19  
 > Status: living document. Verify the checked-out source before relying on any implementation claim.
 
-This document is the primary onboarding and operating guide for Hermes and other coding agents. It consolidates the product direction, repository/branch map, architecture, development workflow, migration plan, and preservation rules. **The checked-out code, tests, configuration, and Git history remain the final source of truth.** This guide is not permission to overwrite user work, merge branches, remove files, or change product scope.
+This document is the canonical project-wide engineering and agent guide. The active task-specific cleanup plan is `CLIPPY_CLEANUP_MASTER.md`; the dated `CLIPPY_REPO_AUDIT.md` is a supporting technical audit record, not a competing startup guide. **The checked-out code, tests, configuration, Git history, and current CI remain the final source of truth.** This guide is not permission to overwrite user work, merge branches, remove files, or change product scope.
+
+## Current mainline status — 2026-11-19
+
+- `main` contains the native Tauri/Windows desktop application, managed runtime setup, payload updater, and Windows NSIS installer. Older statements below that describe the native installer as branch-only or a scaffold are historical and no longer describe current main.
+- The latest published stable release is **Clippy v0.3.1**, tag `v0.3.1`, published 2026-11-19. Its source baseline is `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`.
+- Runtime contract at that release: CPython 3.12.10; Node.js 22.23.3; Gyan FFmpeg essentials build family; Remotion headless shell 144.0.7559.20. The exact FFmpeg release is not yet immutably pinned in `runtime-contract.json`.
+- Tauri supervises FastAPI and the Node/Remotion renderer on dynamic loopback ports. Both services receive a per-launch API token. The native shell manages application payload updates, runtime validation/repair, rollback, and the persistent user-data location.
+- Current v1 scope: keep core video generation/editing, local Library, reference templates, and custom user watermarking; defer social publishing, Thumbnail Studio, AI UGC/SaaS Shorts, and MCP/AI-agent integration; remove analytics/telemetry; remove Docker; keep the Clippy website separate.
+- The cleanup work is tracked on `chore/master-cleanup-phase-0` in `CLIPPY_CLEANUP_MASTER.md`. Its changes so far are documentation-only and are not merged into main.
+- The source tree still contains hosted SaaS and deferred feature code. The desktop payload excludes the `cloud/` package, but the shared `app.py` has not yet been fully extracted. Follow the local API extraction map and cleanup ledger before moving or deleting shared code.
+- The confirmed local-mode S3 artifact-upload path and inherited hosted-environment risk are blockers to the intended local-only execution contract; see `CLIPPY_CLEANUP_MASTER.md` and `docs/architecture/clippy-local-api-extraction-map.md`.
+
+Implementation and branch claims in the historical sections below must be read as historical unless explicitly revalidated against current source/tests or superseded by this current-status block.
+
 
 ---
 
@@ -22,7 +36,7 @@ The product direction is a normal Windows application:
 - AI model weights are managed separately from core runtime dependencies.
 - User settings, models, jobs, logs, and output survive application upgrades.
 
-**Important distinction:** the repository's default `main` branch still contains the Docker-oriented OpenShorts application architecture. The separate `windows-native-migration` branch contains the active native-Windows migration work. Do not describe the native installer as finished or assume that migration branch is merged into main.
+**Historical note (2026-11-09):** this branch-only migration statement was superseded when the native installer was merged into `main` and subsequently released as v0.3.1. Use the current mainline status at the top of this document and the Windows runtime contracts below.
 
 ### Product principles
 1. Preserve working functionality before redesigning internals.
@@ -71,7 +85,7 @@ These messages are orientation only. Inspect commit diffs for the exact behavior
 
 ## 3. Architecture overview
 
-The application has four major logical layers. Their exact deployment differs by branch.
+The current mainline application has five cooperating boundaries: Tauri desktop shell, React WebView, local FastAPI/processing engine, Node/Remotion renderer, and persistent local data/managed runtime. The detailed current contract is `docs/architecture/clippy-v1-local-runtime-contract.md`. The branch-specific notes below are retained as historical context where they differ.
 
 ### A. React/Vite dashboard
 Location: `dashboard/`
@@ -141,7 +155,7 @@ Main files observed:
 
 On main, Docker Compose maps host port `13100` to renderer container port `3100`; the renderer's `PORT` is `3100`. The dashboard proxy defaults to the Docker service name and port `3100`. On the native migration branch, renderer communication is being adapted to local loopback paths and managed output directories. Always inspect the checked-out branch's configuration before assuming ports or paths.
 
-### D. Tauri desktop shell (native migration branch only)
+### D. Tauri desktop shell (current mainline)
 Location: `desktop/src-tauri/`
 
 Technology: Tauri 2 + Rust.
@@ -166,7 +180,7 @@ Files observed on `windows-native-migration`:
 - `desktop/FIRST_RUN_SETUP_CONTRACT.md`: first-run setup contract.
 - `desktop/build.ps1`, `build-tauri.ps1`: Windows build helpers.
 
-**Status caveat:** the desktop branch's own README describes Stage 3A as a scaffold and says the downloader, signed/checksummed runtime manifest flow, resumable setup UI, payload updater, and production NSIS packaging pipeline are not yet implemented. The scaffold is not proof of a usable end-user installer. A successful Tauri build/launch on the developer's machine was not verified during this repository inspection.
+**Current status:** this implementation is in `main` and ships in v0.3.1. See `desktop/FIRST_RUN_SETUP_CONTRACT.md`, `desktop/INSTALLER_UPDATE_ARCHITECTURE.md`, `desktop/runtime-contract.json`, and `docs/architecture/clippy-v1-local-runtime-contract.md` for the current runtime and updater contracts.
 
 ---
 
@@ -246,13 +260,13 @@ The `codex/reference-templates` branch adds:
 - `reference_templates/<template-id>/manifest.json` and poster assets
 - API and layout-picker integration changes in `app.py` and `layout_picker.py`
 
-This feature is branch-specific relative to main at the inspection date. The native migration branch also includes these changes. Before using it on main, inspect and merge deliberately; do not assume it is present on main.
+Reference templates are present on current main and are explicitly retained in v1. Their files and user-created data must survive application-payload updates and data-folder relocation.
 
 ---
 
-## 5. Windows-native migration roadmap
+## 5. Windows-native migration roadmap (historical snapshot, superseded by v0.3.1)
 
-The native migration branch is the forward path for the Windows desktop product. The stages below distinguish intent from verified completion.
+The stage notes below were written for the pre-merge native migration branch. They are retained as history, not current readiness criteria. The native desktop application is now merged into main and ships as v0.3.1. Current runtime and release contracts supersede any statement below that says a downloader, installer, updater, or production NSIS package is still only a scaffold. The remaining product-hardening work is tracked in `CLIPPY_CLEANUP_MASTER.md`.
 
 ### Stage 1 — Windows compatibility
 Areas explicitly addressed/identified on the migration branch:
@@ -311,7 +325,7 @@ A clean Windows user can install and run Clippy without Docker/WSL2/developer to
 
 ## 6. Project structure guide
 
-This is a functional map, not a promise that every listed path exists on every branch. Run `git ls-files` to obtain the exact current tree.
+This is a historical functional map from the November 9 snapshot; several paths and branch annotations below are stale. Use `git ls-files` and the current tree at the checked-out commit. The current desktop/native file map is in `docs/architecture/clippy-v1-local-runtime-contract.md` and `CLIPPY_CLEANUP_MASTER.md`.
 
 ```text
 clippy/
@@ -379,7 +393,7 @@ clippy/
 
 Always inspect the checked-out branch and local modifications first. These are baseline commands; adjust for the current branch and installed tools.
 
-### Docker-oriented development (main)
+### Legacy Docker development (not the v1 workflow)
 ```powershell
 docker compose up --build
 docker compose ps
@@ -547,9 +561,11 @@ These notes are useful leads, not assertions about today's working tree.
 
 This file is the canonical project-level guide for agents.
 
-- `CLIPPY_MASTER.md`: product mission, branch map, architecture overview, project map, engineering rules, roadmap, and agent workflow.
-- `README.md`: public-facing project introduction and user/developer quick start. Keep it accurate; it is not replaced by this internal master guide.
-- Subsystem architecture docs under `docs/`: retain focused implementation details where they exist. Link them from this file and keep them synchronized.
-- Old agent instruction files such as `CLAUDE.md` and branch-specific `AGENTS.md`: migrate any unique, still-valid guidance into this master file before removing or redirecting them. Do not delete subsystem/product docs just because they are Markdown.
+- `CLIPPY_MASTER.md`: canonical project-wide product, architecture, development, and agent guide.
+- `CLIPPY_CLEANUP_MASTER.md`: active, task-specific Clippy v1 cleanup ledger, scope decisions, phase gates, findings, and validation record. It does not replace this guide.
+- `README.md`: public-facing project introduction and user/developer quick start. Keep it accurate; it is not the internal engineering guide.
+- `CLIPPY_REPO_AUDIT.md`: dated technical audit/findings ledger. Preserve its historical evidence, but do not treat its 2026-11-09/17 branch and release snapshots as current without revalidation.
+- Subsystem architecture/runtime/compliance docs under `docs/`: authoritative focused contracts for their named subsystems; link them from this file and keep them synchronized.
+- `AGENTS.md` and `CLAUDE.md`: short agent entry points that must both point to this master guide and the active cleanup ledger when the task is the v1 extraction.
 
 **Do not remove any Markdown file until it has been inventoried and its unique information migrated.** The goal is one authoritative master guide, not loss of valuable technical documentation.
