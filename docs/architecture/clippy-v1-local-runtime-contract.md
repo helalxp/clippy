@@ -101,13 +101,53 @@ The backend constructs child environments through `child_env()`, which removes s
 
 **Observed credential-storage defect to fix in a later implementation phase:** the frontend currently stores the Gemini API key in plaintext `localStorage`; Upload-Post, ElevenLabs and fal.ai keys use an XOR/Base64 transform with a static client-side secret. That is reversible obfuscation, not encryption. These values must not become the v1 credential-storage model.
 
-The planned local credential boundary is a narrow Tauri command backed by Windows Credential Manager or DPAPI. It must:
-- Store only provider secrets needed by active v1 features.
-- Never persist the per-launch API token.
-- Never migrate hosted cloud bearer/session tokens into local credentials.
-- Provide explicit set, read/use, delete and provider-status operations without returning secret material to the frontend unless a real UI use requires it.
-- Migrate existing user-saved keys safely: do not silently discard them; validate a successful secure-store write before clearing the legacy browser copy; support a recoverable migration error state.
-- Keep secrets out of logs, URLs, telemetry, crash reports and child processes that do not need them.
+### 4.3.1 Recommended Windows credential-store contract
+
+For the short provider API keys used by Clippy, use Windows Credential Manager generic credentials as the primary store. Microsoft's current Windows password-handling guidance places Credential Manager ahead of DPAPI for application credentials. A generic credential is application-defined (it is not automatically consumed as a Windows logon password) and is read/written by the application using the Credential Management API.
+
+Recommended native implementation:
+- Use `CRED_TYPE_GENERIC` credentials with stable target names under the application identifier, for example `com.helal.clippy/provider/gemini`, `.../upload-post`, `.../elevenlabs`, and `.../fal-ai`.
+- Use `CredWriteW`, `CredReadW`, `CredDeleteW`, and `CredFree` through a narrow Rust/Tauri storage module. Check Win32 return codes and never treat a failed read as an empty/valid credential.
+- Use `CRED_PERSIST_LOCAL_MACHINE` for credentials that should survive logoff/reboot for the same Windows user on that computer. Do not use Enterprise/roaming persistence for Clippy's local-first secrets.
+- Keep the credential blob within the documented 2,560-byte maximum. These API keys are small; larger future secrets need a separate storage design.
+- Do not store secrets in the credential target name, comment, logs, Rust debug output, settings JSON, or command-line arguments.
+- Provide set, read/use, delete and provider-status operations from Tauri. A returned secret may be held briefly in frontend memory when a request needs its existing `X-Gemini-Key` or provider header; never put it back into browser storage. Prefer resolving only for the operation that needs it and clear references when that operation ends.
+- The backend must continue to pass a resolved Gemini key only to the specific `main.py` child job that needs it. It must not place every provider key in the backend's global environment.
+- A missing credential, unsupported persistence policy, inaccessible Windows vault, or read/write failure must return an explicit error. Do not silently fall back to plaintext localStorage.
+
+DPAPI (`CryptProtectData` / `CryptUnprotectData`) is a valid Windows-native mechanism for encrypting a local data blob when a separate encrypted-file/settings design is required. Its default protection is tied to the current user and normally the same computer; do not use the machine-wide flag for user API keys. It is not the first choice for these simple provider secrets while Credential Manager is available.
+
+### 4.3.2 Existing-key migration contract
+
+The existing frontend uses these keys:
+- `gemini_key` — plaintext Gemini key.
+- `uploadPostKey_v3` — XOR/Base64-obfuscated Upload-Post key.
+- `elevenLabsKey_v1` — XOR/Base64-obfuscated ElevenLabs key.
+- `falKey_v1` — XOR/Base64-obfuscated fal.ai key.
+- `uploadUserId` — profile identifier, not a secret.
+
+A migration must:
+1. Read the known legacy entries using their existing decode rules. Do not guess at unknown key formats.
+2. Write each non-empty provider key to its namespaced generic credential target.
+3. Read the newly written credential back from Credential Manager and verify it matches the source value before considering that credential migrated.
+4. Persist migration state per provider without persisting the secret itself.
+5. Only after successful write/read-back verification, remove that provider's old localStorage entry. A failure preserves the old value and records a recoverable error; it must never partially "succeed" by clearing the source first.
+6. Keep provider identifiers such as `uploadUserId` in ordinary versioned local preferences, not in the credential vault.
+7. Do not migrate cloud login JWTs, OAuth codes, hosted API keys or any other identity/session tokens.
+8. Preserve existing deferred-feature credentials (Upload-Post, ElevenLabs, fal.ai) in the secure store even when those features are hidden in v1, unless the owner explicitly approves deleting them. Do not expose or use those credentials from the v1 UI while their features are deferred.
+9. Provide a user-visible recovery path if migration is blocked (for example, the Windows vault is unavailable or the legacy browser storage cannot be read). Never claim a key has been saved until the native write/read-back has succeeded.
+
+The migration must be idempotent and interruption-safe. Re-running it after a crash must not duplicate targets, erase an unmigrated value, or overwrite a newer credential with an older localStorage value.
+
+### 4.3.3 Credential-storage tests required
+
+- Rust unit/integration coverage for generic credential create, read, replace, delete and missing-target behavior on Windows.
+- Test that the same user's credentials survive Clippy restart and Windows logoff/reboot, but are not readable from a different Windows user account.
+- Test the maximum supported blob boundary and rejected oversize values.
+- Test every legacy key format (Gemini plaintext and the three XOR/Base64 entries), plus missing/empty/corrupt legacy values.
+- Simulate a failure at each migration step (write, read-back, migration-state write, legacy removal). Verify the original credential remains recoverable and migration can safely retry.
+- Verify per-launch `CLIPPY_API_TOKEN` is never written to Credential Manager.
+- Verify no provider secret appears in logs, telemetry, URL query strings, crash messages, or unrelated child process environments.
 
 The credential migration requires a dedicated backward-compatibility test plan before implementation.
 
