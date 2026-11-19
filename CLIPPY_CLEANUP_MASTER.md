@@ -662,7 +662,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | Phase | Status | Summary |
 |---|---|---|
 | 0 — Baseline and repository map | COMPLETE | Main `61edcd5`, v0.3.1, architecture/inventory, CI/release evidence, risks and drift recorded; local branch and protected untracked paths confirmed. The local branch now needs to pull the newer Phase 1 documentation commits. |
-| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Four Phase 1 documents are committed, including the source-derived local API route/seam map. The local S3 upload path and inherited environment risks are recorded for Phase 2. Owner decisions on Ultralytics, Remotion eligibility and hosted-service status, plus artifact-level licence/hash/source verification, remain before Phase 1 can close. |
+| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Four Phase 1 architecture/compliance documents and the canonical guide hierarchy are committed. The local S3 upload path and inherited environment risks are recorded for Phase 2. Owner decisions on Ultralytics, Remotion eligibility and hosted-service status, plus artifact-level licence/hash/source verification, remain before Phase 1 can close. |
 | 2 — Local backend extraction | NOT STARTED | Depends on Phase 1 contracts and safety review. |
 | 3 — Remove hosted SaaS | NOT STARTED | Depends on Phase 2. |
 | 4 — Remove Docker | NOT STARTED | Depends on verified native workflow and Phase 2/3 disconnection. |
@@ -686,7 +686,7 @@ PS D:\\openshorts> git log -1 --oneline
 ```
 
 Interpretation:
-- The checked-out branch and local HEAD match the cleanup branch commit.
+- At the time of this owner report, the checked-out branch and local HEAD matched the cleanup branch commit. That SHA was the initial ledger commit, so the local checkout is now behind the updated remote cleanup branch and must be fast-forwarded before local work.
 - The working tree has two untracked paths. They are not dirty tracked files, but their content is user-owned local state and is protected.
 - Do not add either path to a commit, overwrite it, delete it, clean it, or add an ignore rule without a separate explicit decision.
 - The file `untangle-audit.md` remains a local reference source. Do not assume it is part of the tracked repository simply because it is present in the working directory.
@@ -697,11 +697,14 @@ Interpretation:
 **Phase 1 start commit:** `7e906b4abb1b89d6b5770a15c180ee2a485f9f74`  
 **Current policy:** documentation and source-contract inspection only; no product source or workflow edits.
 
-Documents added on the cleanup branch:
-- [Local runtime, service and data contract](./docs/architecture/clippy-v1-local-runtime-contract.md) — latest update commit `c91b6fdd35` (includes Credential Manager and migration contract).
-- [Local API extraction map](./docs/architecture/clippy-local-api-extraction-map.md) — commit `470ee573f9`.
-- [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — latest update commit `9ae53de65e` (includes v0.3.1 release-asset hashes, runtime build method and temporary workflow-artifact expiry evidence).
-- [Hosted-service retirement preflight](./docs/compliance/clippy-hosted-service-retirement-preflight.md) — commit `edbd91db2d`.
+Documents and guide updates committed on the cleanup branch:
+- [Local runtime, service and data contract](./docs/architecture/clippy-v1-local-runtime-contract.md) — latest update `c91b6fdd35` (Credential Manager and migration contract).
+- [Local API extraction map](./docs/architecture/clippy-local-api-extraction-map.md) — `470ee573f9`.
+- [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — latest update `9ae53de65e` (v0.3.1 release asset hashes and temporary workflow-artifact expiry evidence).
+- [Hosted-service retirement preflight](./docs/compliance/clippy-hosted-service-retirement-preflight.md) — `edbd91db2d`.
+- [Canonical project guide](./CLIPPY_MASTER.md) — latest update `5ffea5c9e0` (current v0.3.1 mainline, current architecture map, native build workflow, and corrected security/historical guidance).
+- [Agent entry points](./AGENTS.md) and [Claude instructions](./CLAUDE.md) — `f93eaa31a3`, `2abdf678bc`.
+- [Supporting audit header](./CLIPPY_REPO_AUDIT.md) and [README engineering references](./README.md) — `b2bbad4515`, `024a049a90`.
 
 ### Phase 1 findings to carry forward
 
@@ -728,11 +731,11 @@ Documents added on the cleanup branch:
 
 ### Phase 1 validation record
 
-- Documentation/source review only.
 - No product source, test, workflow, runtime or installer files were changed.
 - No CI run was started: all changes are Markdown-only; no product source, test, runtime or workflow was changed.
 - No Windows validation was started because no Windows installer/runtime source was changed.
 - Structural verification: all four Phase 1 documents were fetched back from the cleanup branch and their headings/contents checked.
+- Canonical documentation hierarchy reconciled: `CLIPPY_MASTER.md` is the project guide; `CLIPPY_CLEANUP_MASTER.md` is the active cleanup ledger; `CLIPPY_REPO_AUDIT.md` is a dated supporting audit record; `AGENTS.md`, `CLAUDE.md`, and the root README engineering links now point to the same hierarchy.
 - Source route review covered local generation, Library, editing, renderer, hosted billing/R2 lifecycle, social, Thumbnail Studio, SaaS Shorts/UGC, MCP, public website tools and S3 callers.
 - The v0.3.1 release workflow metadata and tagged runtime/payload build scripts were inspected. Published asset hashes and temporary workflow artifact IDs/expiry are recorded in the licence inventory. The large runtime artifacts were not downloaded or unpacked.
 - The local runtime contract now specifies Windows Credential Manager generic credentials as the preferred store for provider API keys, with DPAPI as a separate local encrypted-blob option, and a read-back-verified migration contract for legacy browser storage.
