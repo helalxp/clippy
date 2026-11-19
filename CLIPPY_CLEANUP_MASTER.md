@@ -646,8 +646,10 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 - [x] Record current scope decisions and deferred-feature requirements.
 - [x] Create the cleanup branch from the exact main baseline.
 - [x] Create this master cleanup ledger on the cleanup branch.
-- [ ] Confirm the user's local `D:\openshorts` current branch, remotes, and `git status --short`. This session can inspect and modify the GitHub repository but cannot read the user's Windows working tree.
-- [ ] After the cleanup branch is checked out locally, confirm that its HEAD contains this ledger and that there are no unexpected local modifications before any source editing.
+- [x] Owner confirmed the local checkout was on `chore/master-cleanup-phase-0` with HEAD `7e906b4` matching its then-current origin branch tip.
+- [x] Owner reported only two untracked paths: `desktop/runtime-dist/` and `untangle-audit.md`; both are explicitly protected.
+- [x] Owner confirmed there were no modified tracked files in the reported `git status --short` output.
+- [ ] Owner to fast-forward the local checkout to the latest cleanup branch commits before local editing; do not disturb either protected untracked path.
 
 **Phase 0 result:** remote source baseline and CI/release evidence are documented; the owner confirmed the local cleanup branch and then-current matching HEAD. The only Phase 0 repository change was the master cleanup document. The local untracked items `desktop/runtime-dist/` and `untangle-audit.md` remain untouched and must be preserved. No application source, tests, runtime scripts, workflows, or product behavior changed. Since the subsequent Phase 1 documentation commits were made remotely, the owner's local branch now needs a fast-forward pull before local work.
 
@@ -657,8 +659,8 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 
 | Phase | Status | Summary |
 |---|---|---|
-| 0 — Baseline and repository map | COMPLETE (remote baseline) | Main `61edcd5`, v0.3.1, architecture/inventory, CI/release evidence, risks and drift recorded. Local worktree confirmation outstanding. |
-| 1 — Contracts, licensing, retirement preflight | NOT STARTED | Next phase after local branch checkout/status confirmation. |
+| 0 — Baseline and repository map | COMPLETE | Main `61edcd5`, v0.3.1, architecture/inventory, CI/release evidence, risks and drift recorded; local branch and protected untracked paths confirmed. The local branch now needs to pull the newer Phase 1 documentation commits. |
+| 1 — Contracts, licensing, retirement preflight | PARTIALLY COMPLETE | Three Phase 1 documents are committed. Owner decisions on Ultralytics, Remotion eligibility and hosted-service status, plus artifact-level licence/hash/source verification, remain before Phase 1 can close. |
 | 2 — Local backend extraction | NOT STARTED | Depends on Phase 1 contracts and safety review. |
 | 3 — Remove hosted SaaS | NOT STARTED | Depends on Phase 2. |
 | 4 — Remove Docker | NOT STARTED | Depends on verified native workflow and Phase 2/3 disconnection. |
