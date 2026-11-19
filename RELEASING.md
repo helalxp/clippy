@@ -116,11 +116,18 @@ The second candidate, `v0.3.1-rc.2`, was also not published. Release workflow ru
 
 The third candidate, `v0.3.1-rc.3`, was not published. Release workflow run [#16](https://github.com/helalxp/clippy/actions/runs/44429332589) failed in `validate-signing` because Tauri's Base64-encoded detached signature was passed directly to Minisign. PR [#24](https://github.com/helalxp/clippy/pull/24) corrected the signature decoding and added a workflow contract regression test; it was merged into `main` on 2026-11-19 as commit `a9ee1e179e69eec101b759e565534f3c7b9a80d5`. The unpublished `v0.3.1-rc.3` tag remains unchanged.
 
-The next rollout target is `v0.3.1-rc.4`. Create the tag only after the canonical version and every synchronized manifest pass validation on the merged `main` commit:
+The `v0.3.1-rc.4` prerelease has been published and is the first updater-enabled candidate. The stable updater endpoint is intentionally:
 
-1. Publish `v0.3.1-rc.4` as a prerelease and manually install it over an existing `v0.3.0` installation.
-2. Verify startup, user-data preservation, managed-runtime reuse, and updater operation.
-3. Publish stable `v0.3.1`; the prerelease installation should discover it through the stable-only `releases/latest` endpoint and install it in-app.
+`https://github.com/helalxp/clippy/releases/latest/download/latest.json`
+
+GitHub's `releases/latest` endpoint selects a stable release, never a prerelease. The old stable `v0.3.0` predates updater support and has no `latest.json` asset. Therefore, while `v0.3.1` has not yet been published as the latest stable release, an updater check from RC4 can report `Could not fetch a valid release JSON from the remote`. At this rollout stage, that is an expected channel/bootstrap limitation; it does not establish that RC4's own signed manifest is malformed.
+
+Complete the first stable updater rollout in this order:
+
+1. Manually install `v0.3.1-rc.4` over an existing `v0.3.0` installation. Verify startup, user-data preservation, and managed-runtime reuse independently of update discovery.
+2. Prepare stable `v0.3.1` from the validated `main` commit. Keep the updater endpoint stable-only; do not make a prerelease the repository's latest release.
+3. Publish `v0.3.1` and verify that the release workflow uploads `latest.json`, the signed NSIS installer, and its signature before marking the stable release as latest.
+4. Return to the installed RC4 application and check for updates. It should discover stable `v0.3.1` through the existing endpoint. Verify the signed download, install/restart, application startup, user-data preservation, and runtime reuse on Windows.
 
 The current updater release does not transactionally roll back a multi-component runtime update. The first updater rollout must therefore remain application-only and must not change runtime contracts or runtime package inputs.
 
