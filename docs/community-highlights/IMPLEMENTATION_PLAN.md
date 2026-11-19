@@ -294,3 +294,12 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 - Store refresh tokens outside browser storage and ordinary settings files, preferably in the OS credential vault. Add clear connection status and disconnect/revoke behavior.
 - The UI can be implemented independently of the eventual chat transport, but exact scopes must match the selected transport and be kept least-privilege.
 - Official references: Twitch OAuth grant types and public device flow (https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/); Google desktop OAuth and PKCE (https://developers.google.com/identity/protocols/oauth2/native-app); YouTube Data API authorization/scopes (https://developers.google.com/youtube/v3/guides/authentication).
+
+### M2 — Streamlink resolver foundation — 2026-11-20
+
+- Added the pinned `streamlink==8.6.3` runtime dependency.
+- Added a provider-neutral resolver using Streamlink's supported Python API (`Streamlink().streams(url)`). The returned object retains its owning session and exposes an explicit blocking `open()` boundary for the capture worker to call off the FastAPI event loop.
+- Normalize Twitch and YouTube URLs through the existing strict parser before passing them to Streamlink. Query strings, fragments, userinfo, and other URL decorations are not forwarded to provider plugins.
+- Added focused mocked tests for Twitch/YouTube URL normalization, quality selection, missing qualities, empty stream lists, missing dependency behavior, and stream opening.
+- This is only the resolver foundation. FFmpeg ingestion, rolling segment retention, pre/post-trigger extraction, and capture lifecycle APIs are not implemented yet.
+- **Validation:** tests were authored but not executed. No live Streamlink resolution was performed. The dependency's Python API was checked against the official Streamlink 8.6.3 documentation. The packaged Windows runtime dependency/integrity manifest still needs to be updated and verified as part of the packaging integration before this can ship.
