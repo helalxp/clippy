@@ -52,11 +52,13 @@ Requirements: Docker Desktop with Docker Compose, plus the API keys needed by th
 - `cloud/`: optional hosted accounts, billing, metering, storage, and agent services.
 - `tests/`: backend regression and security tests.
 - `docs/`: architecture, platform contracts and operational runbooks.
-- `CLIPPY_REPO_AUDIT.md`: engineering handover, architecture map, verified findings and audit coverage ledger.
+- `CLIPPY_MASTER.md`: canonical internal engineering/agent guide.
+- `CLIPPY_CLEANUP_MASTER.md`: active Clippy v1 extraction/cleanup phase ledger.
+- `CLIPPY_REPO_AUDIT.md`: supporting dated technical audit and historical findings ledger.
 
 ## Engineering references
 
-Start with [CLIPPY_REPO_AUDIT.md](./CLIPPY_REPO_AUDIT.md) before engineering work. For Windows installer changes, also read [the first-run setup contract](desktop/FIRST_RUN_SETUP_CONTRACT.md), [the operations runbook](docs/architecture/windows-installer-operations-runbook.md), and [RELEASING.md](RELEASING.md).
+Start with [CLIPPY_MASTER.md](./CLIPPY_MASTER.md) before engineering work. For the active Clippy v1 cleanup, also read [CLIPPY_CLEANUP_MASTER.md](./CLIPPY_CLEANUP_MASTER.md). [CLIPPY_REPO_AUDIT.md](./CLIPPY_REPO_AUDIT.md) is a supporting historical audit; verify its findings against current source and CI before acting. For Windows installer changes, also read [the first-run setup contract](desktop/FIRST_RUN_SETUP_CONTRACT.md), [the operations runbook](docs/architecture/windows-installer-operations-runbook.md), and [RELEASING.md](RELEASING.md).
 
 Source code, tests, configuration, Git history, and current CI results outrank older audit snapshots. Update the relevant docs whenever a verified product or release fact changes.
 
