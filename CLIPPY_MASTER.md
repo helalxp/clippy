@@ -222,9 +222,9 @@ The project has preserved custom user editing features and also has historical h
 - Watermark upload during advanced/raw-footage setup.
 - Post-generation watermark editing: PNG/WebP upload, preview, draggable position, size/position controls, and final burned-in render.
 - Background editing: blurred moving footage behind the clip or a selected solid color.
-- Delivery watermark copies in cloud/free-plan behavior.
+- Historical managed/free-plan delivery watermarks from hosted cloud behavior; not part of v1.
 
-Do not conflate custom user watermarks with managed/free-plan delivery watermarks. They are separate concerns and may have different file/serving rules.
+Preserve the user's custom watermark upload/edit/position/scale/render workflow in v1. Remove inherited managed/free-plan delivery watermark behavior with the hosted entitlement system; it is not a user watermark and is not a v1 delivery requirement.
 
 Earlier testing reported that background edits and custom watermark rendering did not reliably apply, and some clip previews appeared corrupted/empty. Those were historical reports, not confirmed current failures or fixes. Reproduce on the current branch, inspect API responses and backend/renderer logs, and test the actual rendered output file. A UI preview alone is not proof that the output was burned correctly.
 
@@ -464,7 +464,7 @@ nvidia-smi
 ffmpeg -hide_banner -encoders
 ffmpeg -hide_banner -hwaccels
 ```
-Inside Docker, also verify the container can see the GPU. On native Windows, test the packaged runtime rather than assuming the host's developer environment is representative.
+On native Windows, test the packaged CPU and CUDA runtimes rather than assuming the host's developer environment is representative. A Docker GPU result is not a substitute for a packaged Windows test.
 
 ---
 
