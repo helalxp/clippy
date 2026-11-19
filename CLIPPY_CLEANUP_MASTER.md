@@ -181,7 +181,7 @@ Exit criteria:
 
 ### Phase 1 — Architecture contract, licensing, provenance, and retirement preflight
 
-**Status: NOT STARTED**
+**Status: PARTIALLY COMPLETE — architecture and retirement preflight are documented; owner licensing/service decisions and artifact-level compliance verification remain open.**
 
 Objectives:
 - Define and document the stable contracts between Tauri, frontend, FastAPI, processing, renderer, and persistent data.
@@ -189,6 +189,7 @@ Objectives:
 - Verify the required commercial/distribution rights for all code, dependencies, binaries, fonts, models, and media.
 - Determine whether any externally operated cloud services, user accounts, subscriptions, stored user data, OAuth grants, buckets, or retention obligations still exist. Repository deletion must not be treated as service/customer-data retirement.
 - Define user-data backup, migration, and rollback requirements before changing storage or settings.
+- Distinguish repository-level licence identification from artifact-level SBOM/source/hash verification; a dependency name alone is not release clearance.
 
 Required work:
 - Review root `LICENSE` and `NOTICE`; preserve inherited notices.
@@ -199,12 +200,19 @@ Required work:
 - Define the local credential-storage design using Windows Credential Manager/DPAPI through a narrow Tauri interface.
 - Document local API and renderer token requirements.
 - Establish a storage/data migration and rollback plan.
+- Commit the current local runtime/service/data contract, preliminary licence/provenance inventory, and hosted-service retirement preflight.
+- Record the product owner's licensing choices and hosted-service status before starting destructive extraction.
+- Inventory the actual generated CPU/CUDA runtime artifacts, Chrome headless-shell archive, FFmpeg build, and all corresponding notices/source obligations before release clearance.
 
 Exit gate:
 - No unidentified legal/provenance blocker is silently assumed acceptable.
 - Data-retention and external-account obligations are known and separately assigned.
 - Core API/runtime/data contracts are written and reviewed.
 - No implementation deletion begins until the required dependency boundary is known.
+- The owner has decided how the Ultralytics AGPL dependency will be licensed or replaced.
+- Remotion eligibility for the entity operating Clippy is confirmed.
+- The current live-service/data status is known and any shutdown/export/retention process is assigned.
+- Artifact-level licence/source/hash checks are complete for every component distributed in the installer.
 
 ### Phase 2 — Local backend extraction and contract tests
 
@@ -541,7 +549,7 @@ Current Tauri configuration reports:
 Current runtime contract:
 - Python: `3.12.10`.
 - Node.js: `22.23.3`.
-- FFmpeg: pinned Gyan essentials distribution identity.
+- FFmpeg: Gyan essentials build family; the exact release version/source commit/archive hash is not currently pinned by the runtime contract.
 - Remotion browser: `144.0.7559.20`, with archive/executable hashes in the runtime contract.
 
 The current Rust supervisor source shows:
@@ -624,6 +632,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 | P0-10 | Renderer process-local job map loses status on process restart | Medium | Define expected lifecycle/recovery before deciding whether persistence is needed |
 | P0-11 | Dashboard lint and renderer test/build coverage in CI is not yet established | Medium | Verify in detailed validation matrix; add coverage where needed |
 | P0-12 | Local checkout contains two untracked items (`desktop/runtime-dist/` and `untangle-audit.md`) | High | Both are protected local working-tree content; do not stage, overwrite, delete, clean, or treat them as generated cleanup targets without an explicit owner decision |
+| P0-13 | Current compliance/retention docs describe a hosted OpenShorts Cloud service, subprocessors, customer data, Stripe and R2/S3 retention | Critical | Verify live-service status and obtain an owner-approved export/retention/shutdown plan before hosted-source or external-infrastructure retirement |
 
 ### 6.10 Phase 0 completion checklist
 
@@ -640,7 +649,7 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 - [ ] Confirm the user's local `D:\openshorts` current branch, remotes, and `git status --short`. This session can inspect and modify the GitHub repository but cannot read the user's Windows working tree.
 - [ ] After the cleanup branch is checked out locally, confirm that its HEAD contains this ledger and that there are no unexpected local modifications before any source editing.
 
-**Phase 0 result:** remote source baseline and CI/release evidence are documented; the owner confirmed the local cleanup branch and matching HEAD. The only repository change in Phase 0 is this master cleanup document. The local untracked items `desktop/runtime-dist/` and `untangle-audit.md` remain untouched and must be preserved. No application source, tests, runtime scripts, workflows, or product behavior changed.
+**Phase 0 result:** remote source baseline and CI/release evidence are documented; the owner confirmed the local cleanup branch and then-current matching HEAD. The only Phase 0 repository change was the master cleanup document. The local untracked items `desktop/runtime-dist/` and `untangle-audit.md` remain untouched and must be preserved. No application source, tests, runtime scripts, workflows, or product behavior changed. Since the subsequent Phase 1 documentation commits were made remotely, the owner's local branch now needs a fast-forward pull before local work.
 
 ---
 
@@ -692,6 +701,47 @@ Interpretation:
 - Do not add either path to a commit, overwrite it, delete it, clean it, or add an ignore rule without a separate explicit decision.
 - The file `untangle-audit.md` remains a local reference source. Do not assume it is part of the tracked repository simply because it is present in the working directory.
 
+
+### Phase 1 work log (2026-11-19)
+
+**Phase 1 start commit:** `7e906b4abb1b89d6b5770a15c180ee2a485f9f74`  
+**Current policy:** documentation and source-contract inspection only; no product source or workflow edits.
+
+Documents added on the cleanup branch:
+- [Local runtime, service and data contract](./docs/architecture/clippy-v1-local-runtime-contract.md) — commit `4d82e8dc7f`.
+- [Third-party licence and provenance inventory](./docs/compliance/clippy-v1-third-party-license-and-provenance-inventory.md) — commit `172df8dd53`.
+- [Hosted-service retirement preflight](./docs/compliance/clippy-hosted-service-retirement-preflight.md) — commit `edbd91db2d`.
+
+### Phase 1 findings to carry forward
+
+| ID | Finding | Priority | Required resolution |
+|---|---|---|---|
+| P1-01 | Ultralytics YOLO `8.4.46` and its default model are AGPLv3; the current MIT project licence is not proof of compliance with Ultralytics' commercial-use conditions | Critical | Owner selects Enterprise licence, full-project AGPL route after legal review, or a compatible replacement preserving person-detection behavior |
+| P1-02 | Remotion is pinned to v4.0.447; exact tagged licence eligibility depends on the organisation/team operating Clippy | High | Owner confirms the applicable headcount/status and obtains written clarification if the embedded product arrangement is uncertain |
+| P1-03 | Gyan's FFmpeg essentials static build is GPLv3, and setup downloads from a moving release URL with a separately fetched moving checksum | High | Pin exact build/version/source commit/hash and retain applicable GPL/source notices; obtain legal review of the distributed executable boundary |
+| P1-04 | bgutil 1.3.2 plugin and Node provider are GPLv3; payload preparation does not explicitly include the Node source/licence bundle before deleting the clone | High | Pin immutable commit and prepare complete corresponding-source/licence notices for every distributed component |
+| P1-05 | CUDA PyTorch runtime contains NVIDIA DLLs; CUDA Toolkit and cuDNN have separate EULAs and only specified components are distributable | High | Inventory actual runtime DLLs and map each package/version to the correct redistribution terms and notices |
+| P1-06 | Chrome Headless Shell archive is separately downloaded; the Chrome for Testing metadata repository's Apache licence is not proof of the browser binary's complete notice set | High | Inspect the exact versioned archive and package its browser/Chromium third-party notices |
+| P1-07 | Anton and Noto Serif fonts are OFL 1.1, but their licence texts are not present in the tracked fonts directory; Montserrat's OFL text is present | Medium | Add the identified font licence/copyright notices to the packaged third-party notice bundle |
+| P1-08 | Gemini key is stored plaintext in localStorage; other provider keys use reversible XOR/Base64 obfuscation | High | Design secure native storage and lossless migration; do not migrate hosted auth/session tokens |
+| P1-09 | Ultralytics' default Windows config/weights cache is outside Clippy's managed data root because the supervisor sets neither `YOLO_CONFIG_DIR` nor `YOLO_MODEL_PATH` | High | After the YOLO licensing decision, migrate cache/weights into managed model storage without losing existing files |
+| P1-10 | Dated repository privacy/retention documents describe an OpenShorts Cloud service and customer/subprocessor data flows; current live status is not independently verified | Critical | Owner confirms live-service status and approves any customer export, retention, shutdown or data-deletion plan |
+| P1-11 | Renderer job status is held in a process-local Map and is lost on renderer restart | Medium | Define required job recovery semantics before deciding on persistence in Phase 5 |
+
+### Phase 1 validation record
+
+- Documentation/source review only.
+- No product source, test, workflow, runtime or installer files were changed.
+- No CI run was started: changes are Markdown documentation only.
+- No Windows validation was started: no Windows runtime/installer source was changed.
+- Structural verification: all three new documents were fetched back from the cleanup branch and their headings/contents checked.
+- Artifact-level SBOM, exact CUDA DLL inventory, Chrome archive licence inspection, FFmpeg immutable asset pinning and corresponding-source packaging remain open.
+
+### Phase 1 owner decisions blocking closure
+
+1. **Ultralytics:** obtain Enterprise licensing or replace the detector with a commercially compatible implementation. A full-project AGPL licence is another route, but requires an explicit project-wide decision.
+2. **Remotion:** confirm whether Clippy is operated by an individual/non-profit or a for-profit organisation with three or fewer people, or by a larger organisation. Clarify the embedded product distribution with Remotion if needed.
+3. **Hosted service:** confirm whether OpenShorts Cloud still has live customers/accounts/subscriptions/data or whether the cloud code is now only historical. Repository docs dated 2026-09-04 describe the service and its operational data/retention obligations.
 
 ### Phase 1 start record
 
