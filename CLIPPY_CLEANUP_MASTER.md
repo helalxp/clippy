@@ -673,20 +673,6 @@ Current dashboard package provides `build` and `lint` scripts. The inspected CI 
 
 ### Local checkout confirmation and protected items
 
-From PowerShell in the existing repository directory:
-
-```powershell
-cd D:\openshorts
-git fetch origin
-git switch chore/master-cleanup-phase-0
-git status --short
-git log -1 --oneline
-```
-
-Do not switch branches if Git reports local modifications that you have not intentionally saved. Do not reset, clean, stash, or discard those changes as a shortcut. Report the status output so it can be reconciled safely.
-
-### Local checkout confirmation and protected items
-
 Owner-reported PowerShell state:
 ```text
 PS D:\\openshorts> git status --short
