@@ -41,7 +41,7 @@ class CaptureSettings:
             quality=self.quality,
         )
         config.validate()
-        if not re.fullmatch(r"(?:best|worst|audio_only|\\d{3,4}p\\d*)", self.quality, re.IGNORECASE):
+        if not re.fullmatch(r"(?:best|worst|audio_only|[0-9]{3,4}p[0-9]*)", self.quality, re.IGNORECASE):
             raise ValueError("Choose a supported stream quality.")
         return config
 
