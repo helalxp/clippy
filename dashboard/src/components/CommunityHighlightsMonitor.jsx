@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, CircleAlert, Loader2, MessageCircle, Square, Radio } from 'lucide-react';
-import { apiJson } from '../lib/api';
+import { apiFetch, apiJson } from '../lib/api';
 
 const statusLabel = (status) => ({
   connecting: 'Connecting',
@@ -18,6 +18,7 @@ export default function CommunityHighlightsMonitor() {
   const [candidates, setCandidates] = useState([]);
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -117,9 +118,9 @@ export default function CommunityHighlightsMonitor() {
     try {
       const payload = {
         ...triggerSettings,
-        phrases: String(triggerSettings.phrases || []).split
-          ? (Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases : String(triggerSettings.phrases).split(',').map((item) => item.trim()).filter(Boolean))
-          : [],
+        phrases: Array.isArray(triggerSettings.phrases)
+          ? triggerSettings.phrases
+          : String(triggerSettings.phrases || '').split(',').map((item) => item.trim()).filter(Boolean),
       };
       const saved = await apiJson('/api/community-highlights/triggers/settings', {
         method: 'PUT',
@@ -131,6 +132,45 @@ export default function CommunityHighlightsMonitor() {
       setError(requestError?.detail || 'Could not save trigger settings.');
     } finally {
       setSettingsBusy(false);
+    }
+  };
+
+
+  const downloadCandidate = async (candidateId) => {
+    setReviewBusy(candidateId);
+    setError('');
+    try {
+      const response = await apiFetch(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/file`);
+      if (!response.ok) throw new Error('The candidate file is not ready to download.');
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = blobUrl;
+      anchor.download = `community-highlight-${candidateId}.ts`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (requestError) {
+      setError(requestError?.detail || requestError.message || 'Could not download the candidate.');
+    } finally {
+      setReviewBusy('');
+    }
+  };
+
+  const decideCandidate = async (candidateId, approved) => {
+    setReviewBusy(candidateId);
+    setError('');
+    try {
+      await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      });
+      await refreshSessions();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not save the candidate decision.');
+    } finally {
+      setReviewBusy('');
     }
   };
 
@@ -303,6 +343,8 @@ export default function CommunityHighlightsMonitor() {
           {[
             ['min_messages', 'Messages', 2, 500],
             ['min_unique_users', 'Unique viewers', 1, 500],
+            ['window_seconds', 'Chat window (s)', 1, 120],
+            ['cooldown_seconds', 'Cooldown (s)', 0, 3600],
             ['pre_seconds', 'Seconds before', 0, 300],
             ['post_seconds', 'Seconds after', 0, 300],
           ].map(([key, label, min, max]) => (
@@ -332,10 +374,27 @@ export default function CommunityHighlightsMonitor() {
                     <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
                     <span className={candidate.status === 'ready' ? 'badge-ok' : 'readout'}>{candidate.status}</span>
                   </div>
-                  <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments</p>
+                  <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments · {candidate.review_status || 'pending review'}</p>
                   {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
                 </div>
-                {candidate.status === 'ready' && <span className="text-xs text-muted">Ready for review</span>}
+                {candidate.status === 'ready' && (
+                  <div className="flex gap-2 shrink-0">
+                    <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
+                      className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                      {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
+                    </button>
+                    {candidate.review_status === 'pending' ? (
+                      <>
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Approve</button>
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted capitalize">{candidate.review_status}</span>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
