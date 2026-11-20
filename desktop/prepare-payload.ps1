@@ -89,6 +89,7 @@ Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-archive.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-manifest-state.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-health.ps1") -Destination $stageRoot
+Copy-Item (Join-Path $PSScriptRoot "runtime-ffmpeg.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-contract.json") -Destination $stageRoot
 
 # The runtime bootstrap dot-sources these files before it can inspect or repair
@@ -98,6 +99,7 @@ $requiredRuntimeFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-health.ps1",
+    "runtime-ffmpeg.ps1",
     "runtime-contract.json",
     "runtime-manifest-state.ps1"
 )
