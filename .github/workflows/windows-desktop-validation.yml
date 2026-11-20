@@ -70,6 +70,7 @@ jobs:
           Write-Host "Python runtime rebuild required: $runtimeChanged"
 
   validate-windows:
+    needs: build-python-runtime
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -117,6 +118,7 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-manifest-state.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-health.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/runtime-ffmpeg.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/test-runtime-contract.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
           Get-Content ./desktop/src-tauri/tauri.updater.conf.json -Raw | ConvertFrom-Json | Out-Null
@@ -132,6 +134,17 @@ jobs:
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
+
+      - name: Download CPU runtime for clean first-run smoke test
+        uses: actions/download-artifact@v4
+        with:
+          name: clippy-python-runtime-cpu
+          path: desktop/runtime-dist
+
+      - name: Smoke-test clean first-run runtime setup
+        shell: pwsh
+        timeout-minutes: 30
+        run: ./desktop/smoke-test-runtime.ps1
 
       - name: Check backend Python syntax
         run: python -m compileall -q .
