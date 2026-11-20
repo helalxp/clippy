@@ -354,8 +354,11 @@ class CaptureSessionManager:
                 raise ValueError("Rejected candidate media has been deleted and cannot be re-approved.")
             candidate.review_status = "approved" if approved else "rejected"
             if not approved and candidate.output_path is not None:
-                candidate.output_path.unlink(missing_ok=True)
-                candidate.output_path = None
+                try:
+                    candidate.output_path.unlink(missing_ok=True)
+                    candidate.output_path = None
+                except OSError:
+                    candidate.error = "Rejected, but Windows could not remove the file because it is still in use."
             return candidate.snapshot()
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
