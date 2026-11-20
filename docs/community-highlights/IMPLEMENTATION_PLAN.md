@@ -95,9 +95,9 @@ This plan is deliberately incremental. Implement and verify one working slice at
 ### M2 — Streamlink/FFmpeg capture proof of concept
 
 - [ ] Add Streamlink as a controlled backend dependency and verify the supported Python API/version.
-- [ ] Resolve Twitch and YouTube live URLs through Streamlink.
-- [ ] Feed the selected live media stream to FFmpeg.
-- [ ] Record a continuous rolling set of short segments.
+- [x] Implement Twitch and YouTube URL resolution through Streamlink (live-stream smoke verification remains outstanding).
+- [x] Implement the Streamlink-reader to FFmpeg-stdin stream-copy path (real process integration remains outstanding).
+- [x] Implement FFmpeg segmented output and bounded age/size retention, including segment pin/release primitives (live continuity verification remains outstanding).
 - [ ] Verify audio/video continuity, timestamp metadata, stream disconnect/reconnect behavior, and graceful shutdown.
 - [ ] Exercise configurable pre-trigger and post-trigger windows without changing code.
 - [ ] Test with streams the developer is authorized to capture.
