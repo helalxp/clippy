@@ -15,6 +15,7 @@ export default function CommunityHighlightsMonitor() {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
+  const [captureSettings, setCaptureSettings] = useState({ segment_seconds: 4, retention_seconds: 180, max_buffer_size_mb: 512, quality: 'best' });
   const [candidates, setCandidates] = useState([]);
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -70,9 +71,8 @@ export default function CommunityHighlightsMonitor() {
       await apiJson('/api/community-highlights/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim() }),
+        body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
       });
-      setStreamUrl('');
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not start chat monitoring.');
@@ -242,6 +242,28 @@ export default function CommunityHighlightsMonitor() {
           Record rolling buffer
         </button>
       </div>
+      <p className="text-[11px] text-muted mt-2">Capture settings apply to new rolling buffers. Keep the buffer longer than your combined pre/post-trigger window.</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+          {[
+            ['segment_seconds', 'Segment (s)', 1, 60],
+            ['retention_seconds', 'Buffer (s)', 8, 3600],
+            ['max_buffer_size_mb', 'Buffer cap (MB)', 16, 8192],
+          ].map(([key, label, min, max]) => (
+            <label key={key} className="text-xs text-muted">
+              <span className="block mb-1">{label}</span>
+              <input type="number" min={min} max={max} value={captureSettings[key]}
+                onChange={(event) => setCaptureSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+            </label>
+          ))}
+          <label className="text-xs text-muted">
+            <span className="block mb-1">Stream quality</span>
+            <input value={captureSettings.quality}
+              onChange={(event) => setCaptureSettings((current) => ({ ...current, quality: event.target.value }))}
+              placeholder="best / 720p"
+              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+          </label>
+        </div>
 
       {error && (
         <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
