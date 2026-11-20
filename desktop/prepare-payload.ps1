@@ -83,7 +83,6 @@ Remove-Item $bgutilSource -Recurse -Force
 # Include all top-level Python modules and the Community Highlights package.
 # app.py imports both at backend startup; omitting a package breaks first run.
 Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
-Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
