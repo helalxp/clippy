@@ -171,3 +171,27 @@ def test_run_reports_missing_ffmpeg(tmp_path, monkeypatch):
     )
     with pytest.raises(RollingCaptureError, match="FFmpeg was not found"):
         capture.run()
+
+def test_protected_segments_are_not_pruned_until_released(tmp_path):
+    now = [1000.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, retention_seconds=20),
+        clock=lambda: now[0],
+    )
+    tmp_path.mkdir()
+    pinned = tmp_path / "segment-00000000.ts"
+    newest = tmp_path / "segment-00000001.ts"
+    pinned.write_bytes(b"pinned")
+    newest.write_bytes(b"newest")
+    import os
+    os.utime(pinned, (900, 900))
+    os.utime(newest, (995, 995))
+
+    protected = capture.protect_segments([pinned])
+    capture._prune_segments()
+    assert pinned.exists()
+
+    capture.release_segments(protected)
+    capture._prune_segments()
+    assert not pinned.exists()
