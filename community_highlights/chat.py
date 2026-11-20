@@ -6,7 +6,7 @@ import secrets
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import websockets
@@ -118,10 +118,11 @@ def _parse_youtube_message(item: dict[str, Any], video_id: str) -> ChatMessage |
 class ChatSessionManager:
     """Owns a small bounded set of provider chat tasks."""
 
-    def __init__(self, *, token_provider=ensure_access_token):
+    def __init__(self, *, token_provider=ensure_access_token, message_callback: Callable[[ChatMessage], None] | None = None):
         self._sessions: dict[str, ChatSession] = {}
         self._lock = asyncio.Lock()
         self._token_provider = token_provider
+        self._message_callback = message_callback
 
     async def start(self, stream_url: str) -> dict[str, Any]:
         reference = parse_stream_url(stream_url)
@@ -244,6 +245,11 @@ class ChatSessionManager:
                 message = _parse_twitch_message(line, channel)
                 if message:
                     session.messages.append(message)
+                    if self._message_callback:
+                        try:
+                            self._message_callback(message)
+                        except Exception:
+                            pass
 
     async def _run_youtube(self, session: ChatSession) -> None:
         video_id = session.reference.stream_id
@@ -305,9 +311,16 @@ class ChatSessionManager:
                     message = _parse_youtube_message(item, video_id)
                     if message:
                         session.messages.append(message)
+                        if self._message_callback:
+                            try:
+                                self._message_callback(message)
+                            except Exception:
+                                pass
                 page_token = payload.get("nextPageToken")
                 wait_ms = payload.get("pollingIntervalMillis", 5000)
                 await asyncio.sleep(max(1000, min(int(wait_ms), 30000)) / 1000)
 
 
-chat_sessions = ChatSessionManager()
+from .trigger_coordinator import trigger_coordinator
+
+chat_sessions = ChatSessionManager(message_callback=trigger_coordinator.on_message)
