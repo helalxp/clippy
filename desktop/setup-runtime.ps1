@@ -11,7 +11,7 @@ if ($env:CLIPPY_SETUP_WAIT_STDIN -ne '1') { $DesktopMutex = Enter-ClippyMutex $R
 $InstallMutex = Enter-ClippyMutex $Root
 try {
 $Contract = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'runtime-contract.json') -Raw | ConvertFrom-Json
-if ($Contract.schema -ne 1 -or $Contract.python -notmatch '^\d+\.\d+\.\d+$' -or $Contract.node -notmatch '^\d+\.\d+\.\d+$' -or $Contract.ffmpeg -ne 'gyan-release-essentials') { throw 'Unsupported runtime contract.' }
+if ($Contract.schema -ne 1 -or $Contract.python -notmatch '^\d+\.\d+\.\d+$' -or $Contract.node -notmatch '^\d+\.\d+\.\d+$' -or $Contract.ffmpeg -notmatch '^\d+\.\d+(?:\.\d+)?$' -or $Contract.ffmpegArchiveName -notmatch '^ffmpeg-[0-9.]+-essentials_build\.zip$' -or $Contract.ffmpegArchiveSha256 -notmatch '^[a-f0-9]{64}$' -or $Contract.ffmpegPrimaryUrl -notmatch '^https://www\.gyan\.dev/ffmpeg/builds/' -or $Contract.ffmpegFallbackUrl -notmatch '^https://github\.com/GyanD/codexffmpeg/releases/download/') { throw 'Unsupported runtime contract.' }
 $PythonVersion = $Contract.python
 $NodeVersion = $Contract.node
 $FfmpegVersion = $Contract.ffmpeg
@@ -117,9 +117,10 @@ $PythonArchiveSha256 = "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a6
 $NodeArchiveName = "node-v$NodeVersion-win-x64.zip"
 $NodeArchiveUrl = "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName"
 $NodeChecksumsUrl = "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt"
-$FfmpegArchiveName = "ffmpeg-release-essentials.zip"
-$FfmpegArchiveUrl = "https://www.gyan.dev/ffmpeg/builds/$FfmpegArchiveName"
-$FfmpegChecksumUrl = "$FfmpegArchiveUrl.sha256"
+$FfmpegArchiveName = [string]$Contract.ffmpegArchiveName
+$FfmpegArchiveUrl = [string]$Contract.ffmpegPrimaryUrl
+$FfmpegFallbackUrl = [string]$Contract.ffmpegFallbackUrl
+$FfmpegArchiveSha256 = [string]$Contract.ffmpegArchiveSha256
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
 $null = New-Item -ItemType Directory -Path $LogDir -Force
@@ -157,7 +158,7 @@ if ($ForceCpuRuntime) {
 # Load script dependencies only after logging and the failure trap are active.
 # This turns missing packaged helpers into a useful diagnostic instead of an
 # early PowerShell dot-source failure with no Clippy setup context.
-foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1", "runtime-health.ps1")) {
+foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1", "runtime-health.ps1", "runtime-ffmpeg.ps1")) {
     $HelperPath = Join-Path $PSScriptRoot $Helper
     if (-not (Test-Path -LiteralPath $HelperPath -PathType Leaf)) {
         throw "Application payload is incomplete. Missing required runtime helper: $HelperPath"
@@ -166,6 +167,7 @@ foreach ($Helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1", "runt
 . (Join-Path $PSScriptRoot "runtime-manifest-state.ps1")
 . (Join-Path $PSScriptRoot "runtime-archive.ps1")
 . (Join-Path $PSScriptRoot "runtime-health.ps1")
+. (Join-Path $PSScriptRoot "runtime-ffmpeg.ps1")
 if ($NvidiaGpuName) {
     Write-Stage ("Detected NVIDIA GPU: " + $NvidiaGpuName + "; driver " + $NvidiaDriverVersion + "; compute capability " + $NvidiaComputeCapability)
     if ($TorchVariant -eq "cpu") {
@@ -655,34 +657,15 @@ if ($LASTEXITCODE -ne 0 -or $InstalledNodeVersion.TrimStart([char]"v") -ne $Node
     throw "Managed Node.js runtime version check failed. Expected $NodeVersion, found $InstalledNodeVersion."
 }
 
-# FFmpeg is downloaded from the Windows builds publisher and verified against
-# the publisher's SHA-256 sidecar before extraction.
+# Both publisher endpoints must provide the exact pinned FFmpeg archive.
+# The expected digest is part of the runtime contract, not fetched at install time.
 $FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
 $FfmpegCheck = { param($dir) (Test-ClippyExecutable (Join-Path $dir 'ffmpeg.exe') '-version') -and (Test-ClippyExecutable (Join-Path $dir 'ffprobe.exe') '-version') }
 $ExistingFfmpegHealthy = & $FfmpegCheck $FfmpegDir
 if (-not $ExistingFfmpegHealthy) {
     Write-Stage 'Managed FFmpeg runtime requires replacement.'
     $FfmpegZip = Join-Path $Downloads $FfmpegArchiveName
-    $FfmpegHashFile = Join-Path $Downloads "$FfmpegArchiveName.sha256"
-    Download-File $FfmpegArchiveUrl $FfmpegZip
-    Download-File $FfmpegChecksumUrl $FfmpegHashFile
-    $HashText = Get-Content $FfmpegHashFile -Raw -ErrorAction SilentlyContinue
-    if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") {
-        Write-Stage "Cached FFmpeg checksum file is incomplete; downloading it again."
-        Remove-Item $FfmpegHashFile -Force -ErrorAction SilentlyContinue
-        Download-File $FfmpegChecksumUrl $FfmpegHashFile
-        $HashText = Get-Content $FfmpegHashFile -Raw
-        if ($HashText -notmatch "(?i)\b([a-f0-9]{64})\b") { throw "FFmpeg checksum sidecar did not contain a SHA-256 hash." }
-    }
-    $FfmpegExpectedHash = $Matches[1]
-    try {
-        Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
-    } catch {
-        Write-Stage "Cached FFmpeg archive failed verification; downloading a fresh copy."
-        Remove-Item $FfmpegZip -Force -ErrorAction SilentlyContinue
-        Download-File $FfmpegArchiveUrl $FfmpegZip
-        Assert-Sha256 $FfmpegZip $FfmpegExpectedHash
-    }
+    Get-ClippyFfmpegArchive -PrimaryUrl $FfmpegArchiveUrl -FallbackUrl $FfmpegFallbackUrl -ExpectedSha256 $FfmpegArchiveSha256 -ArchivePath $FfmpegZip | Out-Null
     $Extract = Join-Path $ScratchRoot "ffmpeg-extract"
     if (Test-Path $Extract) { Remove-Item $Extract -Recurse -Force }
     Expand-ArchiveFast $FfmpegZip $Extract

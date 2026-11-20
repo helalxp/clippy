@@ -50,6 +50,7 @@ jobs:
             '^desktop/runtime-archive\.ps1$',
             '^desktop/runtime-manifest-state\.ps1$',
             '^desktop/runtime-health\.ps1$',
+            '^desktop/runtime-ffmpeg\.ps1$',
             '^desktop/validate-runtime-assets\.ps1$',
             '^desktop/runtime-contract\.json$',
             '^desktop/setup-runtime\.ps1$',
@@ -69,6 +70,7 @@ jobs:
           Write-Host "Python runtime rebuild required: $runtimeChanged"
 
   validate-windows:
+    needs: [detect-runtime-changes, build-python-runtime-cpu]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -116,6 +118,7 @@ jobs:
           [scriptblock]::Create((Get-Content ./desktop/runtime-archive.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-manifest-state.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/runtime-health.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/runtime-ffmpeg.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/test-runtime-contract.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/validate-runtime-assets.ps1 -Raw)) | Out-Null
           Get-Content ./desktop/src-tauri/tauri.updater.conf.json -Raw | ConvertFrom-Json | Out-Null
@@ -131,6 +134,17 @@ jobs:
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
+
+      - name: Download CPU runtime for clean first-run smoke test
+        uses: actions/download-artifact@v4
+        with:
+          name: clippy-python-runtime-cpu
+          path: desktop/runtime-dist
+
+      - name: Smoke-test clean first-run runtime setup
+        shell: pwsh
+        timeout-minutes: 30
+        run: ./desktop/smoke-test-runtime.ps1
 
       - name: Check backend Python syntax
         run: python -m compileall -q .
@@ -197,15 +211,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build-python-runtime:
+  build-python-runtime-cpu:
     needs: detect-runtime-changes
     if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [cpu, cuda]
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -217,13 +227,39 @@ jobs:
 
       - name: Build and validate relocatable Python runtime
         shell: pwsh
-        run: ./desktop/build-python-runtime.ps1 -Variant "${{ matrix.variant }}"
+        run: ./desktop/build-python-runtime.ps1 -Variant "cpu"
 
       - name: Retain tested runtime package
         uses: actions/upload-artifact@v4
         with:
-          name: clippy-python-runtime-${{ matrix.variant }}
-          path: desktop/runtime-dist/clippy-python-${{ matrix.variant }}*
+          name: clippy-python-runtime-cpu
+          path: desktop/runtime-dist/clippy-python-cpu*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-python-runtime-cuda:
+    needs: detect-runtime-changes
+    if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 build tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+
+      - name: Build and validate relocatable Python runtime
+        shell: pwsh
+        run: ./desktop/build-python-runtime.ps1 -Variant "cuda"
+
+      - name: Retain tested runtime package
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-python-runtime-cuda
+          path: desktop/runtime-dist/clippy-python-cuda*
           if-no-files-found: error
           retention-days: 7
 

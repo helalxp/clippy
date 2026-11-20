@@ -416,8 +416,8 @@ mod tests {
         let hash = sha256(&root.join("requirements.txt")).unwrap();
         let mut manifest: RuntimeManifest = serde_json::from_value(serde_json::json!({
             "version":"1.0.0", "schema":1, "requirementsSha256":hash,
-            "state":format!("python=3.12.10;pythonVariant=cpu;node=22.23.3;ffmpeg=gyan-release-essentials;browser=4.0.447;requirements={hash}"),
-            "components":{"python":{"version":"3.12.10","installed":true},"node":{"version":"22.23.3","installed":true},"ffmpeg":{"version":"gyan-release-essentials","installed":true},"browser":{"version":"4.0.447","installed":true}}
+            "state":format!("python=3.12.10;pythonVariant=cpu;node=22.23.3;ffmpeg=9.1;browser=4.0.447;requirements={hash}"),
+            "components":{"python":{"version":"3.12.10","installed":true},"node":{"version":"22.23.3","installed":true},"ffmpeg":{"version":"9.1","installed":true},"browser":{"version":"4.0.447","installed":true}}
         })).unwrap();
         validate_contract(&manifest, &root).unwrap();
         fs::write(renderer.join("package.json"), r#"{"version":"4.0.448"}"#).unwrap();

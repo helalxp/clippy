@@ -27,6 +27,7 @@ Describe "Assembled Clippy application payload contract" {
             "setup-runtime.ps1",
             "runtime-archive.ps1",
             "runtime-health.ps1",
+            "runtime-ffmpeg.ps1",
             "runtime-contract.json",
             "runtime-manifest-state.ps1",
             "VERSION",
@@ -52,7 +53,7 @@ Describe "Assembled Clippy application payload contract" {
     }
 
     It "contains the current setup contract and helpers, not a stale build" {
-        foreach ($relative in @('setup-runtime.ps1','runtime-health.ps1','runtime-contract.json','runtime-archive.ps1','runtime-manifest-state.ps1')) {
+        foreach ($relative in @('setup-runtime.ps1','runtime-health.ps1','runtime-contract.json','runtime-archive.ps1','runtime-manifest-state.ps1','runtime-ffmpeg.ps1')) {
             $stream = (Get-PayloadZipEntry $relative).Open()
             $reader = [IO.StreamReader]::new($stream)
             try { $packaged = $reader.ReadToEnd() } finally { $reader.Dispose() }
@@ -93,7 +94,7 @@ Describe "Assembled Clippy application payload contract" {
             $stream.Dispose()
         }
 
-        foreach ($helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1")) {
+        foreach ($helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1", "runtime-ffmpeg.ps1")) {
             $setupSource | Should -Match ([regex]::Escape($helper))
             Get-PayloadZipEntry $helper | Should -Not -BeNullOrEmpty
         }
