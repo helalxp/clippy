@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -29,7 +29,7 @@ class RollingCaptureConfig:
     retention_seconds: int = 180
     max_buffer_size_mb: int = 512
     quality: str = "best"
-    ffmpeg_path: str = "ffmpeg"
+    ffmpeg_path: str = field(default_factory=lambda: os.environ.get("FFMPEG_PATH", "ffmpeg"))
 
     def validate(self) -> None:
         if not isinstance(self.segment_seconds, int) or not 1 <= self.segment_seconds <= 60:
@@ -166,14 +166,14 @@ class RollingCapture:
         process = None
         try:
             self.segment_dir.mkdir(parents=True, exist_ok=True)
-            resolved = self._resolver(self.stream_url, quality=self.config.quality)
-            reader = resolved.open()
             ffmpeg = self.config.ffmpeg_path
             if not os.path.isabs(ffmpeg) and os.path.dirname(ffmpeg) == "":
                 ffmpeg = shutil.which(ffmpeg) or ""
             if not ffmpeg:
                 raise RollingCaptureError("FFmpeg was not found. Install FFmpeg or configure its executable path.")
 
+            resolved = self._resolver(self.stream_url, quality=self.config.quality)
+            reader = resolved.open()
             args = build_ffmpeg_segment_args(self.config)
             args[0] = ffmpeg
             try:
