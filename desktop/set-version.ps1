@@ -15,7 +15,8 @@ if ($Check -and -not [string]::IsNullOrWhiteSpace($Version)) {
     throw "Do not pass a version value together with -Check. Check mode reads VERSION."
 }
 
-if ([string]::IsNullOrWhiteSpace($RootPath)) {
+$isCustomRoot = -not [string]::IsNullOrWhiteSpace($RootPath)
+if (-not $isCustomRoot) {
     $repoRoot = Split-Path -Parent $PSScriptRoot
 } else {
     if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
@@ -39,11 +40,8 @@ function Replace-VersionField(
         throw "Expected exactly one $Description version field; found $($matches.Count). No files were changed."
     }
 
-    $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{
-        param($match)
-        return $match.Groups[1].Value + $NewVersion + $match.Groups[2].Value
-    }
-    return $regex.Replace($Content, $evaluator, 1)
+    $replacement = '1' + $NewVersion + '2'
+    return $regex.Replace($Content, $replacement, 1)
 }
 
 $versionPath = Join-Path $repoRoot "VERSION"
@@ -153,6 +151,6 @@ foreach ($entry in $plan) {
 Write-Host "Clippy version metadata synchronized to $canonicalVersion." -ForegroundColor Green
 
 # Keep the existing read-only validator as the final authority for the complete contract.
-if (-not $RootPath) {
+if (-not $isCustomRoot) {
     & (Join-Path $PSScriptRoot "validate-version.ps1") -ExpectedVersion $canonicalVersion
 }
