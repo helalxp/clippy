@@ -99,8 +99,17 @@ def test_run_pipes_stream_and_finalizes_ffmpeg(tmp_path, monkeypatch):
         def open(self):
             return self.stream.open()
 
-    class FakeStdin(io.BytesIO):
-        pass
+    class FakeStdin:
+        def __init__(self):
+            self.data = bytearray()
+            self.closed = False
+
+        def write(self, chunk):
+            self.data.extend(chunk)
+            return len(chunk)
+
+        def close(self):
+            self.closed = True
 
     class FakeProcess:
         def __init__(self, *_args, **kwargs):
@@ -144,7 +153,8 @@ def test_run_pipes_stream_and_finalizes_ffmpeg(tmp_path, monkeypatch):
     capture.run()
 
     assert opened[0] == ("https://twitch.tv/channel", "best")
-    assert process.stdin.getvalue() == b"onetwo"
+    assert bytes(process.stdin.data) == b"onetwo"
+    assert process.stdin.closed is True
     assert process.waited is True
     assert process.kwargs["shell"] is False
 
