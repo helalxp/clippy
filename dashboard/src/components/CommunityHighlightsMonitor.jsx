@@ -24,39 +24,38 @@ export default function CommunityHighlightsMonitor() {
   const [error, setError] = useState('');
 
   const refreshSessions = async () => {
-    const [chatResult, captureResult, candidateResult, settingsResult] = await Promise.all([
+    const [chatResult, captureResult, candidateResult] = await Promise.all([
       apiJson('/api/community-highlights/sessions'),
       apiJson('/api/community-highlights/captures'),
       apiJson('/api/community-highlights/candidates'),
-      apiJson('/api/community-highlights/triggers/settings'),
     ]);
     setSessions(chatResult.sessions || []);
     setCaptures(captureResult.sessions || []);
     setCandidates(candidateResult.candidates || []);
-    setTriggerSettings(settingsResult);
   };
 
   useEffect(() => {
     let active = true;
     const refresh = async () => {
       try {
-        const [chatResult, captureResult, candidateResult, settingsResult] = await Promise.all([
+        const [chatResult, captureResult, candidateResult] = await Promise.all([
           apiJson('/api/community-highlights/sessions'),
           apiJson('/api/community-highlights/captures'),
           apiJson('/api/community-highlights/candidates'),
-          apiJson('/api/community-highlights/triggers/settings'),
         ]);
         if (active) {
           setSessions(chatResult.sessions || []);
           setCaptures(captureResult.sessions || []);
           setCandidates(candidateResult.candidates || []);
-          setTriggerSettings(settingsResult);
         }
       } catch (requestError) {
         if (active) setError(requestError?.detail || 'Could not load Community Highlights status.');
       }
     };
     refresh();
+    apiJson('/api/community-highlights/triggers/settings')
+      .then((settings) => { if (active) setTriggerSettings(settings); })
+      .catch((requestError) => { if (active) setError(requestError?.detail || 'Could not load trigger settings.'); });
     const interval = setInterval(refresh, 3000);
     return () => {
       active = false;
@@ -400,10 +399,12 @@ export default function CommunityHighlightsMonitor() {
                 </div>
                 {candidate.status === 'ready' && (
                   <div className="flex gap-2 shrink-0">
-                    <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
-                      className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                      {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
-                    </button>
+                    {candidate.review_status !== 'rejected' && (
+                      <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
+                        className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                        {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
+                      </button>
+                    )}
                     {candidate.review_status === 'pending' ? (
                       <>
                         <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
