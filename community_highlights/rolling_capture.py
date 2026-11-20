@@ -198,10 +198,7 @@ class RollingCapture:
                     break
                 if process.poll() is not None:
                     raise RollingCaptureError("FFmpeg stopped unexpectedly while recording.")
-                try:
-                    process.stdin.write(chunk)
-                except (BrokenPipeError, OSError):
-                    raise RollingCaptureError("FFmpeg stopped accepting the live stream.") from None
+                self._write_all(process.stdin, chunk)
                 self._prune_segments()
 
             self._finish_process(process)
@@ -236,6 +233,20 @@ class RollingCapture:
                 self._process = None
                 self._reader = None
                 self._stopped = True
+
+    @staticmethod
+    def _write_all(pipe: Any, chunk: bytes) -> None:
+        """Write every byte even when an unbuffered OS pipe accepts partial writes."""
+        view = memoryview(chunk)
+        offset = 0
+        try:
+            while offset < len(view):
+                written = pipe.write(view[offset:])
+                if not isinstance(written, int) or written <= 0:
+                    raise BrokenPipeError("FFmpeg input pipe closed.")
+                offset += written
+        except (BrokenPipeError, OSError):
+            raise RollingCaptureError("FFmpeg stopped accepting the live stream.") from None
 
     @staticmethod
     def _finish_process(process: Any, *, force: bool = False) -> None:
