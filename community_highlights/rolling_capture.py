@@ -213,7 +213,12 @@ class RollingCapture:
     def request_stop(self) -> None:
         self._stop_requested.set()
 
-    def run(self, stop_event: threading.Event | None = None) -> None:
+    def run(
+        self,
+        stop_event: threading.Event | None = None,
+        *,
+        on_started: Callable[[], None] | None = None,
+    ) -> None:
         """Run until stopped or the source ends; call from a worker thread."""
         with self._lock:
             if self._process is not None or self._started_at is not None:
@@ -251,6 +256,8 @@ class RollingCapture:
             with self._lock:
                 self._process = process
                 self._reader = reader
+            if on_started is not None:
+                on_started()
 
             while not self._stop_requested.is_set() and not external_stop.is_set():
                 chunk = reader.read(256 * 1024)
