@@ -48,7 +48,6 @@ def test_prunes_oldest_segments_to_age_budget_but_keeps_newest(tmp_path):
         config(tmp_path, retention_seconds=20),
         clock=lambda: now[0],
     )
-    tmp_path.mkdir()
     old = tmp_path / "segment-00000000.ts"
     recent = tmp_path / "segment-00000001.ts"
     newest = tmp_path / "segment-00000002.ts"
