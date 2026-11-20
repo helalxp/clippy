@@ -40,7 +40,7 @@ function Replace-VersionField(
         throw "Expected exactly one $Description version field; found $($matches.Count). No files were changed."
     }
 
-    $replacement = '1' + $NewVersion + '2'
+    $replacement = '${1}' + $NewVersion + '${2}'
     return $regex.Replace($Content, $replacement, 1)
 }
 
