@@ -131,8 +131,12 @@ class CaptureSessionManager:
 
     def _run(self, session: CaptureSession) -> None:
         try:
-            session.status = "recording"
-            session.capture.run(session.stop_event)
+            def mark_recording() -> None:
+                with self._lock:
+                    if not session.stop_event.is_set():
+                        session.status = "recording"
+
+            session.capture.run(session.stop_event, on_started=mark_recording)
             if session.stop_event.is_set():
                 session.status = "stopped"
             else:
