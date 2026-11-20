@@ -137,6 +137,7 @@ $requiredPayloadFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-health.ps1",
+    "runtime-ffmpeg.ps1",
     "runtime-contract.json",
     "runtime-manifest-state.ps1",
     "render-service\dist\server.js",
