@@ -136,7 +136,7 @@ if ($Check) {
     }
 
     Write-Host "Clippy version $canonicalVersion is synchronized across all manifests." -ForegroundColor Green
-    exit 0
+    return
 }
 
 $encoding = [System.Text.UTF8Encoding]::new($false)
