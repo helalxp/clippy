@@ -280,10 +280,12 @@ class CaptureSessionManager:
                 if remaining > 0 and session.stop_event.wait(min(remaining, 0.5)):
                     raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
                 indexed = session.capture.read_segment_index()
-                completed_end = max(
-                    (segment_wall_interval(item)[1].timestamp() for item in indexed),
-                    default=0.0,
-                )
+                completed_end = 0.0
+                for item in indexed:
+                    try:
+                        completed_end = max(completed_end, segment_wall_interval(item)[1].timestamp())
+                    except (OSError, ValueError):
+                        continue
                 if completed_end >= post_deadline:
                     break
                 if session.stop_event.is_set():
