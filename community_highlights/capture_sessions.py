@@ -331,6 +331,9 @@ class CaptureSessionManager:
             if candidate.status != "ready":
                 raise ValueError("Only completed highlight candidates can be reviewed.")
             candidate.review_status = "approved" if approved else "rejected"
+            if not approved and candidate.output_path is not None:
+                candidate.output_path.unlink(missing_ok=True)
+                candidate.output_path = None
             return candidate.snapshot()
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
