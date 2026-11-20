@@ -308,7 +308,7 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 - Added segment pin/release operations so a future trigger coordinator can protect already-written pre-trigger segments from normal rolling-buffer pruning while it waits for post-trigger footage. Protected segments have their own byte-budget check, preventing the pin set from growing without bound.
 - Shutdown closes FFmpeg stdin to allow muxer finalization, then uses bounded wait/terminate/kill fallbacks. Pipe writes loop until the full chunk is accepted, including partial writes from unbuffered OS pipes. Streamlink reader cleanup is performed in the worker's `finally` path. The worker honors the existing `FFMPEG_PATH` environment setting and fails before opening a provider stream if FFmpeg cannot be located. Blocking resolver/read/write/process operations are explicitly intended to run outside the FastAPI event loop.
 - Added focused mocked tests for FFmpeg argument construction, config validation, age pruning, segment pinning, stream piping (including partial OS-pipe writes), safe CSV index parsing, stale/missing segment filtering, protected-storage budget enforcement, and missing-FFmpeg handling.
-- Updated the Windows runtime builder's import smoke check to include Streamlink. The builder consumes the root pinned requirements file, so no separate dependency list or runtime manifest hash was changed here.
+- Updated the Windows runtime builder's import smoke check to include Streamlink and explicitly import the Windows Credential Manager backend. The builder consumes the root pinned requirements file, so no separate dependency list or runtime manifest hash was changed here.
 - **Still outstanding:** real FFmpeg/Streamlink integration, capture reconnect behavior, and Windows validation. Pre/post-trigger selection and candidate assembly are now implemented as a first pass, but their file-mtime clock alignment is approximate and must be measured against real streams. Segment duration is a target and may extend to the next keyframe when stream-copying.
 - **Validation:** tests have been authored but not executed in this environment. No live provider stream or FFmpeg process was exercised. Packaged Windows runtime build/import check has not been run. The earlier resolver-only M2 note is superseded by this fuller rolling-capture progress entry.
 
@@ -362,3 +362,9 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 - Improved trigger error handling so a storage-budget or capture conflict does not tear down the provider chat transport. Manual trigger conflicts return a clear API conflict response.
 - **Not yet implemented:** inline playback preview, start/end trim controls, persistence of trigger settings and review decisions across backend restart, automatic processing mode, and renderer handoff.
 - **Validation:** code and focused tests are committed to the feature branch, but no tests/builds have been executed in this environment. The Windows validation pass remains the next acceptance activity after the capture/trigger slice is reviewed.
+
+
+### Windows runtime preflight update — 2026-11-20
+
+- Extended the packaged Python runtime import smoke check to import `keyring.backends.Windows.WinVaultKeyring`, not merely the top-level Keyring package. This catches a missing Windows Vault backend or dependency before the runtime archive is produced.
+- This is a validation guard only; the Windows runtime build has not been run in this session. The full focused Windows acceptance pass remains pending.
