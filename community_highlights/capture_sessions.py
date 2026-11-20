@@ -18,11 +18,14 @@ from typing import Any, Callable
 
 from .models import ChatProvider
 from .rolling_capture import RollingCapture, RollingCaptureConfig, RollingCaptureError
+from .extraction import assemble_segments
+from .timeline import select_segments_for_window, validate_contiguous_window
 from .urls import parse_stream_url
 
 
 MAX_CAPTURE_SESSIONS = 2
 STOP_JOIN_SECONDS = 45
+MAX_HIGHLIGHT_CANDIDATES = 20
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,35 @@ class CaptureSettings:
         if not re.fullmatch(r"(?:best|worst|audio_only|[0-9]{3,4}p[0-9]*)", self.quality, re.IGNORECASE):
             raise ValueError("Choose a supported stream quality.")
         return config
+
+
+@dataclass
+class HighlightCandidate:
+    candidate_id: str
+    capture_session_id: str
+    triggered_at: datetime
+    pre_seconds: int
+    post_seconds: int
+    reason: str
+    status: str = "capturing"
+    error: str | None = None
+    output_path: Path | None = None
+    segment_count: int = 0
+    worker: threading.Thread | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "capture_session_id": self.capture_session_id,
+            "triggered_at": self.triggered_at.isoformat(),
+            "pre_seconds": self.pre_seconds,
+            "post_seconds": self.post_seconds,
+            "reason": self.reason,
+            "status": self.status,
+            "error": self.error,
+            "file_name": self.output_path.name if self.output_path else None,
+            "segment_count": self.segment_count,
+        }
 
 
 @dataclass
@@ -92,6 +124,7 @@ class CaptureSessionManager:
         ) / "community-highlights"
         self._max_sessions = max_sessions
         self._sessions: dict[str, CaptureSession] = {}
+        self._candidates: dict[str, HighlightCandidate] = {}
         self._lock = threading.RLock()
 
     def start(
@@ -165,6 +198,128 @@ class CaptureSessionManager:
                     # Retain terminal sessions for inspection until capacity is
                     # needed; a new capture then reclaims completed entries.
                     del self._sessions[session_id]
+
+
+    def trigger(
+        self,
+        *,
+        provider: str,
+        stream_id: str,
+        triggered_at: datetime,
+        pre_seconds: int = 45,
+        post_seconds: int = 45,
+        reason: str = "chat_trigger",
+    ) -> dict[str, Any] | None:
+        if triggered_at.tzinfo is None or triggered_at.utcoffset() is None:
+            raise ValueError("Trigger timestamp must be timezone-aware.")
+        if not 0 <= pre_seconds <= 300 or not 0 <= post_seconds <= 300:
+            raise ValueError("Highlight windows must be between 0 and 300 seconds.")
+        with self._lock:
+            session = next(
+                (
+                    item for item in self._sessions.values()
+                    if item.provider.value == provider
+                    and item.stream_id == stream_id
+                    and item.status == "recording"
+                ),
+                None,
+            )
+            if session is None:
+                return None
+            if session.config.retention_seconds < pre_seconds + post_seconds + session.config.segment_seconds:
+                raise ValueError("Increase rolling-buffer retention to cover the requested highlight window.")
+            candidate_id = secrets.token_urlsafe(18)
+            candidate = HighlightCandidate(
+                candidate_id=candidate_id,
+                capture_session_id=session.session_id,
+                triggered_at=triggered_at,
+                pre_seconds=pre_seconds,
+                post_seconds=post_seconds,
+                reason=reason,
+            )
+            self._candidates[candidate_id] = candidate
+            self._prune_candidates_locked()
+            pre_records = select_segments_for_window(
+                session.capture.read_segment_index(),
+                triggered_at=triggered_at,
+                pre_seconds=pre_seconds,
+                post_seconds=0,
+            )
+            protected = session.capture.protect_segments([item.path for item in pre_records])
+            worker = threading.Thread(
+                target=self._finish_candidate,
+                args=(session, candidate, protected),
+                name=f"community-highlight-candidate-{candidate_id[:8]}",
+                daemon=True,
+            )
+            candidate.worker = worker
+            worker.start()
+            return candidate.snapshot()
+
+    def _finish_candidate(
+        self,
+        session: CaptureSession,
+        candidate: HighlightCandidate,
+        protected: list[Path],
+    ) -> None:
+        try:
+            if session.stop_event.wait(candidate.post_seconds):
+                raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
+            records = select_segments_for_window(
+                session.capture.read_segment_index(),
+                triggered_at=candidate.triggered_at,
+                pre_seconds=candidate.pre_seconds,
+                post_seconds=candidate.post_seconds,
+            )
+            additional = session.capture.protect_segments([item.path for item in records])
+            protected = list(dict.fromkeys([*protected, *additional]))
+            validate_contiguous_window(
+                records,
+                triggered_at=candidate.triggered_at,
+                pre_seconds=candidate.pre_seconds,
+                post_seconds=candidate.post_seconds,
+            )
+            output_path = session.config.output_dir / "highlights" / f"{candidate.candidate_id}.ts"
+            assemble_segments(records, output_path, ffmpeg_path=session.config.ffmpeg_path)
+            with self._lock:
+                candidate.output_path = output_path
+                candidate.segment_count = len(records)
+                candidate.status = "ready"
+        except (RollingCaptureError, ValueError, OSError) as error:
+            with self._lock:
+                candidate.error = str(error)
+                candidate.status = "error"
+        except Exception:
+            with self._lock:
+                candidate.error = "Clippy could not finish this highlight. Check the capture and FFmpeg logs."
+                candidate.status = "error"
+        finally:
+            session.capture.release_segments(protected)
+
+    def _prune_candidates_locked(self) -> None:
+        terminal = [
+            item for item in self._candidates.values()
+            if item.status in {"ready", "error"}
+            and (item.worker is None or not item.worker.is_alive())
+        ]
+        while len(self._candidates) > MAX_HIGHLIGHT_CANDIDATES and terminal:
+            oldest = terminal.pop(0)
+            self._candidates.pop(oldest.candidate_id, None)
+
+    def list_candidates(self, capture_session_id: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            items = list(self._candidates.values())
+            if capture_session_id is not None:
+                items = [item for item in items if item.capture_session_id == capture_session_id]
+            return [item.snapshot() for item in items]
+
+    def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
+        with self._lock:
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None:
+                return None
+            path = candidate.output_path if candidate.status == "ready" else None
+            return candidate.snapshot(), path
 
     async def stop(self, session_id: str) -> bool:
         with self._lock:
