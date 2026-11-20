@@ -94,33 +94,35 @@ This plan is deliberately incremental. Implement and verify one working slice at
 
 ### M2 — Streamlink/FFmpeg capture proof of concept
 
-- [ ] Add Streamlink as a controlled backend dependency and verify the supported Python API/version.
+- [x] Add Streamlink as a pinned backend dependency and use its Python stream API. Packaged Windows import verification remains part of the acceptance pass.
 - [x] Implement Twitch and YouTube URL resolution through Streamlink (live-stream smoke verification remains outstanding).
 - [x] Implement the Streamlink-reader to FFmpeg-stdin stream-copy path (real process integration remains outstanding).
 - [x] Implement FFmpeg segmented output and bounded age/size retention, including segment pin/release primitives (live continuity verification remains outstanding).
-- [ ] Verify audio/video continuity, timestamp metadata, stream disconnect/reconnect behavior, and graceful shutdown.
+- [ ] Verify audio/video continuity, timestamp metadata, stream disconnect/reconnect behavior, and graceful shutdown on Windows.
 - [x] Add a bounded capture-session manager with isolated output directories, immutable per-session settings snapshots, a two-session concurrency cap, safe status snapshots, and bounded worker shutdown.
 - [x] Expose protected API operations to start, list, inspect, and stop capture sessions; stop owned capture and chat workers during API shutdown.
-- [ ] Exercise configurable pre-trigger and post-trigger windows without changing code.
-- [ ] Test with streams the developer is authorized to capture.
+- [x] Add configurable pre-trigger/post-trigger window selection, segment protection, and lossless MPEG-TS assembly. The initial clock bridge estimates completed segment wall intervals from file modification times and FFmpeg segment durations; real-stream accuracy is not yet proven.
+- [ ] Test capture and extraction with streams the developer is authorized to capture.
 
-**Exit criteria:** an isolated backend proof of concept can capture a live stream from a URL, retain a bounded rolling buffer, and extract arbitrary configured time windows reliably.
+**Exit criteria:** an isolated backend proof of concept can capture a live stream from a URL, retain a bounded rolling buffer, and extract arbitrary configured time windows reliably. Code paths and mocked tests are in place; the live Windows proof remains outstanding.
 
 ### M3 — Trigger detection and capture coordination
 
-- [ ] Implement configurable keyword/phrase and community-volume rules.
-- [ ] Add unique-user thresholds, duplicate suppression, cooldowns, and overlapping-trigger merging.
-- [ ] Coordinate trigger timestamps with the rolling buffer.
-- [ ] Protect pre-trigger segments and record through the configured post-trigger boundary.
-- [ ] Persist capture jobs and recover interrupted work.
+- [x] Implement configurable phrase and community-volume rules, exposed through the Community Highlights monitor.
+- [x] Add unique-user thresholds, provider-message deduplication, and per-rule cooldowns.
+- [ ] Merge overlapping/nearby trigger windows to avoid duplicate candidates.
+- [x] Coordinate chat receipt timestamps with completed rolling segments using a documented file-mtime/duration estimate. Validate drift on Windows before tightening accuracy guarantees.
+- [x] Protect pre-trigger segments, wait for the configured post-trigger duration, validate coverage/gaps, and assemble the candidate without re-encoding.
+- [ ] Persist trigger/candidate state and recover interrupted work after backend restart.
 
-**Exit criteria:** a simulated or live chat trigger consistently produces the requested pre/post footage window.
+**Exit criteria:** a simulated or live chat trigger consistently produces the requested pre/post footage window. Mocked lifecycle coverage is authored; real Windows validation remains pending.
 
 ### M4 — Candidate analysis and review
 
 - [ ] Analyze triggered footage and propose clip boundaries.
-- [ ] Create a candidate lifecycle and persistence model.
-- [ ] Add Community Highlights UI for session status, candidates, preview, trimming, approve, and reject.
+- [x] Create an in-memory candidate lifecycle with capture status, processing status, segment count, and error reporting. Durable persistence remains pending.
+- [x] Add Community Highlights UI for candidate status, file download, approve, and reject.
+- [ ] Add inline preview and frame-accurate start/end trimming.
 - [ ] Reuse existing preview/editing components where appropriate.
 - [ ] Route approved candidates into the existing Clippy renderer.
 
@@ -332,4 +334,19 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 - Launch the desktop app and confirm both provider authorization panels render in the feature tab and Settings & Integrations.
 - Verify Twitch and Google authorization handoff, secure credential persistence, chat start/stop, and sanitized session status.
 - With FFmpeg installed and a stream the user is authorized to capture, use **Record rolling buffer**, inspect segment growth/index updates, stop it, and confirm the process exits cleanly.
+- Start chat monitoring and rolling capture for the same stream. Trigger with a configured phrase and with **Clip now**; verify pre-trigger protection, post-trigger wait, candidate assembly, download, and approve/reject behavior. Check timestamp drift and segment gaps against the visible stream timeline.
 - Record exact PowerShell commands and observed results. Anything not actually run remains marked pending; do not call the milestone validated until the user has completed the live-stream portion.
+
+
+### M2/M3 implementation slice — 2026-11-20
+
+- Added `timeline.py` to select completed FFmpeg segments overlapping a requested pre/post wall-clock window. FFmpeg CSV PTS remains media-relative; the first implementation estimates each segment's wall interval from its file modification time minus its indexed media duration.
+- Added strict coverage validation. A candidate is rejected instead of silently assembled when the pre-window is missing, the post-window has not completed, or a material segment gap is detected. Current tolerance is 2 seconds and must be checked against real Windows segment timing.
+- Added `extraction.py` to assemble selected MPEG-TS segments through FFmpeg's concat demuxer with `-c copy`, no shell, bounded execution time, a temporary manifest, and cleanup. This creates a lossless TS candidate; it does not yet guarantee MP4 compatibility across every provider codec.
+- Added a candidate worker lifecycle. At trigger time it pins available pre-trigger segments, waits for the configured post-trigger interval, refreshes the segment index, pins the selected window, validates coverage, assembles the candidate, and releases pins in a `finally` path. Candidate count is bounded.
+- Connected both Twitch and YouTube normalized chat messages to a provider-neutral trigger coordinator. Default rules recognize `clip it` / `clip that` and a configurable message-volume threshold with unique-user count, time window, and cooldown. Capture is triggered only when a matching provider/stream rolling capture is actively recording.
+- Trigger timestamps now use local chat receipt time, not provider event timestamps, because host file modification times are the current capture-clock reference.
+- Added API operations for trigger settings, candidate listing/status/download, manual **Clip now**, and approve/reject decisions. The dashboard exposes trigger controls and candidate status/review actions.
+- Added focused mocked tests for timeline selection, coverage rejection, lossless assembly arguments, trigger coordination, candidate extraction, and review decisions. Tests are authored but have not been run in this environment.
+- **Known limitations:** file-mtime alignment is an estimate, not a frame-accurate clock mapping; segment boundaries can move to keyframes; trigger settings and candidate decisions are currently in memory and reset when the backend restarts; overlapping-trigger merging, inline preview, trim controls, automatic processing, AI analysis, and renderer handoff are not implemented.
+- **Validation:** no local test runner is available here. No real FFmpeg/Streamlink process, live chat, Windows Credential Manager, or packaged Windows runtime has been exercised. Do not treat the capture/trigger path as validated until the requested Windows acceptance pass is complete.
