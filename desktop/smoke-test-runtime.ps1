@@ -102,6 +102,8 @@ try {
         "runtime-health.ps1",
         "runtime-contract.json",
         "app.py",
+        "community_highlights\__init__.py",
+        "community_highlights\api.py",
         "requirements.txt",
         "VERSION",
         "render-service\dist\server.js",

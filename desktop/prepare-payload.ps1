@@ -80,8 +80,9 @@ if (-not (Test-Path (Join-Path $bgutilPayload "build\generate_once.js"))) {
 }
 Remove-Item $bgutilSource -Recurse -Force
 
-# Include all top-level Python modules because app.py imports the pipeline as
-# sibling modules and launches several of them as subprocesses.
+# Include all top-level Python modules and the Community Highlights package.
+# app.py imports both at backend startup; omitting a package breaks first run.
+Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
@@ -107,7 +108,7 @@ foreach ($relativePath in $requiredRuntimeFiles) {
     }
 }
 
-$directories = @("assets", "fonts", "render-service", "remotion", "bin")
+$directories = @("assets", "fonts", "render-service", "remotion", "bin", "community_highlights")
 foreach ($name in $directories) {
     $source = Join-Path $repoRoot $name
     if (Test-Path $source) {
@@ -127,6 +128,8 @@ Get-ChildItem $stageRoot -Directory -Recurse -Force |
 # the native shell and first-run setup will require on a customer machine.
 $requiredPayloadFiles = @(
     "app.py",
+    "community_highlights\__init__.py",
+    "community_highlights\api.py",
     "local_library.py",
     "requirements.txt",
     "VERSION",

@@ -39,6 +39,8 @@ Describe "Assembled Clippy application payload contract" {
     It "contains every native-shell and first-run service entry point" {
         foreach ($entry in @(
             "app.py",
+            "community_highlights/__init__.py",
+            "community_highlights/api.py",
             "local_library.py",
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
@@ -77,6 +79,8 @@ Describe "Assembled Clippy application payload contract" {
         $smokeSource | Should -Match 'storage-location\.json'
         $smokeSource | Should -Match '\$env:CLIPPY_DATA_DIR = \$dataRoot'
         $smokeSource | Should -Match 'unexpectedly created a default data folder'
+        $smokeSource | Should -Match 'community_highlights\\__init__\.py'
+        $smokeSource | Should -Match 'community_highlights\\api\.py'
     }
 
     It "packages the helper scripts next to setup-runtime.ps1" {
