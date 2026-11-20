@@ -353,9 +353,17 @@ class CaptureSessionManager:
                 if callable(request_stop):
                     request_stop()
             worker = session.worker
+            candidate_workers = [
+                item.worker for item in self._candidates.values()
+                if item.capture_session_id == session_id and item.worker and item.worker.is_alive()
+            ]
 
         if worker and worker.is_alive():
             await asyncio.to_thread(worker.join, STOP_JOIN_SECONDS)
+        if candidate_workers:
+            await asyncio.gather(
+                *(asyncio.to_thread(item.join, STOP_JOIN_SECONDS) for item in candidate_workers)
+            )
         with self._lock:
             if worker and worker.is_alive():
                 session.status = "error"
