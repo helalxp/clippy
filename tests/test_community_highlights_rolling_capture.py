@@ -27,6 +27,8 @@ def test_builds_stream_copy_segment_command_without_shell(tmp_path):
     assert args[args.index("-i") + 1] == "pipe:0"
     assert args[args.index("-c") + 1] == "copy"
     assert args[args.index("-segment_time") + 1] == "4"
+    assert args[args.index("-segment_list_type") + 1] == "csv"
+    assert args[args.index("-segment_list_size") + 1] == "12"
     assert args[-1] == str(tmp_path / "segment-%08d.ts")
 
 
@@ -223,3 +225,40 @@ def test_write_all_reports_closed_pipe():
 
     with pytest.raises(RollingCaptureError, match="stopped accepting"):
         RollingCapture._write_all(ClosedPipe(), b"data")
+
+def test_reads_only_existing_safe_segment_index_entries(tmp_path):
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path),
+    )
+    first = tmp_path / "segment-00000000.ts"
+    second = tmp_path / "segment-00000001.ts"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    outside = tmp_path.parent / "outside.ts"
+    outside.write_bytes(b"outside")
+    (tmp_path / "segments.csv").write_text(
+        "segment-00000000.ts,0.0,4.0\\n"
+        "segment-00000001.ts,4.0,8.0\\n"
+        "../outside.ts,8.0,12.0\\n"
+        "segment-00000000.ts,nan,16.0\\n"
+        "partial-row\\n",
+        encoding="utf-8",
+    )
+
+    records = capture.read_segment_index()
+
+    assert [(r.path, r.start_seconds, r.end_seconds) for r in records] == [
+        (first.resolve(), 0.0, 4.0),
+        (second.resolve(), 4.0, 8.0),
+    ]
+    outside.unlink()
+
+
+def test_segment_index_ignores_files_removed_by_retention(tmp_path):
+    capture = RollingCapture("https://twitch.tv/channel", config(tmp_path))
+    (tmp_path / "segments.csv").write_text(
+        "segment-00000000.ts,0.0,4.0\\n",
+        encoding="utf-8",
+    )
+    assert capture.read_segment_index() == []
