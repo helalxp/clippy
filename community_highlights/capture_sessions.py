@@ -272,7 +272,9 @@ class CaptureSessionManager:
         protected: list[Path],
     ) -> None:
         try:
-            if session.stop_event.wait(candidate.post_seconds):
+            post_deadline = candidate.triggered_at.astimezone(timezone.utc).timestamp() + candidate.post_seconds
+            remaining = max(0.0, post_deadline - datetime.now(timezone.utc).timestamp())
+            if session.stop_event.wait(remaining):
                 raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
             records = select_segments_for_window(
                 session.capture.read_segment_index(),
