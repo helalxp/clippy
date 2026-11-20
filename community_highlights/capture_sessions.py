@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ from .urls import parse_stream_url
 
 
 MAX_CAPTURE_SESSIONS = 2
-STOP_JOIN_SECONDS = 12
+STOP_JOIN_SECONDS = 45
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,8 @@ class CaptureSettings:
             quality=self.quality,
         )
         config.validate()
+        if not re.fullmatch(r"(?:best|worst|audio_only|\\d{3,4}p\\d*)", self.quality, re.IGNORECASE):
+            raise ValueError("Choose a supported stream quality.")
         return config
 
 
