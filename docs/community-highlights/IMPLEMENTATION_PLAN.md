@@ -318,6 +318,7 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 - Added start/list/status/stop API endpoints with request-bound validation for segment duration, retention, buffer budget, and Streamlink quality. Status responses contain only the provider and normalized stream identifier; they do not echo the pasted URL, query parameters, credentials, or resolved media URL.
 - Added an FFmpeg-start callback so a session is reported as recording only after the process has actually launched, rather than when the Python worker thread merely starts.
 - Added API shutdown cleanup for owned capture and chat workers. Capture shutdown waits off the FastAPI event loop and uses the capture worker's bounded Streamlink/FFmpeg cleanup path.
+- Added a separate **Record rolling buffer** action and live capture-status list to the Community Highlights monitor. Chat monitoring and video capture can now be started/stopped independently for the M2 smoke test; this is deliberately not presented as automatic trigger capture.
 - Added focused mocked tests for unique session directories, immutable settings snapshots, unsupported URLs, concurrency limits, stop behavior, sanitized status, and reclaiming a finished session slot.
 - **Known limitation:** Streamlink reads may block until their configured 30-second timeout. Stop/shutdown therefore has a 45-second bounded join window. A real Windows Streamlink/FFmpeg run is required to validate that the reader and FFmpeg process actually unwind correctly under the packaged runtime.
 - **Validation:** tests have been authored but not executed in this session. No real stream, FFmpeg process, or Windows runtime has been exercised.
@@ -330,5 +331,5 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 - Run focused Community Highlights pytest tests on Windows.
 - Launch the desktop app and confirm both provider authorization panels render in the feature tab and Settings & Integrations.
 - Verify Twitch and Google authorization handoff, secure credential persistence, chat start/stop, and sanitized session status.
-- With FFmpeg installed and a stream the user is authorized to capture, start a rolling capture, inspect segment growth/index updates, stop it, and confirm the process exits cleanly.
+- With FFmpeg installed and a stream the user is authorized to capture, use **Record rolling buffer**, inspect segment growth/index updates, stop it, and confirm the process exits cleanly.
 - Record exact PowerShell commands and observed results. Anything not actually run remains marked pending; do not call the milestone validated until the user has completed the live-stream portion.
