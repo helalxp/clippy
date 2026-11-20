@@ -19,5 +19,8 @@ fastapi==0.136.1
 uvicorn==0.46.0
 python-multipart==0.0.27
 httpx==0.28.1
+websockets==15.0.1
+streamlink==8.6.3
+keyring==25.6.0
 Pillow==12.2.0
 beautifulsoup4==4.14.3

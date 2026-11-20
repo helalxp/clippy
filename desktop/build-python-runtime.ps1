@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) { throw "Could not install pinned $Variant Python depen
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
 $VersionCheck = (& $StagedPython --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") { throw "Packaged Python failed version check: $VersionCheck" }
-$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; print('torch=' + torch.__version__); print('av=' + av.__version__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
+$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av, streamlink, keyring; from keyring.backends.Windows import WinVaultKeyring; assert WinVaultKeyring; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; print('torch=' + torch.__version__); print('av=' + av.__version__); print('streamlink=' + getattr(streamlink, '__version__', 'installed')); print('keyring_windows_backend=' + WinVaultKeyring.__name__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
 & $StagedPython -c $ImportCheck
 if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import or PyAV compatibility validation." }
 
