@@ -114,3 +114,27 @@ def test_capture_settings_reject_invalid_quality_and_retention(tmp_path):
         CaptureSettings(quality="not-a-quality").snapshot(tmp_path)
     with pytest.raises(ValueError, match="at least two segments"):
         CaptureSettings(segment_seconds=10, retention_seconds=10).snapshot(tmp_path)
+
+
+def test_finished_capture_remains_visible_until_capacity_is_reused(tmp_path):
+    class FinishedCapture:
+        def __init__(self, _url, _config):
+            pass
+
+        def run(self, _stop_event, *, on_started=None):
+            if on_started:
+                on_started()
+
+        def request_stop(self):
+            pass
+
+    manager = CaptureSessionManager(
+        capture_factory=FinishedCapture, output_root=tmp_path, max_sessions=1
+    )
+    started = manager.start("https://www.twitch.tv/finished")
+    manager._sessions[started["session_id"]].worker.join(timeout=1)
+
+    assert manager.list()[0]["status"] == "ended"
+    assert manager.get(started["session_id"])["status"] == "ended"
+    manager.start("https://www.twitch.tv/next")
+    assert manager.get(started["session_id"]) is None
