@@ -159,12 +159,23 @@ class RollingCapture:
         protected: list[Path] = []
         root = self.segment_dir.resolve()
         with self._lock:
+            current = set(self._protected_segments)
+            additions: list[Path] = []
             for candidate in segments:
                 path = Path(candidate).resolve()
                 if path.parent != root or path.suffix.lower() != ".ts" or not path.is_file():
                     continue
-                self._protected_segments.add(path)
-                protected.append(path)
+                if path not in current and path not in additions:
+                    additions.append(path)
+            protected_bytes = sum(path.stat().st_size for path in current if path.is_file())
+            requested_bytes = sum(path.stat().st_size for path in additions)
+            budget = self.config.max_buffer_size_mb * 1024 * 1024
+            if protected_bytes + requested_bytes > budget:
+                raise RollingCaptureError(
+                    "The requested highlight window exceeds the configured protected-segment storage budget."
+                )
+            self._protected_segments.update(additions)
+            protected = [path for path in segments if Path(path).resolve() in self._protected_segments]
         return protected
 
     def release_segments(self, segments: list[Path]) -> None:
