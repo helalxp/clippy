@@ -15,32 +15,43 @@ export default function CommunityHighlightsMonitor() {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
+  const [candidates, setCandidates] = useState([]);
+  const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
+  const [settingsBusy, setSettingsBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const refreshSessions = async () => {
-    const [chatResult, captureResult] = await Promise.all([
+    const [chatResult, captureResult, candidateResult, settingsResult] = await Promise.all([
       apiJson('/api/community-highlights/sessions'),
       apiJson('/api/community-highlights/captures'),
+      apiJson('/api/community-highlights/candidates'),
+      apiJson('/api/community-highlights/triggers/settings'),
     ]);
     setSessions(chatResult.sessions || []);
     setCaptures(captureResult.sessions || []);
+    setCandidates(candidateResult.candidates || []);
+    setTriggerSettings(settingsResult);
   };
 
   useEffect(() => {
     let active = true;
     const refresh = async () => {
       try {
-        const [chatResult, captureResult] = await Promise.all([
+        const [chatResult, captureResult, candidateResult, settingsResult] = await Promise.all([
           apiJson('/api/community-highlights/sessions'),
           apiJson('/api/community-highlights/captures'),
+          apiJson('/api/community-highlights/candidates'),
+          apiJson('/api/community-highlights/triggers/settings'),
         ]);
         if (active) {
           setSessions(chatResult.sessions || []);
           setCaptures(captureResult.sessions || []);
+          setCandidates(candidateResult.candidates || []);
+          setTriggerSettings(settingsResult);
         }
       } catch (requestError) {
-        if (active) setError(requestError?.detail || 'Could not load chat sessions.');
+        if (active) setError(requestError?.detail || 'Could not load Community Highlights status.');
       }
     };
     refresh();
@@ -99,6 +110,44 @@ export default function CommunityHighlightsMonitor() {
     }
   };
 
+
+  const saveTriggerSettings = async () => {
+    setError('');
+    setSettingsBusy(true);
+    try {
+      const payload = {
+        ...triggerSettings,
+        phrases: String(triggerSettings.phrases || []).split
+          ? (Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases : String(triggerSettings.phrases).split(',').map((item) => item.trim()).filter(Boolean))
+          : [],
+      };
+      const saved = await apiJson('/api/community-highlights/triggers/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setTriggerSettings(saved);
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not save trigger settings.');
+    } finally {
+      setSettingsBusy(false);
+    }
+  };
+
+  const triggerNow = async (sessionId) => {
+    setError('');
+    try {
+      await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}/trigger`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pre_seconds: triggerSettings.pre_seconds, post_seconds: triggerSettings.post_seconds, reason: 'manual' }),
+      });
+      await refreshSessions();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not create a highlight candidate.');
+    }
+  };
+
   const stopMonitoring = async (sessionId) => {
     setError('');
     try {
@@ -120,7 +169,7 @@ export default function CommunityHighlightsMonitor() {
         <div className="min-w-0">
           <h2 className="text-base font-medium text-ink">Monitor a live chat</h2>
           <p className="text-xs sm:text-sm text-muted mt-1 leading-relaxed">
-            Paste a Twitch channel or YouTube live/video link. Clippy will connect to its chat and collect messages for the upcoming trigger-detection stage.
+            Paste a Twitch channel or YouTube live/video link. Start both chat monitoring and the rolling buffer on the same stream to let chat reactions create highlight candidates.
           </p>
         </div>
       </div>
@@ -208,7 +257,7 @@ export default function CommunityHighlightsMonitor() {
       <div className="mt-6 pt-5 border-t border-rule">
         <h3 className="text-sm font-medium text-ink mb-1">Rolling footage buffers</h3>
         <p className="text-xs text-muted mb-3 leading-relaxed">
-          Start a separate Streamlink/FFmpeg rolling capture to verify live video ingestion. It keeps a bounded local buffer and does not yet create highlights from chat triggers.
+          Streamlink and FFmpeg keep a bounded local buffer. When chat monitoring is active for the same stream, configured phrase or chat-volume triggers protect the pre-trigger footage and collect the post-trigger window.
         </p>
         {captures.length === 0 ? (
           <p className="text-xs text-muted">No rolling captures are running.</p>
@@ -224,18 +273,76 @@ export default function CommunityHighlightsMonitor() {
                   <p className="text-xs text-muted mt-1">{capture.stream_id} · {capture.segment_seconds}s segments · {capture.retention_seconds}s buffer</p>
                   {capture.error && <p className="text-xs text-warn mt-1">{capture.error}</p>}
                 </div>
-                <button type="button" onClick={() => stopCapture(capture.session_id)}
-                  disabled={['stopped', 'ended', 'error'].includes(capture.status)}
-                  className="shrink-0 rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
-                  <Square size={12} /> Stop
-                </button>
+                <div className="flex gap-2 shrink-0">
+                  <button type="button" onClick={() => triggerNow(capture.session_id)}
+                    disabled={capture.status !== 'recording'}
+                    className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                    Clip now
+                  </button>
+                  <button type="button" onClick={() => stopCapture(capture.session_id)}
+                    disabled={['stopped', 'ended', 'error'].includes(capture.status)}
+                    className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
+                    <Square size={12} /> Stop
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="mt-6 pt-5 border-t border-rule">
+        <h3 className="text-sm font-medium text-ink mb-2">Chat trigger rules</h3>
+        <p className="text-xs text-muted mb-3">A matching phrase or a burst of chat activity creates a candidate, but only when the same stream has an active rolling capture.</p>
+        <label className="block text-xs text-muted mb-1">Trigger phrases, comma-separated</label>
+        <input
+          value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
+          onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
+          className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink mb-3"
+        />
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            ['min_messages', 'Messages', 2, 500],
+            ['min_unique_users', 'Unique viewers', 1, 500],
+            ['pre_seconds', 'Seconds before', 0, 300],
+            ['post_seconds', 'Seconds after', 0, 300],
+          ].map(([key, label, min, max]) => (
+            <label key={key} className="text-xs text-muted">
+              <span className="block mb-1">{label}</span>
+              <input type="number" min={min} max={max} value={triggerSettings[key]}
+                onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+            </label>
+          ))}
+        </div>
+        <button type="button" onClick={saveTriggerSettings} disabled={settingsBusy}
+          className="mt-3 rounded-input border border-rule px-4 py-2 text-xs text-ink disabled:opacity-50">
+          {settingsBusy ? 'Saving…' : 'Save trigger settings'}
+        </button>
+      </div>
+      <div className="mt-6 pt-5 border-t border-rule">
+        <h3 className="text-sm font-medium text-ink mb-3">Highlight candidates</h3>
+        {candidates.length === 0 ? (
+          <p className="text-xs text-muted">No candidates yet. Chat reactions will appear here when both monitoring and recording are active for the same stream.</p>
+        ) : (
+          <div className="space-y-2">
+            {candidates.map((candidate) => (
+              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
+                    <span className={candidate.status === 'ready' ? 'badge-ok' : 'readout'}>{candidate.status}</span>
+                  </div>
+                  <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments</p>
+                  {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
+                </div>
+                {candidate.status === 'ready' && <span className="text-xs text-muted">Ready for review</span>}
               </div>
             ))}
           </div>
         )}
       </div>
       <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Chat monitoring and rolling video capture are independently testable now. Automatic chat-triggered capture, pre/post-trigger extraction, and candidate review are still under development.
+        Candidates are assembled as lossless MPEG-TS files. Fine trimming, approval/rejection workflow, and MP4 delivery are the next stage.
       </p>
     </section>
   );
