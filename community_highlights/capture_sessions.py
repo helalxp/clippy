@@ -328,7 +328,7 @@ class CaptureSessionManager:
     def _prune_candidates_locked(self) -> None:
         terminal = [
             item for item in self._candidates.values()
-            if item.status in {"ready", "error"}
+            if (item.status == "error" or (item.status == "ready" and item.review_status == "rejected"))
             and (item.worker is None or not item.worker.is_alive())
         ]
         while len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES and terminal:
