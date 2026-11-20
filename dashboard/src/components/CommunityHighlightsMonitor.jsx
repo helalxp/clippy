@@ -71,7 +71,7 @@ export default function CommunityHighlightsMonitor() {
       await apiJson('/api/community-highlights/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
+        body: JSON.stringify({ stream_url: streamUrl.trim() }),
       });
       await refreshSessions();
     } catch (requestError) {
@@ -88,9 +88,8 @@ export default function CommunityHighlightsMonitor() {
       await apiJson('/api/community-highlights/captures', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim() }),
+        body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
       });
-      setStreamUrl('');
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not start rolling capture.');
