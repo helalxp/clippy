@@ -70,7 +70,7 @@ jobs:
           Write-Host "Python runtime rebuild required: $runtimeChanged"
 
   validate-windows:
-    needs: build-python-runtime
+    needs: [detect-runtime-changes, build-python-runtime-cpu]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -211,15 +211,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build-python-runtime:
+  build-python-runtime-cpu:
     needs: detect-runtime-changes
     if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
     runs-on: windows-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [cpu, cuda]
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -231,13 +227,39 @@ jobs:
 
       - name: Build and validate relocatable Python runtime
         shell: pwsh
-        run: ./desktop/build-python-runtime.ps1 -Variant "${{ matrix.variant }}"
+        run: ./desktop/build-python-runtime.ps1 -Variant "cpu"
 
       - name: Retain tested runtime package
         uses: actions/upload-artifact@v4
         with:
-          name: clippy-python-runtime-${{ matrix.variant }}
-          path: desktop/runtime-dist/clippy-python-${{ matrix.variant }}*
+          name: clippy-python-runtime-cpu
+          path: desktop/runtime-dist/clippy-python-cpu*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-python-runtime-cuda:
+    needs: detect-runtime-changes
+    if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 build tooling
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+
+      - name: Build and validate relocatable Python runtime
+        shell: pwsh
+        run: ./desktop/build-python-runtime.ps1 -Variant "cuda"
+
+      - name: Retain tested runtime package
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-python-runtime-cuda
+          path: desktop/runtime-dist/clippy-python-cuda*
           if-no-files-found: error
           retention-days: 7
 
