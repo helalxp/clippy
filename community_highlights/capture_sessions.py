@@ -237,8 +237,9 @@ class CaptureSessionManager:
                 post_seconds=post_seconds,
                 reason=reason,
             )
-            self._candidates[candidate_id] = candidate
             self._prune_candidates_locked()
+            if len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES:
+                raise ValueError("The highlight candidate queue is full. Review or clear existing candidates first.")
             pre_records = select_segments_for_window(
                 session.capture.read_segment_index(),
                 triggered_at=triggered_at,
@@ -246,6 +247,7 @@ class CaptureSessionManager:
                 post_seconds=0,
             )
             protected = session.capture.protect_segments([item.path for item in pre_records])
+            self._candidates[candidate_id] = candidate
             worker = threading.Thread(
                 target=self._finish_candidate,
                 args=(session, candidate, protected),
@@ -253,7 +255,12 @@ class CaptureSessionManager:
                 daemon=True,
             )
             candidate.worker = worker
-            worker.start()
+            try:
+                worker.start()
+            except Exception:
+                self._candidates.pop(candidate_id, None)
+                session.capture.release_segments(protected)
+                raise
             return candidate.snapshot()
 
     def _finish_candidate(
@@ -302,7 +309,7 @@ class CaptureSessionManager:
             if item.status in {"ready", "error"}
             and (item.worker is None or not item.worker.is_alive())
         ]
-        while len(self._candidates) > MAX_HIGHLIGHT_CANDIDATES and terminal:
+        while len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES and terminal:
             oldest = terminal.pop(0)
             self._candidates.pop(oldest.candidate_id, None)
 
@@ -355,9 +362,14 @@ class CaptureSessionManager:
                     if callable(request_stop):
                         request_stop()
         workers = [s.worker for s in sessions if s.worker and s.worker.is_alive()]
-        if workers:
+        candidate_workers = [
+            item.worker for item in self._candidates.values()
+            if item.worker and item.worker.is_alive()
+        ]
+        all_workers = [*workers, *candidate_workers]
+        if all_workers:
             await asyncio.gather(
-                *(asyncio.to_thread(worker.join, STOP_JOIN_SECONDS) for worker in workers)
+                *(asyncio.to_thread(worker.join, STOP_JOIN_SECONDS) for worker in all_workers)
             )
         with self._lock:
             for session in sessions:
