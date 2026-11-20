@@ -156,9 +156,9 @@ class CaptureSessionManager:
             if session.status in {"stopped", "ended", "error"}:
                 worker = session.worker
                 if worker is None or not worker.is_alive():
-                    # Keep terminal state visible until the next explicit list
-                    # call after a new start; do not remove it here.
-                    continue
+                    # Retain terminal sessions for inspection until capacity is
+                    # needed; a new capture then reclaims completed entries.
+                    del self._sessions[session_id]
 
     async def stop(self, session_id: str) -> bool:
         with self._lock:
