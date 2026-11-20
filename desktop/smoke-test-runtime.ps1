@@ -100,6 +100,7 @@ try {
         "runtime-archive.ps1",
         "runtime-manifest-state.ps1",
         "runtime-health.ps1",
+        "runtime-ffmpeg.ps1",
         "runtime-contract.json",
         "app.py",
         "community_highlights\__init__.py",
