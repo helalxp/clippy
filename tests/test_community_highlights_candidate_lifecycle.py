@@ -104,3 +104,44 @@ def test_trigger_requires_matching_active_recording_session(tmp_path):
         post_seconds=0,
     )
     assert result is None
+
+
+def test_candidate_decision_requires_ready_candidate(tmp_path, monkeypatch):
+    segment = tmp_path / "segment-00000000.ts"
+    segment.write_bytes(b"mpeg-ts")
+    now = time.time()
+    import os
+    os.utime(segment, (now, now))
+    record = SegmentRecord(segment.resolve(), 0, 4)
+
+    def factory(url, config):
+        return FakeIndexedCapture(url, config, record)
+
+    def assemble(_records, output_path, **_kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"assembled")
+        return output_path
+
+    monkeypatch.setattr("community_highlights.capture_sessions.assemble_segments", assemble)
+    manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path / "sessions")
+    started = manager.start("https://www.twitch.tv/channel")
+    deadline = time.time() + 1
+    while manager.get(started["session_id"])["status"] != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+
+    candidate = manager.trigger(
+        provider="twitch",
+        stream_id="channel",
+        triggered_at=datetime.fromtimestamp(now, timezone.utc),
+        pre_seconds=0,
+        post_seconds=0,
+        reason="manual",
+    )
+    candidate_id = candidate["candidate_id"]
+    manager._candidates[candidate_id].worker.join(timeout=1)
+
+    decision = manager.decide_candidate(candidate_id, approved=True)
+    assert decision["review_status"] == "approved"
+    assert manager.decide_candidate(candidate_id, approved=False)["review_status"] == "rejected"
+
+    asyncio.run(manager.stop(started["session_id"]))
