@@ -1,6 +1,9 @@
 BeforeAll {
     . (Join-Path $PSScriptRoot "../runtime-ffmpeg.ps1")
     function Write-Stage([string]$Message) { }
+    # Define the setup-runtime dependencies so Pester can mock them in isolation.
+    function Download-File([string]$Url, [string]$Destination) { throw "Download-File must be mocked in this test." }
+    function Assert-Sha256([string]$Path, [string]$Expected) { throw "Assert-Sha256 must be mocked in this test." }
 }
 
 Describe "Pinned FFmpeg publisher mirror fallback" {
