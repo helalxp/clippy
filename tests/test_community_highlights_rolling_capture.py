@@ -262,3 +262,12 @@ def test_segment_index_ignores_files_removed_by_retention(tmp_path):
         encoding="utf-8",
     )
     assert capture.read_segment_index() == []
+
+def test_protected_segments_cannot_exceed_storage_budget(tmp_path):
+    capture = RollingCapture("https://twitch.tv/channel", config(tmp_path))
+    oversized = tmp_path / "segment-00000000.ts"
+    with oversized.open("wb") as handle:
+        handle.truncate(16 * 1024 * 1024 + 1)
+
+    with pytest.raises(RollingCaptureError, match="storage budget"):
+        capture.protect_segments([oversized])
