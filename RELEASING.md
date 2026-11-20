@@ -8,19 +8,32 @@ Clippy uses semantic versioning. The canonical application version is stored in 
 - Minor (for example, `0.3.0`): backwards-compatible features and improvements.
 - Major (for example, `1.0.0`): intentional breaking changes or a first stable public contract.
 
-Before a release, update `VERSION` and keep these files synchronized:
+## Updating the application version
 
-- `desktop/src-tauri/tauri.conf.json`
-- `desktop/src-tauri/Cargo.toml` and the `clippy-desktop` entry in `desktop/src-tauri/Cargo.lock`
-- `dashboard/package.json` and the root package entry in `dashboard/package-lock.json`
+The repository-root `VERSION` file is the only canonical application version. Do not edit the generated version fields in the Tauri, Cargo, or dashboard manifests by hand.
 
-Run the consistency check:
+Set a new version and synchronize every application manifest in one command:
 
 ```powershell
+./desktop/set-version.ps1 0.3.3-rc.1
+```
+
+Alternatively, edit only `VERSION`, then run the synchronizer without an argument:
+
+```powershell
+./desktop/set-version.ps1
+```
+
+The synchronizer updates the Tauri bundle version, the `clippy-desktop` Cargo package and lockfile entry, the dashboard package, and both dashboard lockfile version fields. It preserves dependency versions and fails before writing if any expected metadata field is missing or ambiguous.
+
+Check synchronization without changing files:
+
+```powershell
+./desktop/set-version.ps1 -Check
 ./desktop/validate-version.ps1
 ```
 
-The installer build runs this check automatically. The payload builder copies the canonical `VERSION` into the installed application payload.
+The Windows desktop validation workflow runs the version checks and the synchronizer's regression tests. The installer build continues to enforce the read-only validator. The payload builder copies the canonical `VERSION` into the installed application payload.
 
 ## Runtime release assets
 
@@ -71,7 +84,7 @@ v<VERSION> release tag
 4. Confirm all required CI is green on the exact PR head. For Windows installer/runtime changes, run the Windows desktop validation workflow, runtime package checks, payload/PowerShell contracts, Rust checks/tests, installer build, and first-run/render smoke tests.
 5. Exercise the relevant packaged application flow on a real Windows machine when the change affects installation, runtime setup, hardware selection, or user-facing desktop behavior. Record any remaining limitation rather than claiming it is verified.
 6. Merge the PR into `main` only after review and validation. Re-run affected checks if the merge result differs from the tested PR head.
-7. For a release, update the canonical version and synchronized manifests only after the accepted code is on `main`. Run `desktop/validate-version.ps1 -ExpectedVersion "vX.Y.Z"` (the release workflow supplies the tag automatically).
+7. For a release, update the canonical version only after the accepted code is on `main`. Run `desktop/set-version.ps1 X.Y.Z`, then run `desktop/validate-version.ps1 -ExpectedVersion "vX.Y.Z"` (the release workflow supplies the tag automatically).
 8. Push a new annotated tag named exactly `v<VERSION>`. A tag push triggers `Clippy Windows Release`; do not cut a release tag from an unvalidated commit.
 9. The workflow builds CPU and CUDA runtime packages, verifies their manifests and reconstructed archives, runs backend/frontend and PowerShell/Rust tests, builds the NSIS installer, and runs the clean first-run/runtime/render smoke test.
 10. The workflow creates a draft GitHub Release, uploads the installer, checksum, runtime manifests and assets, verifies all expected asset names and exact sizes, and publishes only after verification succeeds.
