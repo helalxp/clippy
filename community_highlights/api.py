@@ -4,10 +4,13 @@ Only safe connection and flow metadata is returned to the frontend. Provider
 credentials and device codes remain in the backend and Windows Credential Manager.
 """
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
 from .chat import chat_sessions
 from .capture_sessions import CaptureSettings, capture_sessions
+from .trigger_coordinator import trigger_coordinator
 from .urls import StreamUrlError
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
@@ -164,6 +167,22 @@ class StartCaptureSessionRequest(BaseModel):
     quality: str = Field(default="best", min_length=1, max_length=16)
 
 
+class TriggerSettingsRequest(BaseModel):
+    phrases: list[str] = Field(default_factory=lambda: ["clip it", "clip that"], max_length=30)
+    min_messages: int = Field(default=12, ge=2, le=500)
+    min_unique_users: int = Field(default=5, ge=1, le=500)
+    window_seconds: float = Field(default=10, ge=1, le=120)
+    cooldown_seconds: float = Field(default=60, ge=0, le=3600)
+    pre_seconds: int = Field(default=45, ge=0, le=300)
+    post_seconds: int = Field(default=45, ge=0, le=300)
+
+
+class ManualTriggerRequest(BaseModel):
+    pre_seconds: int = Field(default=45, ge=0, le=300)
+    post_seconds: int = Field(default=45, ge=0, le=300)
+    reason: str = Field(default="manual", min_length=1, max_length=40)
+
+
 @router.get("/api/community-highlights/sessions")
 async def list_chat_sessions():
     return {"sessions": await chat_sessions.list()}
@@ -234,3 +253,62 @@ async def stop_community_highlights_workers():
     await capture_sessions.stop_all()
     for session in await chat_sessions.list():
         await chat_sessions.stop(session["session_id"])
+
+
+@router.get("/api/community-highlights/triggers/settings")
+async def get_trigger_settings():
+    return trigger_coordinator.settings()
+
+
+@router.put("/api/community-highlights/triggers/settings")
+async def update_trigger_settings(body: TriggerSettingsRequest):
+    try:
+        return trigger_coordinator.configure(**body.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+
+
+@router.get("/api/community-highlights/candidates")
+async def list_highlight_candidates(capture_session_id: str | None = None):
+    return {"candidates": capture_sessions.list_candidates(capture_session_id)}
+
+
+@router.get("/api/community-highlights/candidates/{candidate_id}")
+async def get_highlight_candidate(candidate_id: str):
+    candidate = capture_sessions.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Highlight candidate not found.")
+    return candidate[0]
+
+
+@router.get("/api/community-highlights/candidates/{candidate_id}/file")
+async def download_highlight_candidate(candidate_id: str):
+    candidate = capture_sessions.get_candidate(candidate_id)
+    if candidate is None or candidate[1] is None or not candidate[1].is_file():
+        raise HTTPException(status_code=404, detail="Highlight file is not ready.")
+    return FileResponse(
+        candidate[1],
+        media_type="video/mp2t",
+        filename=f"community-highlight-{candidate_id}.ts",
+    )
+
+
+@router.post("/api/community-highlights/captures/{session_id}/trigger")
+async def trigger_highlight(session_id: str, body: ManualTriggerRequest):
+    session = capture_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Capture session not found.")
+    try:
+        candidate = capture_sessions.trigger(
+            provider=session["provider"],
+            stream_id=session["stream_id"],
+            triggered_at=datetime.now(timezone.utc),
+            pre_seconds=body.pre_seconds,
+            post_seconds=body.post_seconds,
+            reason=body.reason,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if candidate is None:
+        raise HTTPException(status_code=409, detail="Capture is not recording.")
+    return candidate
