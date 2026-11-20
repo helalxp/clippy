@@ -309,7 +309,7 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 - Shutdown closes FFmpeg stdin to allow muxer finalization, then uses bounded wait/terminate/kill fallbacks. Pipe writes loop until the full chunk is accepted, including partial writes from unbuffered OS pipes. Streamlink reader cleanup is performed in the worker's `finally` path. The worker honors the existing `FFMPEG_PATH` environment setting and fails before opening a provider stream if FFmpeg cannot be located. Blocking resolver/read/write/process operations are explicitly intended to run outside the FastAPI event loop.
 - Added focused mocked tests for FFmpeg argument construction, config validation, age pruning, segment pinning, stream piping (including partial OS-pipe writes), safe CSV index parsing, stale/missing segment filtering, protected-storage budget enforcement, and missing-FFmpeg handling.
 - Updated the Windows runtime builder's import smoke check to include Streamlink. The builder consumes the root pinned requirements file, so no separate dependency list or runtime manifest hash was changed here.
-- **Not implemented yet:** real FFmpeg/Streamlink integration, wall-clock alignment between chat receipt timestamps and FFmpeg media PTS, pre/post-trigger window selection and assembly, capture reconnect behavior, and coordination with live-chat triggers. Capture API/session lifecycle is now implemented, but it has only mocked-test coverage so far. Segment duration is a target and may extend to the next keyframe when stream-copying.
+- **Still outstanding:** real FFmpeg/Streamlink integration, capture reconnect behavior, and Windows validation. Pre/post-trigger selection and candidate assembly are now implemented as a first pass, but their file-mtime clock alignment is approximate and must be measured against real streams. Segment duration is a target and may extend to the next keyframe when stream-copying.
 - **Validation:** tests have been authored but not executed in this environment. No live provider stream or FFmpeg process was exercised. Packaged Windows runtime build/import check has not been run. The earlier resolver-only M2 note is superseded by this fuller rolling-capture progress entry.
 
 
@@ -333,6 +333,7 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 - Run focused Community Highlights pytest tests on Windows.
 - Launch the desktop app and confirm both provider authorization panels render in the feature tab and Settings & Integrations.
 - Verify Twitch and Google authorization handoff, secure credential persistence, chat start/stop, and sanitized session status.
+- Configure segment length, buffer retention, storage cap, and Streamlink quality in the monitor; confirm new sessions snapshot these settings.
 - With FFmpeg installed and a stream the user is authorized to capture, use **Record rolling buffer**, inspect segment growth/index updates, stop it, and confirm the process exits cleanly.
 - Start chat monitoring and rolling capture for the same stream. Trigger with a configured phrase and with **Clip now**; verify pre-trigger protection, post-trigger wait, candidate assembly, download, and approve/reject behavior. Check timestamp drift and segment gaps against the visible stream timeline.
 - Record exact PowerShell commands and observed results. Anything not actually run remains marked pending; do not call the milestone validated until the user has completed the live-stream portion.
@@ -350,3 +351,14 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 - Added focused mocked tests for timeline selection, coverage rejection, lossless assembly arguments, trigger coordination, candidate extraction, and review decisions. Tests are authored but have not been run in this environment.
 - **Known limitations:** file-mtime alignment is an estimate, not a frame-accurate clock mapping; segment boundaries can move to keyframes; trigger settings and candidate decisions are currently in memory and reset when the backend restarts; overlapping-trigger merging, inline preview, trim controls, automatic processing, AI analysis, and renderer handoff are not implemented.
 - **Validation:** no local test runner is available here. No real FFmpeg/Streamlink process, live chat, Windows Credential Manager, or packaged Windows runtime has been exercised. Do not treat the capture/trigger path as validated until the requested Windows acceptance pass is complete.
+
+
+### Candidate review and capture settings UI — 2026-11-20
+
+- Exposed segment duration, rolling retention, maximum buffer size, and Streamlink quality in the monitor. These values are sent only when starting a new capture; existing sessions retain their original configuration snapshot.
+- Kept the pasted stream URL in the input after starting chat or capture so the user can start both independent workers for the same stream without retyping it.
+- Added authenticated candidate-file download and in-memory approve/reject decisions. Only candidates in the ready state can be reviewed; decisions are reflected in the candidate list.
+- Added an explicit **Clip now** action for controlled testing without needing to post a trigger phrase in the live chat.
+- Improved trigger error handling so a storage-budget or capture conflict does not tear down the provider chat transport. Manual trigger conflicts return a clear API conflict response.
+- **Not yet implemented:** inline playback preview, start/end trim controls, persistence of trigger settings and review decisions across backend restart, automatic processing mode, and renderer handoff.
+- **Validation:** code and focused tests are committed to the feature branch, but no tests/builds have been executed in this environment. The Windows validation pass remains the next acceptance activity after the capture/trigger slice is reviewed.
