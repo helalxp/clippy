@@ -359,6 +359,7 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 - Kept the pasted stream URL in the input after starting chat or capture so the user can start both independent workers for the same stream without retyping it.
 - Added authenticated candidate-file download and in-memory approve/reject decisions. Only candidates in the ready state can be reviewed; decisions are reflected in the candidate list.
 - Added an explicit **Clip now** action for controlled testing without needing to post a trigger phrase in the live chat.
+- Rejected candidate media is deleted immediately to avoid retaining unwanted large files; pending and approved candidates are preserved while the in-memory review queue is below its cap.
 - Improved trigger error handling so a storage-budget or capture conflict does not tear down the provider chat transport. Manual trigger conflicts return a clear API conflict response.
 - **Not yet implemented:** inline playback preview, start/end trim controls, persistence of trigger settings and review decisions across backend restart, automatic processing mode, and renderer handoff.
 - **Validation:** code and focused tests are committed to the feature branch, but no tests/builds have been executed in this environment. The Windows validation pass remains the next acceptance activity after the capture/trigger slice is reviewed.
