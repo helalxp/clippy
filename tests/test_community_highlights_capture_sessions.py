@@ -107,3 +107,10 @@ def test_finished_capture_releases_concurrency_slot(tmp_path):
 
     second = manager.start("https://www.twitch.tv/second")
     assert second["stream_id"] == "second"
+
+
+def test_capture_settings_reject_invalid_quality_and_retention(tmp_path):
+    with pytest.raises(ValueError, match="supported stream quality"):
+        CaptureSettings(quality="not-a-quality").snapshot(tmp_path)
+    with pytest.raises(ValueError, match="at least two segments"):
+        CaptureSettings(segment_seconds=10, retention_seconds=10).snapshot(tmp_path)
