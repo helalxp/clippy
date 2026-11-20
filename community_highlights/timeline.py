@@ -56,7 +56,7 @@ def validate_contiguous_window(
     triggered_at: datetime,
     pre_seconds: float,
     post_seconds: float,
-    max_gap_seconds: float = 8.0,
+    max_gap_seconds: float = 2.0,
 ) -> None:
     """Reject obviously incomplete windows instead of silently creating a broken clip."""
     if not records:
