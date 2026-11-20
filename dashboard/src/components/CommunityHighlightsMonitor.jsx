@@ -143,6 +143,15 @@ export default function CommunityHighlightsMonitor() {
           {busy ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
           Monitor chat
         </button>
+        <button
+          type="button"
+          disabled={!streamUrl.trim() || busy}
+          onClick={startCapture}
+          className="rounded-input border border-rule text-ink px-5 py-2.5 text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />}
+          Record rolling buffer
+        </button>
       </div>
 
       {error && (
