@@ -114,7 +114,7 @@ class TriggerEngine:
                 rule_id=rule.rule_id,
                 provider=message.provider.value,
                 stream_id=message.stream_id,
-                triggered_at=message.provider_timestamp,
+                triggered_at=message.received_at,
                 reason=reason,
                 message_count=len(recent),
                 unique_user_count=len(users),
