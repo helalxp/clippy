@@ -327,7 +327,7 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 
 ### Windows validation gate requested by the user
 
-At the end of M2, begin a focused Windows validation pass so the user can test the feature on their Windows machine. This is an explicit milestone exit activity, not a full CI/installer matrix. It must include:
+At the end of the capture/trigger implementation slice, begin a focused Windows validation pass so the user can test the feature on their Windows machine. The focused runner is `desktop/validate-community-highlights.ps1`. This is an explicit milestone exit activity, not a full CI/installer matrix. It must include:
 
 - Build/import-check the packaged Python runtime with Streamlink and Keyring included.
 - Run focused Community Highlights pytest tests on Windows.
@@ -369,3 +369,10 @@ At the end of M2, begin a focused Windows validation pass so the user can test t
 
 - Extended the packaged Python runtime import smoke check to import `keyring.backends.Windows.WinVaultKeyring`, not merely the top-level Keyring package. This catches a missing Windows Vault backend or dependency before the runtime archive is produced.
 - This is a validation guard only; the Windows runtime build has not been run in this session. The full focused Windows acceptance pass remains pending.
+
+
+### Windows validation runner prepared — 2026-11-20
+
+- Added `desktop/validate-community-highlights.ps1`. It runs only the focused Community Highlights pytest files, verifies the Streamlink/HTTP/FastAPI imports and the actual Windows Credential Manager backend import, and checks whether FFmpeg is available.
+- The script has an optional `-BuildRuntime` switch for the packaged Python runtime build. It is intentionally opt-in because the CPU/CUDA runtime build downloads and stages the full Clippy ML dependency set and is substantially heavier than the focused tests.
+- **Not run here:** this environment has no attached Windows checkout or PowerShell session. The script is committed for the user-run Windows acceptance pass; no test/build result is being claimed.
