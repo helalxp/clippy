@@ -5,6 +5,7 @@ import threading
 from typing import Any
 
 from .capture_sessions import capture_sessions
+from .rolling_capture import RollingCaptureError
 from .models import ChatMessage
 from .triggers import TriggerEngine, TriggerRule
 
@@ -99,7 +100,7 @@ class TriggerCoordinator:
                     post_seconds=post_seconds,
                     reason=match.reason,
                 )
-            except ValueError:
+            except (ValueError, RollingCaptureError):
                 # Keep chat transport alive; an undersized buffer is surfaced
                 # through capture/candidate diagnostics rather than dropping chat.
                 continue
