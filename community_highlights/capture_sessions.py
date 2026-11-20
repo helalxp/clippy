@@ -137,16 +137,16 @@ class CaptureSessionManager:
                         session.status = "recording"
 
             session.capture.run(session.stop_event, on_started=mark_recording)
-            if session.stop_event.is_set():
-                session.status = "stopped"
-            else:
-                session.status = "ended"
+            with self._lock:
+                session.status = "stopped" if session.stop_event.is_set() else "ended"
         except RollingCaptureError as error:
-            session.error = str(error)
-            session.status = "error"
+            with self._lock:
+                session.error = str(error)
+                session.status = "error"
         except Exception:
-            session.error = "Live capture failed unexpectedly. Check the stream and FFmpeg installation."
-            session.status = "error"
+            with self._lock:
+                session.error = "Live capture failed unexpectedly. Check the stream and FFmpeg installation."
+                session.status = "error"
 
     def get(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -155,7 +155,6 @@ class CaptureSessionManager:
 
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
-            self._prune_finished_locked()
             return [session.snapshot() for session in self._sessions.values()]
 
     def _prune_finished_locked(self) -> None:
