@@ -13,7 +13,9 @@ class FakeCapture:
         self.stop_requested = False
         self.finished = threading.Event()
 
-    def run(self, stop_event):
+    def run(self, stop_event, *, on_started=None):
+        if on_started:
+            on_started()
         self.finished.wait(2)
         if stop_event.is_set():
             return
@@ -87,7 +89,9 @@ def test_finished_capture_releases_concurrency_slot(tmp_path):
         def __init__(self, _url, _config):
             pass
 
-        def run(self, _stop_event):
+        def run(self, _stop_event, *, on_started=None):
+            if on_started:
+                on_started()
             return
 
         def request_stop(self):
