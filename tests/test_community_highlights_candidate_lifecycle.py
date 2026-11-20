@@ -142,6 +142,9 @@ def test_candidate_decision_requires_ready_candidate(tmp_path, monkeypatch):
 
     decision = manager.decide_candidate(candidate_id, approved=True)
     assert decision["review_status"] == "approved"
+    output_path = manager.get_candidate(candidate_id)[1]
+    assert output_path.is_file()
     assert manager.decide_candidate(candidate_id, approved=False)["review_status"] == "rejected"
+    assert not output_path.exists()
 
     asyncio.run(manager.stop(started["session_id"]))
