@@ -71,6 +71,6 @@ Describe "Pinned FFmpeg publisher mirror fallback" {
 
     It "rejects an invalid pinned digest before downloading anything" {
         { Get-ClippyFfmpegArchive -PrimaryUrl "https://www.gyan.dev/primary.zip" -FallbackUrl "https://github.com/GyanD/codexffmpeg/releases/download/9.1/ffmpeg-9.1-essentials_build.zip" -ExpectedSha256 "not-a-hash" -ArchivePath $script:archive } | Should -Throw "*invalid SHA-256*"
-        $script:downloadCalls | Should -BeEmpty
+        $script:downloadCalls | Should -HaveCount 0
     }
 }
