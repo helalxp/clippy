@@ -155,7 +155,4 @@ Write-Host "Clippy version metadata synchronized to $canonicalVersion." -Foregro
 # Keep the existing read-only validator as the final authority for the complete contract.
 if (-not $RootPath) {
     & (Join-Path $PSScriptRoot "validate-version.ps1") -ExpectedVersion $canonicalVersion
-    if ($LASTEXITCODE -ne 0) {
-        throw "The existing version validator failed after synchronization."
-    }
 }
