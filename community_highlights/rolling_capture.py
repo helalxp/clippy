@@ -6,6 +6,8 @@ the FastAPI event loop.
 """
 from __future__ import annotations
 
+import csv
+import math
 import os
 import shutil
 import subprocess
@@ -20,6 +22,15 @@ from .streamlink_capture import ResolvedLiveStream, resolve_live_stream
 
 class RollingCaptureError(RuntimeError):
     """A live stream could not be recorded into rolling segments."""
+
+
+@dataclass(frozen=True)
+class SegmentRecord:
+    """One completed segment and its media-timeline presentation interval."""
+
+    path: Path
+    start_seconds: float
+    end_seconds: float
 
 
 @dataclass(frozen=True)
@@ -48,6 +59,8 @@ def build_ffmpeg_segment_args(config: RollingCaptureConfig) -> list[str]:
     """Build a no-shell, stream-copy FFmpeg command writing MPEG-TS segments."""
     config.validate()
     pattern = str(config.output_dir / "segment-%08d.ts")
+    index_path = config.output_dir / "segments.csv"
+    index_size = max(2, math.ceil(config.retention_seconds / config.segment_seconds) + 2)
     return [
         config.ffmpeg_path,
         "-hide_banner",
@@ -62,6 +75,9 @@ def build_ffmpeg_segment_args(config: RollingCaptureConfig) -> list[str]:
         "-segment_time", str(config.segment_seconds),
         "-reset_timestamps", "1",
         "-segment_start_number", "0",
+        "-segment_list", str(index_path),
+        "-segment_list_type", "csv",
+        "-segment_list_size", str(index_size),
         pattern,
     ]
 
@@ -104,6 +120,39 @@ class RollingCapture:
             (p for p in self.segment_dir.glob("segment-*.ts") if p.is_file()),
             key=lambda p: p.name,
         )
+
+    def read_segment_index(self) -> list[SegmentRecord]:
+        """Read FFmpeg's bounded CSV index, ignoring incomplete or pruned rows.
+
+        FFmpeg's CSV start/end values are media-timeline seconds, not wall-clock
+        timestamps. Chat-to-media clock alignment is intentionally a separate
+        responsibility of the future trigger coordinator.
+        """
+        index_path = self.segment_dir / "segments.csv"
+        if not index_path.is_file():
+            return []
+        root = self.segment_dir.resolve()
+        records: list[SegmentRecord] = []
+        try:
+            with index_path.open("r", encoding="utf-8", newline="") as handle:
+                for row in csv.reader(handle):
+                    if len(row) != 3:
+                        continue
+                    try:
+                        relative = Path(row[0])
+                        path = (root / relative).resolve() if not relative.is_absolute() else relative.resolve()
+                        start = float(row[1])
+                        end = float(row[2])
+                    except (OSError, TypeError, ValueError):
+                        continue
+                    if path.parent != root or not path.is_file():
+                        continue
+                    if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                        continue
+                    records.append(SegmentRecord(path, start, end))
+        except OSError:
+            return []
+        return records
 
     def protect_segments(self, segments: list[Path]) -> list[Path]:
         """Pin existing segments so retention cannot delete them during extraction."""
