@@ -19,7 +19,7 @@ from typing import Any, Callable
 from .models import ChatProvider
 from .rolling_capture import RollingCapture, RollingCaptureConfig, RollingCaptureError
 from .extraction import assemble_segments
-from .timeline import select_segments_for_window, validate_contiguous_window
+from .timeline import segment_wall_interval, select_segments_for_window, validate_contiguous_window
 from .urls import parse_stream_url
 
 
@@ -273,11 +273,27 @@ class CaptureSessionManager:
     ) -> None:
         try:
             post_deadline = candidate.triggered_at.astimezone(timezone.utc).timestamp() + candidate.post_seconds
-            remaining = max(0.0, post_deadline - datetime.now(timezone.utc).timestamp())
-            if session.stop_event.wait(remaining):
-                raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
+            flush_timeout = max(30, session.config.segment_seconds * 4)
+            flush_deadline = post_deadline + flush_timeout
+            while True:
+                remaining = max(0.0, post_deadline - datetime.now(timezone.utc).timestamp())
+                if remaining > 0 and session.stop_event.wait(min(remaining, 0.5)):
+                    raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
+                indexed = session.capture.read_segment_index()
+                completed_end = max(
+                    (segment_wall_interval(item)[1].timestamp() for item in indexed),
+                    default=0.0,
+                )
+                if completed_end >= post_deadline:
+                    break
+                if session.stop_event.is_set():
+                    raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
+                if datetime.now(timezone.utc).timestamp() >= flush_deadline:
+                    raise RollingCaptureError("FFmpeg did not finalize a segment covering the post-trigger boundary in time.")
+                session.stop_event.wait(0.25)
+
             records = select_segments_for_window(
-                session.capture.read_segment_index(),
+                indexed,
                 triggered_at=candidate.triggered_at,
                 pre_seconds=candidate.pre_seconds,
                 post_seconds=candidate.post_seconds,
