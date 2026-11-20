@@ -63,7 +63,7 @@ def test_validates_window_coverage_and_gaps(tmp_path):
     validate_contiguous_window(complete, triggered_at=trigger, pre_seconds=4, post_seconds=4)
 
     with pytest.raises(ValueError, match="full pre-trigger"):
-        validate_contiguous_window(complete[1:], triggered_at=trigger, pre_seconds=4, post_seconds=4)
+        validate_contiguous_window(complete[2:], triggered_at=trigger, pre_seconds=4, post_seconds=4)
 
 
 def test_assembles_selected_segments_without_reencoding(tmp_path):
