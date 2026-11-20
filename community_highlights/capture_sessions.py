@@ -58,6 +58,7 @@ class HighlightCandidate:
     post_seconds: int
     reason: str
     status: str = "capturing"
+    review_status: str = "pending"
     error: str | None = None
     output_path: Path | None = None
     segment_count: int = 0
@@ -72,6 +73,7 @@ class HighlightCandidate:
             "post_seconds": self.post_seconds,
             "reason": self.reason,
             "status": self.status,
+            "review_status": self.review_status,
             "error": self.error,
             "file_name": self.output_path.name if self.output_path else None,
             "segment_count": self.segment_count,
@@ -319,6 +321,17 @@ class CaptureSessionManager:
             if capture_session_id is not None:
                 items = [item for item in items if item.capture_session_id == capture_session_id]
             return [item.snapshot() for item in items]
+
+
+    def decide_candidate(self, candidate_id: str, *, approved: bool) -> dict[str, Any] | None:
+        with self._lock:
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None:
+                return None
+            if candidate.status != "ready":
+                raise ValueError("Only completed highlight candidates can be reviewed.")
+            candidate.review_status = "approved" if approved else "rejected"
+            return candidate.snapshot()
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
         with self._lock:
