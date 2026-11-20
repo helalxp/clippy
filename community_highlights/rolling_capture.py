@@ -88,6 +88,7 @@ class RollingCapture:
         self._stop_requested = threading.Event()
         self._started_at: float | None = None
         self._stopped = False
+        self._protected_segments: set[Path] = set()
         self._lock = threading.RLock()
 
     @property
@@ -103,6 +104,25 @@ class RollingCapture:
             key=lambda p: p.name,
         )
 
+    def protect_segments(self, segments: list[Path]) -> list[Path]:
+        """Pin existing segments so retention cannot delete them during extraction."""
+        protected: list[Path] = []
+        root = self.segment_dir.resolve()
+        with self._lock:
+            for candidate in segments:
+                path = Path(candidate).resolve()
+                if path.parent != root or path.suffix.lower() != ".ts" or not path.is_file():
+                    continue
+                self._protected_segments.add(path)
+                protected.append(path)
+        return protected
+
+    def release_segments(self, segments: list[Path]) -> None:
+        """Release previously pinned segments back to normal retention."""
+        with self._lock:
+            for candidate in segments:
+                self._protected_segments.discard(Path(candidate).resolve())
+
     def _prune_segments(self) -> None:
         """Enforce both age and byte budgets, preserving the newest segment."""
         segments = self.list_segments()
@@ -114,7 +134,11 @@ class RollingCapture:
         sizes = {p: p.stat().st_size for p in segments}
         total = sum(sizes.values())
         newest = segments[-1]
+        with self._lock:
+            protected = set(self._protected_segments)
         for segment in segments[:-1]:
+            if segment.resolve() in protected:
+                continue
             try:
                 age_expired = now - segment.stat().st_mtime > max_age
                 size_expired = total > max_bytes
