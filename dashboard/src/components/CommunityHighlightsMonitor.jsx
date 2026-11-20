@@ -14,20 +14,31 @@ const statusLabel = (status) => ({
 export default function CommunityHighlightsMonitor() {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
+  const [captures, setCaptures] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const refreshSessions = async () => {
-    const result = await apiJson('/api/community-highlights/sessions');
-    setSessions(result.sessions || []);
+    const [chatResult, captureResult] = await Promise.all([
+      apiJson('/api/community-highlights/sessions'),
+      apiJson('/api/community-highlights/captures'),
+    ]);
+    setSessions(chatResult.sessions || []);
+    setCaptures(captureResult.sessions || []);
   };
 
   useEffect(() => {
     let active = true;
     const refresh = async () => {
       try {
-        const result = await apiJson('/api/community-highlights/sessions');
-        if (active) setSessions(result.sessions || []);
+        const [chatResult, captureResult] = await Promise.all([
+          apiJson('/api/community-highlights/sessions'),
+          apiJson('/api/community-highlights/captures'),
+        ]);
+        if (active) {
+          setSessions(chatResult.sessions || []);
+          setCaptures(captureResult.sessions || []);
+        }
       } catch (requestError) {
         if (active) setError(requestError?.detail || 'Could not load chat sessions.');
       }
@@ -55,6 +66,36 @@ export default function CommunityHighlightsMonitor() {
       setError(requestError?.detail || 'Could not start chat monitoring.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const startCapture = async () => {
+    setError('');
+    setBusy(true);
+    try {
+      await apiJson('/api/community-highlights/captures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stream_url: streamUrl.trim() }),
+      });
+      setStreamUrl('');
+      await refreshSessions();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not start rolling capture.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopCapture = async (sessionId) => {
+    setError('');
+    try {
+      await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}`, {
+        method: 'DELETE',
+      });
+      await refreshSessions();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not stop rolling capture.');
     }
   };
 
@@ -155,8 +196,37 @@ export default function CommunityHighlightsMonitor() {
           </div>
         ))}
       </div>
+      <div className="mt-6 pt-5 border-t border-rule">
+        <h3 className="text-sm font-medium text-ink mb-1">Rolling footage buffers</h3>
+        <p className="text-xs text-muted mb-3 leading-relaxed">
+          Start a separate Streamlink/FFmpeg rolling capture to verify live video ingestion. It keeps a bounded local buffer and does not yet create highlights from chat triggers.
+        </p>
+        {captures.length === 0 ? (
+          <p className="text-xs text-muted">No rolling captures are running.</p>
+        ) : (
+          <div className="space-y-2">
+            {captures.map((capture) => (
+              <div key={capture.session_id} className="rounded-card border border-rule bg-paper2 p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-medium text-ink">{capture.provider === 'twitch' ? 'Twitch' : 'YouTube'}</span>
+                    <span className={capture.status === 'recording' ? 'badge-ok' : 'readout'}>{capture.status}</span>
+                  </div>
+                  <p className="text-xs text-muted mt-1">{capture.stream_id} · {capture.segment_seconds}s segments · {capture.retention_seconds}s buffer</p>
+                  {capture.error && <p className="text-xs text-warn mt-1">{capture.error}</p>}
+                </div>
+                <button type="button" onClick={() => stopCapture(capture.session_id)}
+                  disabled={['stopped', 'ended', 'error'].includes(capture.status)}
+                  className="shrink-0 rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
+                  <Square size={12} /> Stop
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        This milestone monitors chat only. Stream recording, rolling footage buffers, and automatic highlight capture are the next implementation stage.
+        Chat monitoring and rolling video capture are independently testable now. Automatic chat-triggered capture, pre/post-trigger extraction, and candidate review are still under development.
       </p>
     </section>
   );
