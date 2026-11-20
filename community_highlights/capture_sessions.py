@@ -350,6 +350,8 @@ class CaptureSessionManager:
                 return None
             if candidate.status != "ready":
                 raise ValueError("Only completed highlight candidates can be reviewed.")
+            if candidate.review_status == "rejected" and approved:
+                raise ValueError("Rejected candidate media has been deleted and cannot be re-approved.")
             candidate.review_status = "approved" if approved else "rejected"
             if not approved and candidate.output_path is not None:
                 candidate.output_path.unlink(missing_ok=True)
