@@ -183,6 +183,10 @@ class ManualTriggerRequest(BaseModel):
     reason: str = Field(default="manual", min_length=1, max_length=40)
 
 
+class CandidateDecisionRequest(BaseModel):
+    approved: bool
+
+
 @router.get("/api/community-highlights/sessions")
 async def list_chat_sessions():
     return {"sessions": await chat_sessions.list()}
@@ -311,4 +315,15 @@ async def trigger_highlight(session_id: str, body: ManualTriggerRequest):
         raise HTTPException(status_code=400, detail=str(error)) from None
     if candidate is None:
         raise HTTPException(status_code=409, detail="Capture is not recording.")
+    return candidate
+
+
+@router.post("/api/community-highlights/candidates/{candidate_id}/decision")
+async def decide_highlight_candidate(candidate_id: str, body: CandidateDecisionRequest):
+    try:
+        candidate = capture_sessions.decide_candidate(candidate_id, approved=body.approved)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Highlight candidate not found.")
     return candidate
