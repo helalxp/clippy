@@ -295,11 +295,14 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 - The UI can be implemented independently of the eventual chat transport, but exact scopes must match the selected transport and be kept least-privilege.
 - Official references: Twitch OAuth grant types and public device flow (https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/); Google desktop OAuth and PKCE (https://developers.google.com/identity/protocols/oauth2/native-app); YouTube Data API authorization/scopes (https://developers.google.com/youtube/v3/guides/authentication).
 
-### M2 — Streamlink resolver foundation — 2026-11-20
+### M2 — Streamlink/FFmpeg rolling capture foundation — 2026-11-20
 
-- Added the pinned `streamlink==8.6.3` runtime dependency.
-- Added a provider-neutral resolver using Streamlink's supported Python API (`Streamlink().streams(url)`). The returned object retains its owning session and exposes an explicit blocking `open()` boundary for the capture worker to call off the FastAPI event loop.
-- Normalize Twitch and YouTube URLs through the existing strict parser before passing them to Streamlink. Query strings, fragments, userinfo, and other URL decorations are not forwarded to provider plugins.
-- Added focused mocked tests for Twitch/YouTube URL normalization, quality selection, missing qualities, empty stream lists, missing dependency behavior, and stream opening.
-- This is only the resolver foundation. FFmpeg ingestion, rolling segment retention, pre/post-trigger extraction, and capture lifecycle APIs are not implemented yet.
-- **Validation:** tests were authored but not executed. No live Streamlink resolution was performed. The dependency's Python API was checked against the official Streamlink 8.6.3 documentation. The packaged Windows runtime dependency/integrity manifest still needs to be updated and verified as part of the packaging integration before this can ship.
+- Added the pinned `streamlink==8.6.3` dependency and a provider-neutral resolver using Streamlink's Python API. Twitch and YouTube URLs are normalized through the existing parser before being passed to provider plugins; URL credentials, query strings, and fragments are not forwarded.
+- Added `RollingCapture`, a worker-thread capture primitive that opens the resolved Streamlink reader and pipes bytes to FFmpeg over stdin. It uses an argument array with `shell=False`, stream-copy mode (`-c copy`), and the FFmpeg segment muxer to write MPEG-TS files. Only audio/video streams are mapped; there is no re-encoding in this foundation.
+- Added runtime configuration validation for segment duration, retention duration, buffer-size budget, quality, output directory, and FFmpeg executable. The retention pass prunes expired/over-budget older segments while preserving the newest in-progress segment.
+- Added segment pin/release operations so a future trigger coordinator can protect already-written pre-trigger segments from normal rolling-buffer pruning while it waits for post-trigger footage.
+- Shutdown closes FFmpeg stdin to allow muxer finalization, then uses bounded wait/terminate/kill fallbacks. Streamlink reader cleanup is performed in the worker's `finally` path. Blocking resolver/read/write/process operations are explicitly intended to run outside the FastAPI event loop.
+- Added focused mocked tests for FFmpeg argument construction, config validation, age pruning, segment pinning, stream piping, and missing-FFmpeg handling.
+- Updated the Windows runtime builder's import smoke check to include Streamlink. The builder consumes the root pinned requirements file, so no separate dependency list or runtime manifest hash was changed here.
+- **Not implemented yet:** capture API/session lifecycle, real FFmpeg/Streamlink integration, wall-clock segment indexing, pre/post-trigger window selection and assembly, reconnect behavior, and coordination with live-chat triggers. Segment duration is a target and may extend to the next keyframe when stream-copying.
+- **Validation:** tests have been authored but not executed in this environment. No live provider stream or FFmpeg process was exercised. Packaged Windows runtime build/import check has not been run. The earlier resolver-only M2 note is superseded by this fuller rolling-capture progress entry.
