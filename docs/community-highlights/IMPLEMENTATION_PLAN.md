@@ -412,3 +412,14 @@ After the preflight passes, continue with the interactive sign-in, chat, rolling
 - Both the general frontend build and the Windows desktop dashboard build stopped at the same incompatible icon import: `CircleAlert` is not exported by the repository's pinned `lucide-react@^0.344.0`. Replaced it with the supported `AlertCircle` export in both Community Highlights components.
 - The first Windows run successfully checked out the PR and provisioned Node, Python **3.12.10**, and Rust, but did not get past the dashboard build, so PowerShell contracts, backend syntax, Rust tests, and the NSIS installer were skipped. CPU/CUDA runtime-package jobs were still running when these fixes were prepared; no runtime-package pass is claimed.
 - **Status:** fixes committed for a fresh PR validation run. No live Twitch/YouTube OAuth, chat, Streamlink capture, or real FFmpeg extraction has been exercised; those remain manual acceptance checks.
+
+
+### PR #28 merged and Windows release-candidate validation — 2026-11-20
+
+- Squash-merged [PR #28](https://github.com/helalxp/clippy/pull/28) into `main` at `08c94272c9fc0355d21e9491780d3228d3cf72dc`. GitHub reported the PR as clean and mergeable before merge.
+- GitHub Actions completed successfully for the merged feature head: frontend build passed; backend suite reported **1,378 passed, 30 skipped, 0 failed**.
+- Windows desktop validation passed all steps: synchronized version validation, dashboard build, PowerShell installer-script validation, packaged backend/renderer payload preparation, Pester runtime/payload contract tests, Python syntax, Rust check, Rust tests, complete NSIS installer build, and artifact retention.
+- Both relocatable Python runtime package builds passed: **CPU and CUDA**. GitHub retained the installer, CPU runtime, and CUDA runtime artifacts from this validation run.
+- Interactive Twitch/Google authorization, actual live chat ingestion, real Streamlink/FFmpeg capture, and user-machine playback remain acceptance tests for the pre-release candidate. Automated build success does not claim those live-provider paths are proven.
+- The published stable release is `v0.3.1`; the most recent earlier RC is `v0.3.1-rc.4`. Prepared the next candidate as `0.3.2-rc.1` and synchronized the canonical version across `VERSION`, Tauri config, Rust package/lockfile, and dashboard package/lockfile. Independent `remotion`, `render-service`, and CLI package versions remain unchanged.
+- The release workflow is tag-driven. Pushing tag `v0.3.2-rc.1` after this version-preparation commit will run release validation, build both Python runtimes, produce and sign the Windows NSIS installer, publish a GitHub prerelease, and attach the updater manifest/checksum/runtime assets. The RC should be installed manually for testing because the production updater endpoint resolves the latest stable release, not GitHub prereleases.
