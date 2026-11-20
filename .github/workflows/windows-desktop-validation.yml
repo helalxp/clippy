@@ -50,6 +50,7 @@ jobs:
             '^desktop/runtime-archive\.ps1$',
             '^desktop/runtime-manifest-state\.ps1$',
             '^desktop/runtime-health\.ps1$',
+            '^desktop/runtime-ffmpeg\.ps1$',
             '^desktop/validate-runtime-assets\.ps1$',
             '^desktop/runtime-contract\.json$',
             '^desktop/setup-runtime\.ps1$',
