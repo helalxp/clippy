@@ -100,8 +100,9 @@ def test_run_pipes_stream_and_finalizes_ffmpeg(tmp_path, monkeypatch):
             self.closed = False
 
         def write(self, chunk):
-            self.data.extend(chunk)
-            return len(chunk)
+            accepted = bytes(chunk[:2])
+            self.data.extend(accepted)
+            return len(accepted)
 
         def close(self):
             self.closed = True
@@ -199,3 +200,26 @@ def test_protected_segments_are_not_pruned_until_released(tmp_path):
     capture.release_segments(protected)
     capture._prune_segments()
     assert not pinned.exists()
+
+def test_write_all_handles_partial_pipe_writes():
+    class PartialPipe:
+        def __init__(self):
+            self.data = bytearray()
+
+        def write(self, chunk):
+            accepted = bytes(chunk[:1])
+            self.data.extend(accepted)
+            return len(accepted)
+
+    pipe = PartialPipe()
+    RollingCapture._write_all(pipe, b"partial-write")
+    assert bytes(pipe.data) == b"partial-write"
+
+
+def test_write_all_reports_closed_pipe():
+    class ClosedPipe:
+        def write(self, _chunk):
+            return 0
+
+    with pytest.raises(RollingCaptureError, match="stopped accepting"):
+        RollingCapture._write_all(ClosedPipe(), b"data")
