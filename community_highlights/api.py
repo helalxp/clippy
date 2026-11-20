@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from .chat import chat_sessions
 from .capture_sessions import CaptureSettings, capture_sessions
 from .trigger_coordinator import trigger_coordinator
+from .rolling_capture import RollingCaptureError
 from .urls import StreamUrlError
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
@@ -311,8 +312,8 @@ async def trigger_highlight(session_id: str, body: ManualTriggerRequest):
             post_seconds=body.post_seconds,
             reason=body.reason,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from None
+    except (ValueError, RollingCaptureError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
     if candidate is None:
         raise HTTPException(status_code=409, detail="Capture is not recording.")
     return candidate
