@@ -99,6 +99,8 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [x] Implement the Streamlink-reader to FFmpeg-stdin stream-copy path (real process integration remains outstanding).
 - [x] Implement FFmpeg segmented output and bounded age/size retention, including segment pin/release primitives (live continuity verification remains outstanding).
 - [ ] Verify audio/video continuity, timestamp metadata, stream disconnect/reconnect behavior, and graceful shutdown.
+- [x] Add a bounded capture-session manager with isolated output directories, immutable per-session settings snapshots, a two-session concurrency cap, safe status snapshots, and bounded worker shutdown.
+- [x] Expose protected API operations to start, list, inspect, and stop capture sessions; stop owned capture and chat workers during API shutdown.
 - [ ] Exercise configurable pre-trigger and post-trigger windows without changing code.
 - [ ] Test with streams the developer is authorized to capture.
 
@@ -305,5 +307,28 @@ Validate settings at the API boundary. Applying changed settings affects new tri
 - Shutdown closes FFmpeg stdin to allow muxer finalization, then uses bounded wait/terminate/kill fallbacks. Pipe writes loop until the full chunk is accepted, including partial writes from unbuffered OS pipes. Streamlink reader cleanup is performed in the worker's `finally` path. The worker honors the existing `FFMPEG_PATH` environment setting and fails before opening a provider stream if FFmpeg cannot be located. Blocking resolver/read/write/process operations are explicitly intended to run outside the FastAPI event loop.
 - Added focused mocked tests for FFmpeg argument construction, config validation, age pruning, segment pinning, stream piping (including partial OS-pipe writes), safe CSV index parsing, stale/missing segment filtering, protected-storage budget enforcement, and missing-FFmpeg handling.
 - Updated the Windows runtime builder's import smoke check to include Streamlink. The builder consumes the root pinned requirements file, so no separate dependency list or runtime manifest hash was changed here.
-- **Not implemented yet:** capture API/session lifecycle, real FFmpeg/Streamlink integration, wall-clock alignment between chat receipt timestamps and FFmpeg media PTS, pre/post-trigger window selection and assembly, reconnect behavior, and coordination with live-chat triggers. Segment duration is a target and may extend to the next keyframe when stream-copying.
+- **Not implemented yet:** real FFmpeg/Streamlink integration, wall-clock alignment between chat receipt timestamps and FFmpeg media PTS, pre/post-trigger window selection and assembly, capture reconnect behavior, and coordination with live-chat triggers. Capture API/session lifecycle is now implemented, but it has only mocked-test coverage so far. Segment duration is a target and may extend to the next keyframe when stream-copying.
 - **Validation:** tests have been authored but not executed in this environment. No live provider stream or FFmpeg process was exercised. Packaged Windows runtime build/import check has not been run. The earlier resolver-only M2 note is superseded by this fuller rolling-capture progress entry.
+
+
+### M2 capture-session lifecycle — 2026-11-20
+
+- Added a supervised capture-session manager. Each capture receives a unique output directory and an immutable configuration snapshot, so changing settings for a later session cannot mutate an active capture.
+- Limited concurrent rolling captures to two. Completed sessions are retained for status inspection and reclaimed when a new session needs capacity; a worker that cannot stop within the bounded shutdown window is reported as an error rather than silently marked stopped.
+- Added start/list/status/stop API endpoints with request-bound validation for segment duration, retention, buffer budget, and Streamlink quality. Status responses contain only the provider and normalized stream identifier; they do not echo the pasted URL, query parameters, credentials, or resolved media URL.
+- Added an FFmpeg-start callback so a session is reported as recording only after the process has actually launched, rather than when the Python worker thread merely starts.
+- Added API shutdown cleanup for owned capture and chat workers. Capture shutdown waits off the FastAPI event loop and uses the capture worker's bounded Streamlink/FFmpeg cleanup path.
+- Added focused mocked tests for unique session directories, immutable settings snapshots, unsupported URLs, concurrency limits, stop behavior, sanitized status, and reclaiming a finished session slot.
+- **Known limitation:** Streamlink reads may block until their configured 30-second timeout. Stop/shutdown therefore has a 45-second bounded join window. A real Windows Streamlink/FFmpeg run is required to validate that the reader and FFmpeg process actually unwind correctly under the packaged runtime.
+- **Validation:** tests have been authored but not executed in this session. No real stream, FFmpeg process, or Windows runtime has been exercised.
+
+### Windows validation gate requested by the user
+
+At the end of M2, begin a focused Windows validation pass so the user can test the feature on their Windows machine. This is an explicit milestone exit activity, not a full CI/installer matrix. It must include:
+
+- Build/import-check the packaged Python runtime with Streamlink and Keyring included.
+- Run focused Community Highlights pytest tests on Windows.
+- Launch the desktop app and confirm both provider authorization panels render in the feature tab and Settings & Integrations.
+- Verify Twitch and Google authorization handoff, secure credential persistence, chat start/stop, and sanitized session status.
+- With FFmpeg installed and a stream the user is authorized to capture, start a rolling capture, inspect segment growth/index updates, stop it, and confirm the process exits cleanly.
+- Record exact PowerShell commands and observed results. Anything not actually run remains marked pending; do not call the milestone validated until the user has completed the live-stream portion.
