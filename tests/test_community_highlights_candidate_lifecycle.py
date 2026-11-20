@@ -146,5 +146,11 @@ def test_candidate_decision_requires_ready_candidate(tmp_path, monkeypatch):
     assert output_path.is_file()
     assert manager.decide_candidate(candidate_id, approved=False)["review_status"] == "rejected"
     assert not output_path.exists()
+    try:
+        manager.decide_candidate(candidate_id, approved=True)
+    except ValueError as error:
+        assert "cannot be re-approved" in str(error)
+    else:
+        raise AssertionError("deleted candidate should not be re-approved")
 
     asyncio.run(manager.stop(started["session_id"]))
