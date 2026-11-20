@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, CircleAlert, Loader2, MessageCircle, Square, Radio } from 'lucide-react';
+import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 
 const statusLabel = (status) => ({
@@ -265,7 +265,7 @@ export default function CommunityHighlightsMonitor() {
 
       {error && (
         <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
-          <CircleAlert size={14} className="shrink-0 mt-0.5" />
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}

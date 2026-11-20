@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity, CircleAlert, LockKeyhole, Twitch, Loader2, ExternalLink, Unplug } from 'lucide-react';
+import { Activity, AlertCircle, LockKeyhole, Twitch, Loader2, ExternalLink, Unplug } from 'lucide-react';
 import { apiJson } from '../lib/api';
 
 const PROVIDERS = [
@@ -221,7 +221,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
 
       {error && (
         <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
-          <CircleAlert size={14} className="shrink-0 mt-0.5" />
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}

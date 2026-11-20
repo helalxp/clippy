@@ -300,7 +300,12 @@ class CaptureSessionManager:
                 pre_seconds=candidate.pre_seconds,
                 post_seconds=candidate.post_seconds,
             )
-            additional = session.capture.protect_segments([item.path for item in records])
+            already_protected = {Path(path).resolve() for path in protected}
+            new_segments = [
+                item.path for item in records
+                if Path(item.path).resolve() not in already_protected
+            ]
+            additional = session.capture.protect_segments(new_segments) if new_segments else []
             protected = list(dict.fromkeys([*protected, *additional]))
             validate_contiguous_window(
                 records,

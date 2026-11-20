@@ -154,7 +154,7 @@ def test_run_pipes_stream_and_finalizes_ffmpeg(tmp_path, monkeypatch):
     assert bytes(process.stdin.data) == b"onetwo"
     assert process.stdin.closed is True
     assert process.waited is True
-    assert process.kwargs["shell"] is False
+    assert opened[1][1]["shell"] is False
 
 
 def test_run_reports_missing_ffmpeg(tmp_path, monkeypatch):
@@ -238,11 +238,11 @@ def test_reads_only_existing_safe_segment_index_entries(tmp_path):
     outside = tmp_path.parent / "outside.ts"
     outside.write_bytes(b"outside")
     (tmp_path / "segments.csv").write_text(
-        "segment-00000000.ts,0.0,4.0\\n"
-        "segment-00000001.ts,4.0,8.0\\n"
-        "../outside.ts,8.0,12.0\\n"
-        "segment-00000000.ts,nan,16.0\\n"
-        "partial-row\\n",
+        "segment-00000000.ts,0.0,4.0\n"
+        "segment-00000001.ts,4.0,8.0\n"
+        "../outside.ts,8.0,12.0\n"
+        "segment-00000000.ts,nan,16.0\n"
+        "partial-row\n",
         encoding="utf-8",
     )
 
@@ -258,7 +258,7 @@ def test_reads_only_existing_safe_segment_index_entries(tmp_path):
 def test_segment_index_ignores_files_removed_by_retention(tmp_path):
     capture = RollingCapture("https://twitch.tv/channel", config(tmp_path))
     (tmp_path / "segments.csv").write_text(
-        "segment-00000000.ts,0.0,4.0\\n",
+        "segment-00000000.ts,0.0,4.0\n",
         encoding="utf-8",
     )
     assert capture.read_segment_index() == []

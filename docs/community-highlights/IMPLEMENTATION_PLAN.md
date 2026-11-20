@@ -402,3 +402,13 @@ The full packaged-runtime build is opt-in because it stages the complete Clippy 
 ```
 
 After the preflight passes, continue with the interactive sign-in, chat, rolling capture, trigger, candidate download, and review checks above. Report actual results; do not mark the live acceptance complete based on the mocked test suite alone.
+
+
+### Initial GitHub Actions validation — 2026-11-20
+
+- Opened draft PR [#28](https://github.com/helalxp/clippy/pull/28) to run the repository's existing CI and Windows desktop validation workflows. The feature branch was brought up to date with the single main-only documentation commit by a two-parent merge commit; the newer feature implementation plan was retained. The PR remains a draft and has not been merged.
+- The first backend CI run completed with **1,375 passed, 30 skipped, and 3 failed**. The failures exposed (1) a duplicate protect call for a segment already pinned at trigger time, (2) a test assertion reading process options from the fake process instead of the mocked Popen invocation, and (3) malformed CSV test fixtures that wrote literal backslash-n sequences rather than separate rows.
+- Fixed candidate assembly to pin only segments not already protected; corrected the Popen assertion and CSV fixture row separators. These are targeted fixes based on the recorded failure traces.
+- Both the general frontend build and the Windows desktop dashboard build stopped at the same incompatible icon import: `CircleAlert` is not exported by the repository's pinned `lucide-react@^0.344.0`. Replaced it with the supported `AlertCircle` export in both Community Highlights components.
+- The first Windows run successfully checked out the PR and provisioned Node, Python **3.12.10**, and Rust, but did not get past the dashboard build, so PowerShell contracts, backend syntax, Rust tests, and the NSIS installer were skipped. CPU/CUDA runtime-package jobs were still running when these fixes were prepared; no runtime-package pass is claimed.
+- **Status:** fixes committed for a fresh PR validation run. No live Twitch/YouTube OAuth, chat, Streamlink capture, or real FFmpeg extraction has been exercised; those remain manual acceptance checks.
