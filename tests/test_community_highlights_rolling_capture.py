@@ -184,7 +184,6 @@ def test_protected_segments_are_not_pruned_until_released(tmp_path):
         config(tmp_path, retention_seconds=20),
         clock=lambda: now[0],
     )
-    tmp_path.mkdir()
     pinned = tmp_path / "segment-00000000.ts"
     newest = tmp_path / "segment-00000001.ts"
     pinned.write_bytes(b"pinned")
