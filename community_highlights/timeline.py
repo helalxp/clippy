@@ -59,6 +59,8 @@ def validate_contiguous_window(
     max_gap_seconds: float = 2.0,
 ) -> None:
     """Reject obviously incomplete windows instead of silently creating a broken clip."""
+    if triggered_at.tzinfo is None or triggered_at.utcoffset() is None:
+        raise ValueError("triggered_at must be timezone-aware.")
     if not records:
         raise ValueError("No completed segments overlap the requested highlight window.")
     if max_gap_seconds < 0:
