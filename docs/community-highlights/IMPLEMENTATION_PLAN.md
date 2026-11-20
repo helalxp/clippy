@@ -376,3 +376,29 @@ At the end of the capture/trigger implementation slice, begin a focused Windows 
 - Added `desktop/validate-community-highlights.ps1`. It runs only the focused Community Highlights pytest files, verifies the Streamlink/HTTP/FastAPI imports and the actual Windows Credential Manager backend import, and checks whether FFmpeg is available.
 - The script has an optional `-BuildRuntime` switch for the packaged Python runtime build. It is intentionally opt-in because the CPU/CUDA runtime build downloads and stages the full Clippy ML dependency set and is substantially heavier than the focused tests.
 - **Not run here:** this environment has no attached Windows checkout or PowerShell session. The script is committed for the user-run Windows acceptance pass; no test/build result is being claimed.
+
+
+#### Start the Windows preflight
+
+Run from the repository root in PowerShell after switching to the feature branch:
+
+```powershell
+git fetch origin
+git switch feature/community-highlights
+git pull
+.\desktop\validate-community-highlights.ps1
+```
+
+If the project uses a virtual environment, pass its Python executable explicitly:
+
+```powershell
+.\desktop\validate-community-highlights.ps1 -Python .\.venv\Scripts\python.exe
+```
+
+The full packaged-runtime build is opt-in because it stages the complete Clippy ML runtime:
+
+```powershell
+.\desktop\validate-community-highlights.ps1 -BuildRuntime -Variant cuda
+```
+
+After the preflight passes, continue with the interactive sign-in, chat, rolling capture, trigger, candidate download, and review checks above. Report actual results; do not mark the live acceptance complete based on the mocked test suite alone.
