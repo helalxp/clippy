@@ -76,7 +76,30 @@ def test_capture_session_stop_requests_worker_shutdown(tmp_path):
 
 def test_capture_session_status_does_not_echo_original_url(tmp_path):
     manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
-    started = manager.start("https://www.youtube.com/watch?v=abcdefghijk?token=secret")
+    started = manager.start("https://www.youtube.com/watch?v=abcdefghijk&token=secret")
     snapshot = manager.get(started["session_id"])
     assert "youtube.com" not in repr(snapshot)
     assert "secret" not in repr(snapshot)
+
+
+def test_finished_capture_releases_concurrency_slot(tmp_path):
+    class FinishedCapture:
+        def __init__(self, _url, _config):
+            pass
+
+        def run(self, _stop_event):
+            return
+
+        def request_stop(self):
+            pass
+
+    manager = CaptureSessionManager(
+        capture_factory=FinishedCapture, output_root=tmp_path, max_sessions=1
+    )
+    first = manager.start("https://www.twitch.tv/first")
+    worker = manager._sessions[first["session_id"]].worker
+    worker.join(timeout=1)
+    assert manager.get(first["session_id"])["status"] == "ended"
+
+    second = manager.start("https://www.twitch.tv/second")
+    assert second["stream_id"] == "second"
