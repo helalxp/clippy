@@ -2,61 +2,64 @@ Describe "Clippy application version synchronization" {
     BeforeAll {
         $scriptPath = Join-Path $PSScriptRoot "..\set-version.ps1"
 
+        function New-FixtureText([string[]]$Lines) {
+            return [string]::Join([Environment]::NewLine, $Lines) + [Environment]::NewLine
+        }
+
         function New-VersionFixture([string]$Root) {
-            $directories = @("desktop/src-tauri", "dashboard")
-            foreach ($directory in $directories) {
+            foreach ($directory in @("desktop/src-tauri", "dashboard")) {
                 New-Item -ItemType Directory -Path (Join-Path $Root $directory) -Force | Out-Null
             }
 
-            $tauri = @'
-{
-  "version": "1.2.3",
-  "productName": "Clippy"
-}
-'@
-            $cargoToml = @'
-[package]
-name = "clippy-desktop"
-version = "1.2.3"
-edition = "2021"
-
-[dependencies]
-serde = "1"
-'@
-            $cargoLock = @'
-[[package]]
-name = "another-package"
-version = "8.8.8"
-
-[[package]]
-name = "clippy-desktop"
-version = "1.2.3"
-dependencies = ["serde"]
-'@
-            $dashboard = @'
-{
-  "name": "openshorts-app",
-  "version": "1.2.3",
-  "private": true
-}
-'@
-            $dashboardLock = @'
-{
-  "name": "openshorts-app",
-  "version": "1.2.3",
-  "lockfileVersion": 2,
-  "requires": true,
-  "packages": {
-    "": {
-      "name": "openshorts-app",
-      "version": "1.2.3"
-    },
-    "node_modules/example": {
-      "version": "8.8.8"
-    }
-  }
-}
-'@
+            $tauri = New-FixtureText @(
+                '{',
+                '  "version": "1.2.3",',
+                '  "productName": "Clippy"',
+                '}'
+            )
+            $cargoToml = New-FixtureText @(
+                '[package]',
+                'name = "clippy-desktop"',
+                'version = "1.2.3"',
+                'edition = "2021"',
+                '',
+                '[dependencies]',
+                'serde = "1"'
+            )
+            $cargoLock = New-FixtureText @(
+                '[[package]]',
+                'name = "another-package"',
+                'version = "8.8.8"',
+                '',
+                '[[package]]',
+                'name = "clippy-desktop"',
+                'version = "1.2.3"',
+                'dependencies = ["serde"]'
+            )
+            $dashboard = New-FixtureText @(
+                '{',
+                '  "name": "openshorts-app",',
+                '  "version": "1.2.3",',
+                '  "private": true',
+                '}'
+            )
+            $dashboardLock = New-FixtureText @(
+                '{',
+                '  "name": "openshorts-app",',
+                '  "version": "1.2.3",',
+                '  "lockfileVersion": 2,',
+                '  "requires": true,',
+                '  "packages": {',
+                '    "": {',
+                '      "name": "openshorts-app",',
+                '      "version": "1.2.3"',
+                '    },',
+                '    "node_modules/example": {',
+                '      "version": "8.8.8"',
+                '    }',
+                '  }',
+                '}'
+            )
 
             [System.IO.File]::WriteAllText((Join-Path $Root "VERSION"), "1.2.3" + [Environment]::NewLine)
             [System.IO.File]::WriteAllText((Join-Path $Root "desktop/src-tauri/tauri.conf.json"), $tauri)
@@ -133,11 +136,11 @@ dependencies = ["serde"]
         $tauriPath = Join-Path $fixture "desktop/src-tauri/tauri.conf.json"
         $before = Get-Content $tauriPath -Raw
         $cargoLockPath = Join-Path $fixture "desktop/src-tauri/Cargo.lock"
-        $badLock = @'
-[[package]]
-name = "not-clippy"
-version = "1.2.3"
-'@
+        $badLock = New-FixtureText @(
+            '[[package]]',
+            'name = "not-clippy"',
+            'version = "1.2.3"'
+        )
         [System.IO.File]::WriteAllText($cargoLockPath, $badLock)
 
         { & $scriptPath "2.4.6" -RootPath $fixture } | Should -Throw "*clippy-desktop Cargo.lock package*"
