@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .chat import chat_sessions
+from .capture_sessions import CaptureSettings, capture_sessions
 from .urls import StreamUrlError
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
@@ -155,6 +156,14 @@ class StartChatSessionRequest(BaseModel):
     stream_url: str = Field(min_length=1, max_length=2048)
 
 
+class StartCaptureSessionRequest(BaseModel):
+    stream_url: str = Field(min_length=1, max_length=2048)
+    segment_seconds: int = Field(default=4, ge=1, le=60)
+    retention_seconds: int = Field(default=180, ge=2, le=3600)
+    max_buffer_size_mb: int = Field(default=512, ge=16, le=8192)
+    quality: str = Field(default="best", min_length=1, max_length=16)
+
+
 @router.get("/api/community-highlights/sessions")
 async def list_chat_sessions():
     return {"sessions": await chat_sessions.list()}
@@ -182,3 +191,46 @@ async def stop_chat_session(session_id: str):
     if not stopped:
         raise HTTPException(status_code=404, detail="Chat session not found.")
     return {"stopped": True}
+
+
+@router.get("/api/community-highlights/captures")
+async def list_capture_sessions():
+    return {"sessions": capture_sessions.list()}
+
+
+@router.post("/api/community-highlights/captures")
+async def start_capture_session(body: StartCaptureSessionRequest):
+    settings = CaptureSettings(
+        segment_seconds=body.segment_seconds,
+        retention_seconds=body.retention_seconds,
+        max_buffer_size_mb=body.max_buffer_size_mb,
+        quality=body.quality,
+    )
+    try:
+        return capture_sessions.start(body.stream_url, settings)
+    except (StreamUrlError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+
+
+@router.get("/api/community-highlights/captures/{session_id}")
+async def get_capture_session(session_id: str):
+    session = capture_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Capture session not found.")
+    return session
+
+
+@router.delete("/api/community-highlights/captures/{session_id}")
+async def stop_capture_session(session_id: str):
+    stopped = await capture_sessions.stop(session_id)
+    if not stopped:
+        raise HTTPException(status_code=404, detail="Capture session not found.")
+    return {"stopped": True}
+
+
+@router.on_event("shutdown")
+async def stop_community_highlights_workers():
+    """Stop owned background work before the backend process exits."""
+    await capture_sessions.stop_all()
+    for session in await chat_sessions.list():
+        await chat_sessions.stop(session["session_id"])
