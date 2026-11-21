@@ -86,9 +86,8 @@ Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
 
-# These are public OAuth application identifiers, not credentials. Release
-# workflows source them from repository Actions Variables and fail before
-# publishing when either is absent. Local packagers may provide the same envs.
+# OAuth client IDs are public application identifiers, never client secrets.
+# Release workflows source them from repository Actions Variables.
 function Get-PublicOAuthClientId([string]$Value, [string]$Name) {
     $value = ([string]$Value).Trim()
     if ($value.Length -gt 512 -or ($value -and $value -notmatch '^[A-Za-z0-9._-]+
@@ -147,6 +146,7 @@ $requiredPayloadFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-health.ps1",
+    "storage-path.ps1",
     "runtime-ffmpeg.ps1",
     "runtime-contract.json",
     "runtime-manifest-state.ps1",
@@ -192,7 +192,6 @@ $communityHighlightsOAuth = [ordered]@{
     ($communityHighlightsOAuth | ConvertTo-Json -Depth 4),
     [Text.UTF8Encoding]::new($false)
 )
-
 Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-archive.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-manifest-state.ps1") -Destination $stageRoot
@@ -248,6 +247,7 @@ $requiredPayloadFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-health.ps1",
+    "storage-path.ps1",
     "runtime-ffmpeg.ps1",
     "runtime-contract.json",
     "runtime-manifest-state.ps1",
