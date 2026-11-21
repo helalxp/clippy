@@ -123,16 +123,24 @@ class ChatSessionManager:
         self._lock = asyncio.Lock()
         self._token_provider = token_provider
         self._message_callback = message_callback
+        self._disconnecting_providers: set[str] = set()
 
     async def start(self, stream_url: str) -> dict[str, Any]:
         reference = parse_stream_url(stream_url)
         provider = reference.provider.value
+        async with self._lock:
+            if provider in self._disconnecting_providers:
+                raise ValueError(f"{provider.title()} is being disconnected. Try again shortly.")
         try:
             await self._token_provider(provider)
         except ProviderTokenError as error:
             raise ValueError(str(error)) from None
 
         async with self._lock:
+            # A disconnect can begin while token refresh is in flight. Check
+            # again before registering a new background chat task.
+            if provider in self._disconnecting_providers:
+                raise ValueError(f"{provider.title()} is being disconnected. Try again shortly.")
             for session in self._sessions.values():
                 if session.reference == reference and session.status not in {"stopped", "ended"}:
                     return session.snapshot()
@@ -157,6 +165,31 @@ class ChatSessionManager:
                 pass
         session.status = "stopped"
         return True
+
+    async def begin_provider_disconnect(self, provider: str) -> None:
+        """Block new sessions and stop every active chat task for a provider."""
+        async with self._lock:
+            self._disconnecting_providers.add(provider)
+            sessions = [
+                session for session in self._sessions.values()
+                if session.reference.provider.value == provider
+            ]
+            for session in sessions:
+                self._sessions.pop(session.session_id, None)
+                session.stop_event.set()
+                if session.task:
+                    session.task.cancel()
+
+        tasks = [session.task for session in sessions if session.task]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for session in sessions:
+            session.status = "stopped"
+
+    async def end_provider_disconnect(self, provider: str) -> None:
+        """Allow new chat sessions after local credential cleanup has finished."""
+        async with self._lock:
+            self._disconnecting_providers.discard(provider)
 
     async def get(self, session_id: str) -> dict[str, Any] | None:
         async with self._lock:
