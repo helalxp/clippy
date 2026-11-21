@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
+from typing import Any
 
 from .chat import chat_sessions
 from .capture_sessions import CaptureSettings, capture_sessions
