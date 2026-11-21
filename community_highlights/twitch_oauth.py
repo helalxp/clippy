@@ -148,85 +148,86 @@ async def poll_twitch_flow(
     owned_client = client is None
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(15.0))
     try:
-        response = await client.post(
-            TWITCH_TOKEN_URL,
-            data={
-                "client_id": client_id,
-                "scopes": " ".join(TWITCH_SCOPES),
-                "device_code": device_code,
-                "grant_type": DEVICE_GRANT,
-            },
-        )
-        payload = response.json()
-    except (httpx.HTTPError, ValueError):
-        if owned_client:
-            await client.aclose()
-        return {"status": "pending", "message": "Can't reach Twitch right now. Retrying shortly."}
+        # Hold the shared credential lock for the complete device-token exchange,
+        # validation, and persistence. Disconnect therefore waits for an in-flight
+        # exchange, then revokes the just-saved grant before deleting it locally.
+        async with provider_credential_lock("twitch"):
+            if provider_is_disconnecting("twitch"):
+                return {"status": "cancelled", "message": "Twitch is being disconnected."}
+            async with _flow_lock:
+                if _flows.get(flow_id) is not flow or flow.get("status") != "pending":
+                    return {"status": "cancelled", "message": "Twitch sign-in was cancelled."}
 
-    if owned_client:
-        await client.aclose()
+            try:
+                response = await client.post(
+                    TWITCH_TOKEN_URL,
+                    data={
+                        "client_id": client_id,
+                        "scopes": " ".join(TWITCH_SCOPES),
+                        "device_code": device_code,
+                        "grant_type": DEVICE_GRANT,
+                    },
+                )
+                payload = response.json()
+            except (httpx.HTTPError, ValueError):
+                return {"status": "pending", "message": "Can't reach Twitch right now. Retrying shortly."}
 
-    error = payload.get("message") or payload.get("error")
-    if error == "authorization_pending":
-        return {"status": "pending", "message": "Waiting for you to approve access in Twitch."}
-    if error == "slow_down":
-        async with _flow_lock:
-            current = _flows.get(flow_id)
-            if current and current["status"] == "pending":
-                current["interval"] = min(current["interval"] + 5, 60)
-                current["next_poll"] = time.monotonic() + current["interval"]
-        return {"status": "pending", "message": "Twitch asked Clippy to slow down. Still waiting."}
-    if error in {"access_denied", "authorization_declined"}:
-        return _finish(flow_id, "denied", "Twitch authorization was declined.")
-    if error in {"expired_token", "invalid device code"}:
-        return _finish(flow_id, "expired", "Twitch sign-in expired. Please try again.")
-    if response.status_code >= 400 or not payload.get("access_token"):
-        return _finish(flow_id, "error", "Twitch sign-in failed. Please start again.")
+            error = payload.get("message") or payload.get("error")
+            if error == "authorization_pending":
+                return {"status": "pending", "message": "Waiting for you to approve access in Twitch."}
+            if error == "slow_down":
+                async with _flow_lock:
+                    current = _flows.get(flow_id)
+                    if current is flow and current.get("status") == "pending":
+                        current["interval"] = min(current["interval"] + 5, 60)
+                        current["next_poll"] = time.monotonic() + current["interval"]
+                return {"status": "pending", "message": "Twitch asked Clippy to slow down. Still waiting."}
+            if error in {"access_denied", "authorization_declined"}:
+                return _finish(flow_id, "denied", "Twitch authorization was declined.")
+            if error in {"expired_token", "invalid device code"}:
+                return _finish(flow_id, "expired", "Twitch sign-in expired. Please try again.")
+            if response.status_code >= 400 or not payload.get("access_token"):
+                return _finish(flow_id, "error", "Twitch sign-in failed. Please start again.")
 
-    access_token = payload["access_token"]
-    refresh_token = payload.get("refresh_token")
-    if not isinstance(refresh_token, str) or not refresh_token:
-        return _finish(flow_id, "error", "Twitch did not return a refresh token. Please start again.")
+            access_token = payload["access_token"]
+            refresh_token = payload.get("refresh_token")
+            if not isinstance(refresh_token, str) or not refresh_token:
+                return _finish(flow_id, "error", "Twitch did not return a refresh token. Please start again.")
 
-    try:
-        if owned_client:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as validation_client:
-                validation = await validation_client.get(
+            try:
+                validation = await client.get(
                     TWITCH_VALIDATE_URL,
                     headers={"Authorization": f"OAuth {access_token}"},
                 )
-        else:
-            validation = await client.get(
-                TWITCH_VALIDATE_URL,
-                headers={"Authorization": f"OAuth {access_token}"},
-            )
-        validation.raise_for_status()
-        identity = validation.json()
-        scopes = set(identity.get("scopes") or [])
-        if identity.get("client_id") != client_id or not set(TWITCH_SCOPES).issubset(scopes):
-            raise TwitchOAuthError("Twitch authorization did not grant the required chat permission.")
-        async with provider_credential_lock("twitch"):
-            async with _flow_lock:
-                current = _flows.get(flow_id)
-                if current is not flow or current.get("status") != "pending":
-                    return {"status": "cancelled", "message": "Twitch sign-in was cancelled."}
-                if provider_is_disconnecting("twitch"):
-                    return {"status": "cancelled", "message": "Twitch is being disconnected."}
-                store_factory().save("twitch", {
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "expires_at": int(time.time()) + int(payload.get("expires_in", 14400)),
-                    "validated_at": int(time.time()),
-                    "scopes": sorted(scopes),
-                    "client_id": client_id,
-                    "user_id": identity.get("user_id"),
-                    "login": identity.get("login"),
-                })
-                current.pop("device_code", None)
-                current.update(status="connected", message="Twitch is connected.")
-    except (httpx.HTTPError, ValueError, CredentialStoreError, TwitchOAuthError):
-        return _finish(flow_id, "error", "Clippy could not verify or securely save Twitch access. Please try again.")
-    return {"status": "connected", "message": "Twitch is connected."}
+                validation.raise_for_status()
+                identity = validation.json()
+                scopes = set(identity.get("scopes") or [])
+                if identity.get("client_id") != client_id or not set(TWITCH_SCOPES).issubset(scopes):
+                    raise TwitchOAuthError("Twitch authorization did not grant the required chat permission.")
+
+                async with _flow_lock:
+                    current = _flows.get(flow_id)
+                    if current is not flow or current.get("status") != "pending":
+                        return {"status": "cancelled", "message": "Twitch sign-in was cancelled."}
+                    store_factory().save("twitch", {
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "expires_at": int(time.time()) + int(payload.get("expires_in", 14400)),
+                        "validated_at": int(time.time()),
+                        "scopes": sorted(scopes),
+                        "client_id": client_id,
+                        "user_id": identity.get("user_id"),
+                        "login": identity.get("login"),
+                    })
+                    current.pop("device_code", None)
+                    current.update(status="connected", message="Twitch is connected.")
+            except (httpx.HTTPError, ValueError, CredentialStoreError, TwitchOAuthError):
+                return _finish(flow_id, "error", "Clippy could not verify or securely save Twitch access. Please try again.")
+            return {"status": "connected", "message": "Twitch is connected."}
+    finally:
+        if owned_client:
+            await client.aclose()
+
 
 
 def _finish(flow_id: str, status: str, message: str) -> dict[str, str]:
