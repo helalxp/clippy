@@ -32,6 +32,25 @@ def google_client_id() -> str:
     return os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "").strip()
 
 
+def google_token_info_matches_client(token_info: Any, client_id: str) -> bool:
+    """Check the OAuth client that requested the access token.
+
+    Google's tokeninfo contract distinguishes `aud` from `azp`: `azp`
+    identifies the authorized party (the client that requested the token),
+    while `aud` may differ for clients in the same Cloud project.
+    """
+    if not isinstance(token_info, dict):
+        return False
+    audience = token_info.get("aud")
+    authorized_party = token_info.get("azp")
+    return (
+        isinstance(audience, str)
+        and bool(audience)
+        and isinstance(authorized_party, str)
+        and secrets.compare_digest(authorized_party, client_id)
+    )
+
+
 def google_authorization_available() -> bool:
     if not google_client_id():
         return False
@@ -225,8 +244,8 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
             token_info = info_response.json()
 
         scopes = set((token_info.get("scope") or "").split())
-        if token_info.get("aud") and token_info["aud"] != flow["client_id"]:
-            raise GoogleOAuthError("Google returned a token for a different application.")
+        if not google_token_info_matches_client(token_info, flow["client_id"]):
+            raise GoogleOAuthError("Google returned a token for an unexpected OAuth client.")
         if GOOGLE_SCOPE not in scopes:
             raise GoogleOAuthError("Google did not grant the required read-only YouTube permission.")
 
