@@ -106,6 +106,7 @@ jobs:
         run: |
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/storage-path.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/smoke-test-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/create-updater-manifest.ps1 -Raw)) | Out-Null
