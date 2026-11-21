@@ -5,11 +5,15 @@ from fastapi.testclient import TestClient
 import app as backend_app
 import community_highlights.api as community_api
 from community_highlights.twitch_oauth import TwitchOAuthError
+from community_highlights.credentials import CredentialStoreError
 
 
 class FakeCredentialStore:
+    def __init__(self):
+        self.bundle = None
+
     def load(self, _provider):
-        return None
+        return self.bundle
 
 
 def _client(monkeypatch):
@@ -176,3 +180,108 @@ def test_candidate_delete_route_reports_conflict_when_media_cannot_be_removed(mo
     )
     assert response.status_code == 409
     assert "private filesystem detail" not in response.text
+
+
+def test_twitch_disconnect_stops_chat_and_removes_local_credentials_after_confirmed_revoke(monkeypatch):
+    store = FakeCredentialStore()
+    store.bundle = {
+        "client_id": "twitch-client",
+        "access_token": "twitch-access-secret",
+        "refresh_token": "twitch-refresh-secret",
+    }
+    store.delete = lambda provider: setattr(store, "bundle", None)
+    monkeypatch.setattr(community_api, "WindowsCredentialStore", lambda: store)
+
+    events = []
+
+    async def begin(provider):
+        events.append(("begin", provider))
+
+    async def finish(provider):
+        events.append(("finish", provider))
+
+    async def revoke(bundle):
+        assert bundle["access_token"] == "twitch-access-secret"
+        events.append(("revoke", "twitch"))
+        return True
+
+    monkeypatch.setattr(community_api.chat_sessions, "begin_provider_disconnect", begin)
+    monkeypatch.setattr(community_api.chat_sessions, "end_provider_disconnect", finish)
+    monkeypatch.setattr(community_api, "revoke_twitch_credentials", revoke)
+    client = _client(monkeypatch)
+
+    response = client.delete("/api/community-highlights/connections/twitch", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is False
+    assert response.json()["revocation_status"] == "revoked"
+    assert store.bundle is None
+    assert events == [("begin", "twitch"), ("revoke", "twitch"), ("finish", "twitch")]
+    assert "twitch-access-secret" not in response.text
+
+
+def test_google_disconnect_is_local_even_when_remote_revocation_cannot_be_confirmed(monkeypatch):
+    store = FakeCredentialStore()
+    store.bundle = {
+        "client_id": "google-client",
+        "access_token": "google-access-secret",
+        "refresh_token": "google-refresh-secret",
+    }
+    store.delete = lambda provider: setattr(store, "bundle", None)
+    monkeypatch.setattr(community_api, "WindowsCredentialStore", lambda: store)
+
+    events = []
+
+    async def begin(provider):
+        events.append(("begin", provider))
+
+    async def finish(provider):
+        events.append(("finish", provider))
+
+    async def revoke(_bundle):
+        events.append(("revoke", "youtube"))
+        return False
+
+    monkeypatch.setattr(community_api.chat_sessions, "begin_provider_disconnect", begin)
+    monkeypatch.setattr(community_api.chat_sessions, "end_provider_disconnect", finish)
+    monkeypatch.setattr(community_api, "revoke_google_credentials", revoke)
+    client = _client(monkeypatch)
+
+    response = client.delete("/api/community-highlights/connections/youtube", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is False
+    assert response.json()["revocation_status"] == "not_confirmed"
+    assert "did not confirm revocation" in response.json()["message"]
+    assert store.bundle is None
+    assert events == [("begin", "youtube"), ("revoke", "youtube"), ("finish", "youtube")]
+    assert "google-refresh-secret" not in response.text
+
+
+def test_disconnect_preserves_local_credentials_when_credential_manager_delete_fails(monkeypatch):
+    store = FakeCredentialStore()
+    store.bundle = {"access_token": "still-saved"}
+    store.delete = lambda _provider: (_ for _ in ()).throw(CredentialStoreError("storage unavailable"))
+    monkeypatch.setattr(community_api, "WindowsCredentialStore", lambda: store)
+
+    events = []
+
+    async def no_sessions(_provider):
+        events.append("begin")
+
+    async def end_sessions(_provider):
+        events.append("end")
+
+    async def revoke(_bundle):
+        return True
+
+    monkeypatch.setattr(community_api.chat_sessions, "begin_provider_disconnect", no_sessions)
+    monkeypatch.setattr(community_api.chat_sessions, "end_provider_disconnect", end_sessions)
+    monkeypatch.setattr(community_api, "revoke_twitch_credentials", revoke)
+    client = _client(monkeypatch)
+
+    response = client.delete("/api/community-highlights/connections/twitch", headers=_headers())
+
+    assert response.status_code == 503
+    assert store.bundle["access_token"] == "still-saved"
+    assert events == ["begin", "end"]
