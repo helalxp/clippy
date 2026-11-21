@@ -8,6 +8,8 @@ import time
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
+from .google_oauth import google_token_info_matches_client
+from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
@@ -67,6 +69,8 @@ async def _ensure_access_token_locked(
             if validation.status_code != 401:
                 validation.raise_for_status()
                 identity = validation.json()
+                if not isinstance(identity, dict) or not isinstance(identity.get("scopes"), list):
+                    raise ProviderTokenError("Twitch returned invalid token validation details.")
                 scopes = set(identity.get("scopes") or [])
                 if identity.get("client_id") == client_id and "chat:read" in scopes:
                     store.save(provider, {
@@ -101,6 +105,8 @@ async def _ensure_access_token_locked(
             )
             response.raise_for_status()
             refreshed = response.json()
+            if not isinstance(refreshed, dict):
+                raise ProviderTokenError("Twitch returned an invalid token response.")
             access_token = refreshed.get("access_token")
             refresh_token = refreshed.get("refresh_token")
             if not access_token or not refresh_token:
@@ -143,6 +149,8 @@ async def _ensure_access_token_locked(
             )
             response.raise_for_status()
             refreshed = response.json()
+            if not isinstance(refreshed, dict):
+                raise ProviderTokenError("Google returned an invalid token response.")
             access_token = refreshed.get("access_token")
             if not access_token:
                 raise ProviderTokenError("Google did not return a refreshed access token.")
@@ -152,9 +160,11 @@ async def _ensure_access_token_locked(
             )
             info.raise_for_status()
             token_info = info.json()
+            if not isinstance(token_info, dict):
+                raise ProviderTokenError("Google returned invalid token details.")
             scopes = set((token_info.get("scope") or "").split())
-            if token_info.get("aud") and token_info["aud"] != client_id:
-                raise ProviderTokenError("Google returned a token for a different application.")
+            if not google_token_info_matches_client(token_info, client_id):
+                raise ProviderTokenError("Google returned a token for an unexpected OAuth client.")
             if YOUTUBE_SCOPE not in scopes:
                 raise ProviderTokenError("The refreshed Google token is missing YouTube read access.")
             updated = {
@@ -179,12 +189,6 @@ async def _ensure_access_token_locked(
 
 
 
-_REFRESH_LOCKS = {
-    "twitch": asyncio.Lock(),
-    "youtube": asyncio.Lock(),
-}
-
-
 async def ensure_access_token(
     provider: str,
     *,
@@ -192,11 +196,13 @@ async def ensure_access_token(
     client: httpx.AsyncClient | None = None,
     force_refresh: bool = False,
 ) -> str:
-    if provider not in _REFRESH_LOCKS:
+    if provider not in {"twitch", "youtube"}:
         raise ProviderTokenError("Unsupported chat provider.")
-    # Twitch refresh tokens are single-use. Serialize refresh/validation per
-    # provider so two simultaneous chat sessions cannot consume the same token.
-    async with _REFRESH_LOCKS[provider]:
+    # Use the same per-provider lock as Disconnect. This ensures a token refresh
+    # cannot persist a newly rotated credential after local disconnect removes it.
+    async with provider_credential_lock(provider):
+        if provider_is_disconnecting(provider):
+            raise ProviderTokenError(f"{provider.title()} is being disconnected. Try again shortly.")
         return await _ensure_access_token_locked(
             provider,
             store_factory=store_factory,

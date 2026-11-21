@@ -85,10 +85,31 @@ Remove-Item $bgutilSource -Recurse -Force
 Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
+
+# OAuth client IDs are public application identifiers, never client secrets.
+# Release workflows source them from repository Actions Variables.
+function Get-PublicOAuthClientId([string]$Value, [string]$Name) {
+    $value = ([string]$Value).Trim()
+    if ($value.Length -gt 512 -or ($value -and $value -notmatch '^[A-Za-z0-9._-]+$')) {
+        throw "$Name must contain only letters, digits, periods, underscores, or hyphens (max 512 characters)."
+    }
+    return $value
+}
+$communityHighlightsOAuth = [ordered]@{
+    schemaVersion = 1
+    twitchClientId = (Get-PublicOAuthClientId -Value $env:CLIPPY_TWITCH_CLIENT_ID -Name "CLIPPY_TWITCH_CLIENT_ID")
+    googleOauthClientId = (Get-PublicOAuthClientId -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_ID")
+}
+[IO.File]::WriteAllText(
+    (Join-Path $stageRoot "community-highlights-oauth.json"),
+    ($communityHighlightsOAuth | ConvertTo-Json -Depth 4),
+    [Text.UTF8Encoding]::new($false)
+)
 Copy-Item (Join-Path $PSScriptRoot "setup-runtime.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-archive.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-manifest-state.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-health.ps1") -Destination $stageRoot
+Copy-Item (Join-Path $PSScriptRoot "storage-path.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-ffmpeg.ps1") -Destination $stageRoot
 Copy-Item (Join-Path $PSScriptRoot "runtime-contract.json") -Destination $stageRoot
 
@@ -99,6 +120,7 @@ $requiredRuntimeFiles = @(
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-health.ps1",
+    "storage-path.ps1",
     "runtime-ffmpeg.ps1",
     "runtime-contract.json",
     "runtime-manifest-state.ps1"
@@ -131,12 +153,14 @@ $requiredPayloadFiles = @(
     "app.py",
     "community_highlights\__init__.py",
     "community_highlights\api.py",
+    "community-highlights-oauth.json",
     "local_library.py",
     "requirements.txt",
     "VERSION",
     "setup-runtime.ps1",
     "runtime-archive.ps1",
     "runtime-health.ps1",
+    "storage-path.ps1",
     "runtime-ffmpeg.ps1",
     "runtime-contract.json",
     "runtime-manifest-state.ps1",

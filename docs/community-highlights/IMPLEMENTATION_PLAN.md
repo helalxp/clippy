@@ -4,7 +4,40 @@
 **Feature branch:** `feature/community-highlights`  
 **Base:** `main` at `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`  
 **Product:** Clippy  
-**Last updated:** 2026-11-20
+**Last updated:** 2026-11-21
+
+## Code audit follow-up register
+
+This register records the implementation gaps found in the 2026-11-21 source audit. A checked item means the focused code repair is implemented, not that the corresponding live-provider acceptance test has passed.
+
+### Batch 1 — desktop OAuth configuration and Windows data paths
+- [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
+- [x] Persist compatible Windows paths for newly selected data directories, normalize legacy Win32 extended-prefix drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
+- [ ] Configure the repository Actions Variables `CLIPPY_TWITCH_CLIENT_ID_TEST` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST` for prereleases, and `CLIPPY_TWITCH_CLIENT_ID_PRODUCTION` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION` for stable releases. These are public client identifiers, not secrets. The release workflow selects the pair by tag type and fails closed if the matching pair is absent; it never falls back from stable production to test IDs.
+
+### OAuth application identity and environment separation
+- [x] Record that the current Google OAuth project and Twitch developer application are temporary testing registrations. Their current display names, support/contact details, and client IDs are not the final Clippy production identity.
+- [ ] Before public production release, create or configure production OAuth registrations under the final Clippy brand and brand-owned support email. Populate only the `_PRODUCTION` Actions Variables with those production public Client IDs after review. Keep the current test registrations exclusively in the `_TEST` Variables. Never put client secrets in the desktop payload or Actions Variables.
+- [ ] Keep development/testing and production OAuth projects/apps separate where provider policy and app configuration support it. Do not silently switch the existing test IDs to production IDs mid-test.
+- [x] Separate release OAuth identities by tag type: prerelease tags (containing a hyphen, such as v0.3.2-rc.1) consume only `_TEST` Actions Variables; stable tags consume only `_PRODUCTION` Actions Variables. Missing or malformed values fail the release validation before runtime builds. Windows PR validation consumes only the `_TEST` pair.
+- [ ] For Google production readiness, confirm the app audience/publishing status, test-user restrictions, consent-screen branding, verified homepage/privacy-policy/terms links on a domain controlled by the Clippy brand, requested-scope classification, and any required brand/scope verification. Google documents that External apps in Testing are limited to 100 test users and authorizations for non-basic scopes expire after seven days; production publication and verification requirements depend on the requested scopes and branding. See the Google OAuth production checklist in the work log below.
+
+### Remaining audit work
+- [ ] Identify the historical Community Highlights `404 not found` on the user's installed RC. The original failing request trace was not available, so the precise cause is not yet established.
+- [x] Add HTTP-level tests against the actual FastAPI app for connection status, Twitch/Google OAuth start/status/cancel, desktop-session-token enforcement, known-flow 404s, and unknown-route 404s.
+- [x] Add targeted backend diagnostics for failed Community Highlights requests. Logs record method, matched route template (or redacted unmatched path), and status only; they omit request bodies, query strings, opaque flow/candidate IDs, and authorization headers.
+- [x] Fix approved-candidate queue exhaustion with an explicit candidate DELETE API and dashboard control. Delete removes the candidate's local media before its metadata, refuses in-progress workers, validates the generated path remains under the capture root, and preserves metadata if Windows refuses to unlink a locked file. No candidate status is silently pruned when the queue reaches its cap.
+- [ ] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Mark interrupted captures explicitly on startup. Keep provider tokens in Windows Credential Manager, not SQLite.
+- [ ] Complete provider/capture lifecycle verification: mocked provider lifecycle/reconnect tests are incomplete; run authorized Twitch/YouTube chat and Streamlink/FFmpeg capture checks on Windows; verify audio/video continuity, timestamps, disconnect handling, and graceful shutdown. Chat reconnect exists, but capture-worker recovery is not yet proven or implemented as a bounded reconnect path.
+- [ ] Validate trigger-to-media timeline drift against real captured segments. Current wall-time alignment estimates segment intervals from filesystem modification time and FFmpeg duration; it is not frame-accurate proof.
+- [ ] Merge overlapping or nearby trigger windows so several reactions to one moment do not create duplicate candidates.
+- [ ] Finish M4 candidate workflow: footage analysis and suggested boundaries, inline preview, frame-accurate trimming, reuse of existing edit components, and handoff of approved candidates to the renderer.
+- [ ] Finish M5 hardening: review/automatic/hybrid modes, bounded retention and cleanup, structured diagnostics, long-running/restart recovery, and user-facing setup/troubleshooting documentation.
+- [ ] Clarify development-platform scope: the secure credential adapter intentionally requires Windows Credential Manager and fails closed on non-Windows hosts. Docker/Linux can run the backend but cannot complete provider OAuth without a deliberate non-production credential-store strategy.
+- [x] Correct the authorization-window edge case: create a blank tab synchronously from the click, set its `opener` to `null` before provider navigation, and use the same helper for the reopen action. Add executable Node tests for popup blocking, opener isolation, navigation ordering, and closed windows.
+- [x] Serialize OAuth device/code exchanges, refresh-token writes, and provider disconnect through one provider-specific credential lifecycle lock. Disconnect cancels pending flows while holding that lock, stops chat sessions, revokes the latest saved grant when possible, and then removes local credentials. Add race tests proving disconnect waits for a refresh or OAuth exchange to finish before deleting its resulting credential bundle.
+
+
 
 ## Goal
 
@@ -423,3 +456,96 @@ After the preflight passes, continue with the interactive sign-in, chat, rolling
 - Interactive Twitch/Google authorization, actual live chat ingestion, real Streamlink/FFmpeg capture, and user-machine playback remain acceptance tests for the pre-release candidate. Automated build success does not claim those live-provider paths are proven.
 - The published stable release is `v0.3.1`; the most recent earlier RC is `v0.3.1-rc.4`. Prepared the next candidate as `0.3.2-rc.1` and synchronized the canonical version across `VERSION`, Tauri config, Rust package/lockfile, and dashboard package/lockfile. Independent `remotion`, `render-service`, and CLI package versions remain unchanged.
 - The release workflow is tag-driven. Pushing tag `v0.3.2-rc.1` after this version-preparation commit will run release validation, build both Python runtimes, produce and sign the Windows NSIS installer, publish a GitHub prerelease, and attach the updater manifest/checksum/runtime assets. The RC should be installed manually for testing because the production updater endpoint resolves the latest stable release, not GitHub prereleases.
+
+### Focused repair batch 1 — public OAuth configuration and Windows path compatibility — 2026-11-21
+
+**Changes made**
+- Added a generated `community-highlights-oauth.json` file to the staged desktop payload. It contains only `schemaVersion`, `twitchClientId`, and `googleOauthClientId`; it never contains a provider client secret.
+- Validated the public IDs during payload preparation and wired GitHub repository Actions Variables through both the Windows validation payload build and the tagged release build. The release validation job fails before CPU/CUDA runtime builds if either variable is missing or malformed.
+- Updated the Tauri supervisor to load the packaged public-ID file and explicitly set `CLIPPY_TWITCH_CLIENT_ID` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID` for the backend, rather than relying on ambient developer-machine environment variables. Missing config remains non-fatal for older development installations; release packaging is gated.
+- Replaced the storage-path canonicalization used for Clippy data configuration with `dunce::canonicalize`, which emits the most compatible Windows path when that can be done safely.
+- Added `storage-path.ps1` to normalize legacy extended drive and UNC paths before the runtime setup uses PowerShell path joins. It refuses unsupported device paths and paths that genuinely require extended-length handling rather than silently corrupting them.
+- Updated the clean runtime smoke fixture to reproduce a legacy extended path and added focused Pester and Rust tests, including a Windows test that passes the exact Rust-persisted path to Windows PowerShell `Join-Path`.
+- Narrowed Windows runtime-package change detection to actual Python runtime inputs. For payload, PowerShell, or Rust-only changes, the Windows validation job still runs, but the CPU/CUDA Python runtime packages and full runtime smoke download are skipped.
+
+**Validation status:** the user confirmed that the focused batch-1 CI and Windows validation completed successfully. The CPU/CUDA Python runtime builds were skipped because no Python runtime inputs changed. The test OAuth Client IDs have not yet been configured in repository Actions Variables; the tagged-release workflow intentionally refuses to proceed until both public IDs are supplied. The subsequent batch-2 changes are validated separately.
+
+**Explicitly not addressed in this batch:** API 404 diagnosis/route-level tests, candidate queue deletion/capacity, restart persistence, live capture reconnect and continuity, timeline drift validation, overlapping-trigger merge, M4 preview/trim/renderer handoff, and M5 hardening. These remain in the audit register above and are not being marked complete.
+
+
+### OAuth testing identity and production transition
+
+The Google Cloud OAuth project and Twitch Developer application currently configured for this feature are temporary **testing registrations**. The current names and support/contact information are not the final Clippy brand identity. The public Client IDs supplied to GitHub Actions for this phase are test IDs only. This is intentional and must remain explicit in release planning.
+
+Before a public production release:
+1. Establish the final Clippy brand identity and brand-owned support/contact email.
+2. Create or configure separate production Google and Twitch application registrations, using the final app display name, support email, and required production callback/redirect settings for the actual implemented flows.
+3. Complete Google's production audience, consent-screen branding, homepage/privacy-policy/terms, scope classification, and any applicable verification steps. The homepage and privacy policy must be hosted on a verified domain controlled by the brand, and the privacy policy must accurately disclose access, use, storage, and sharing of YouTube user data.
+4. Replace the repository Actions Variables with the production public Client IDs only after the production registrations are ready and production configuration has been reviewed. Do not ship the test Client IDs in a public production build.
+5. Keep client secrets out of the desktop app, packaged OAuth JSON, GitHub Actions Variables, frontend, and logs. The desktop OAuth clients are public clients; the current implementation uses PKCE for Google and Device Code Grant for Twitch.
+
+Google's current policy documentation says External apps in Testing are limited to 100 test users and authorizations for scopes beyond the basic profile/email subset expire after seven days. A production app is subject to applicable branding and scope verification before general distribution. The exact verification path depends on the final audience and scope classification. References: Google Cloud Help, "Manage App Audience", "Manage OAuth App Branding", and "Verification requirements".
+
+
+### Focused repair batch 2 — API 404 observability and candidate queue deletion — 2026-11-21
+
+**Changes made**
+- Added FastAPI HTTP-level tests against the real application object rather than testing only the connection-status helper. The tests exercise the exact connection endpoint, both providers' OAuth start/status/cancel routes, desktop-session-token enforcement, a known flow returning 404, and an unmatched route returning 404.
+- Added a narrowly scoped backend warning for failed /api/community-highlights requests. It records HTTP method, matched route template (or an unmatched path with opaque IDs redacted), and response status. It deliberately excludes query strings, request bodies, headers, flow IDs, candidate IDs, and tokens.
+- Added DELETE /api/community-highlights/candidates/{candidate_id} and a Delete action in the candidate list. Deletion is explicit and confirmed in the UI.
+- Candidate deletion refuses to run while its extraction worker is active. It re-derives and checks the expected file path under the configured capture root before unlinking; if the file is locked or cannot be removed, candidate metadata remains so the user can retry.
+- Removed automatic pruning of terminal candidate metadata. At the 20-item limit, users must explicitly delete an item; approved candidates are never silently discarded.
+
+**Validation status:** the first backend CI run reported 1,390 passed, 30 skipped, and one failed test. The failure was in the new test fixture: connection_status had captured the original credential-store class in a default argument, so monkeypatching did not replace the Windows-only store. The function now resolves its default dependency at call time. That run also exposed an overly broad log-redaction threshold that hid the static 'community-highlights' path segment; the threshold is now limited to opaque IDs of 24+ characters and a regression test checks the route remains readable. Frontend CI passed. Final CI and one Windows validation on the final batch-2 commit are pending. CPU/CUDA Python runtime builds remain skipped because no Python runtime inputs changed.
+
+No live provider authorization is performed by CI. The historical 404 cause remains unconfirmed until a failed request from the installed RC can be matched to the new safe backend diagnostic (or shown not to reach the backend at all).
+
+**Scope boundary:** this batch does not implement restart persistence, capture reconnect, timeline calibration, trigger-window merging, AI analysis, preview/trim, renderer handoff, or M5 hardening.
+
+
+### Focused repair batch 3 — OAuth token binding, provider disconnect, and browser handoff — 2026-11-21
+
+**Changes made**
+- Replaced the prior fail-open Google tokeninfo check with a shared strict validator used by both initial authorization and refresh. It requires a non-empty, syntactically valid `aud` field and requires `azp` (the authorized party that requested the token) to exactly match Clippy's configured Google OAuth Client ID. It deliberately does **not** require `aud == azp`: Google's token types documentation states that the audience can differ from the authorized party when OAuth clients belong to the same Cloud project.
+- Added regression tests for a matching authorized party, missing/malformed authorized-party data, a wrong client, and the valid case where `aud` differs from `azp`. The refresh path is also tested for rejecting missing `azp`.
+- Added a provider revocation adapter. Google sends the stored refresh token to Google's documented revocation endpoint. Twitch sends the stored access token and public Client ID to Twitch's documented access-token revocation endpoint. Tokens are sent in request bodies, not URLs; provider request details and token values are never logged.
+- Disconnect now blocks new chat starts for that provider, stops its active chat sessions, attempts provider-side revocation, and removes local Windows Credential Manager credentials. If remote revocation cannot be confirmed, Clippy still disconnects locally and returns an explicit `not_confirmed` status with instructions to review provider account connections. Credential Manager deletion failure remains a 503 and does not claim local disconnection.
+- The Twitch response is carefully worded as access-token revocation. Twitch's public documentation describes revoking an access token; this implementation does not claim more than the provider confirms. The user is directed to Twitch Settings > Connections when remote status cannot be confirmed.
+- Google disconnect asks for confirmation before revocation. Google's documentation states that revocation removes all scopes granted to the Google Cloud project and invalidates tokens for every OAuth client registered in that project. The confirmation warns users that another Clippy or unrelated client sharing the project will also be affected; keep this project dedicated to Clippy.
+- Reworked browser authorization popup handling. Clippy opens a blank window synchronously during the click gesture, sets `window.opener = null` before navigating to the provider, and uses the same safe helper for reopening. Added Node built-in tests and wired `npm test` into both Linux CI and Windows desktop validation.
+- The backend now shares a provider-specific credential lifecycle lock across token refresh, OAuth credential persistence, and Disconnect. The lock is held while provider token exchanges and validation are in flight, so Disconnect waits for any newly issued token to be saved, cancels all remaining flows, revokes the latest saved grant where supported, and deletes local credentials before releasing the lock. This closes a race where a late refresh or OAuth callback could otherwise restore credentials after a successful local disconnect.
+- Added async regression tests for refresh/disconnect ordering, both Twitch device-code and Google loopback callback/disconnect ordering, and late OAuth start requests attempting to register after a disconnect. Added defensive response-shape validation for provider JSON so malformed responses become safe authorization errors instead of backend 500s.
+- Clarified the Google disconnect success message: a confirmed revocation invalidates grants/tokens for every OAuth client in the same Cloud project, not merely a possible subset.
+
+**Validation status:** an initial backend run stopped at test collection because the disconnect helper's return annotation used `Any` without importing it. The failure was diagnosed from the CI traceback and the missing import was added. The latest CI run is queued/running against the subsequent commit, including the import correction, credential-race tests, malformed-response tests, dashboard unit tests, and frontend build. Windows desktop validation is also queued for the same branch. No live OAuth authorization or provider revocation is performed by CI. Test credentials are still not configured in the repository Actions Variables.
+
+**Provider-specific scope and limitations**
+- Google: the implementation revokes the stored refresh token; Google's documented revocation has project-wide effects for grants and clients within that Cloud project. Keep this OAuth project dedicated to Clippy and do not share it with unrelated products.
+- Twitch: the documented revoke endpoint accepts an access token. A successful response confirms the access-token revocation request; it is not represented as proof that every provider-side grant has been removed. If Twitch cannot confirm revocation, users are directed to inspect the app in their Twitch Connections settings.
+- Local disconnect is independent of provider availability: chat sessions are stopped and local credentials are deleted even when remote revocation cannot be confirmed. The UI explicitly communicates that distinction.
+
+**Official documentation checked**
+- Google Cloud token types and tokeninfo fields: https://docs.cloud.google.com/docs/authentication/token-types
+- Google OAuth 2.0 for Desktop Apps, PKCE, and token revocation (including project-wide revocation behavior): https://developers.google.com/identity/protocols/oauth2/native-app
+- Twitch token revocation: https://dev.twitch.tv/docs/authentication/revoke-tokens/
+- Twitch access-token lifecycle and validation: https://dev.twitch.tv/docs/authentication/validate-tokens/
+- Twitch Device Code Grant and public-client refresh behavior: https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/
+- Browser popup and `noopener` return semantics: https://developer.mozilla.org/en-US/docs/Web/API/Window/open
+
+
+
+### Release OAuth identity isolation — 2026-11-21
+
+The final end-to-end release review found that one generic Actions Variable pair was used for both release candidates and stable tags. Since the currently registered provider applications are testing identities, that could have allowed a stable installer to ship the testing Client IDs.
+
+**Fix applied**
+- The tag-driven release workflow now selects the `*_TEST` variables for tags containing a hyphen (for example `v0.3.2-rc.1`) and the `*_PRODUCTION` variables for stable tags.
+- There is no fallback between profiles. If either public Client ID for the selected profile is empty or malformed, validation fails before Windows runtime packaging starts.
+- The selected values are passed as job outputs to the Windows payload build and its assembled-payload contract tests. The raw client IDs are not printed in workflow logs.
+- Pull-request Windows payload validation uses only the test Client ID pair. Local `.env` runtime variable names remain unchanged.
+
+Required repository Actions Variables:
+- Test: `CLIPPY_TWITCH_CLIENT_ID_TEST`, `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST`
+- Production: `CLIPPY_TWITCH_CLIENT_ID_PRODUCTION`, `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION`
+
+**Validation status:** the release workflow and PR/Windows workflow changes require fresh CI and Windows validation on the updated commit. No Actions Variable values have been configured through code. A stable release cannot proceed until the production pair is explicitly saved in repository settings.

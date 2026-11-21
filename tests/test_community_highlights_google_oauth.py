@@ -77,3 +77,15 @@ async def test_google_flow_status_expires_and_cancels_callback_listener():
 
     assert status["status"] == "expired"
     assert await google_oauth.cancel_google_flow(result["flow_id"]) is True
+
+
+def test_google_tokeninfo_requires_our_authorized_party_but_allows_project_audience():
+    matches = google_oauth.google_token_info_matches_client
+
+    # Google documents that aud may differ from azp for OAuth clients in the
+    # same Cloud project. The requesting client (azp) is the binding we check.
+    assert matches({"aud": "another-client.apps.googleusercontent.com", "azp": "desktop-client-id"}, "desktop-client-id")
+    assert not matches({"aud": "desktop-client-id"}, "desktop-client-id")
+    assert not matches({"aud": "desktop-client-id", "azp": "another-client"}, "desktop-client-id")
+    assert not matches({"aud": "", "azp": "desktop-client-id"}, "desktop-client-id")
+    assert not matches(None, "desktop-client-id")

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from community_highlights.capture_sessions import CaptureSessionManager, CaptureSettings
+from community_highlights.capture_sessions import CaptureSessionManager, CaptureSettings, HighlightCandidate
 
 
 class FakeCapture:
@@ -138,3 +138,92 @@ def test_finished_capture_remains_visible_until_capacity_is_reused(tmp_path):
     assert manager.get(started["session_id"])["status"] == "ended"
     manager.start("https://www.twitch.tv/next")
     assert manager.get(started["session_id"]) is None
+
+
+def _ready_candidate(candidate_id, session_id, output_path=None, worker=None):
+    from datetime import datetime, timezone
+
+    return HighlightCandidate(
+        candidate_id=candidate_id,
+        capture_session_id=session_id,
+        triggered_at=datetime.now(timezone.utc),
+        pre_seconds=10,
+        post_seconds=10,
+        reason="manual",
+        status="ready",
+        review_status="approved",
+        output_path=output_path,
+        worker=worker,
+    )
+
+
+def test_delete_approved_candidate_removes_media_and_frees_queue_slot(tmp_path):
+    manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
+    candidate_id = "candidate-safe-delete"
+    session_id = "session-safe-delete"
+    output_dir = tmp_path / session_id / "highlights"
+    output_dir.mkdir(parents=True)
+    media = output_dir / f"{candidate_id}.ts"
+    media.write_bytes(b"candidate media")
+    manager._candidates[candidate_id] = _ready_candidate(candidate_id, session_id, media)
+
+    assert manager.delete_candidate(candidate_id) is True
+    assert not media.exists()
+    assert candidate_id not in manager._candidates
+
+
+def test_delete_candidate_keeps_metadata_when_file_is_locked_or_unwritable(tmp_path, monkeypatch):
+    manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
+    candidate_id = "candidate-delete-failure"
+    session_id = "session-delete-failure"
+    output_dir = tmp_path / session_id / "highlights"
+    output_dir.mkdir(parents=True)
+    media = output_dir / f"{candidate_id}.ts"
+    media.write_bytes(b"candidate media")
+    manager._candidates[candidate_id] = _ready_candidate(candidate_id, session_id, media)
+
+    def fail_unlink(*_args, **_kwargs):
+        raise PermissionError("file is in use")
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with pytest.raises(PermissionError):
+        manager.delete_candidate(candidate_id)
+    assert candidate_id in manager._candidates
+
+
+def test_delete_candidate_refuses_while_worker_is_running(tmp_path):
+    manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
+    candidate_id = "candidate-busy"
+    session_id = "session-busy"
+    release = threading.Event()
+    worker = threading.Thread(target=release.wait)
+    worker.start()
+    manager._candidates[candidate_id] = _ready_candidate(candidate_id, session_id, worker=worker)
+
+    try:
+        with pytest.raises(ValueError, match="still being created"):
+            manager.delete_candidate(candidate_id)
+        assert candidate_id in manager._candidates
+    finally:
+        release.set()
+        worker.join(timeout=2)
+
+
+def test_delete_candidate_rejects_media_path_outside_capture_root(tmp_path):
+    manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path / "captures")
+    outside = tmp_path / "outside.ts"
+    outside.write_bytes(b"must survive")
+    candidate_id = "candidate-path-check"
+    session_id = "session-path-check"
+    manager._candidates[candidate_id] = _ready_candidate(candidate_id, session_id, outside)
+
+    with pytest.raises(RuntimeError, match="storage-boundary"):
+        manager.delete_candidate(candidate_id)
+    assert outside.exists()
+    assert candidate_id in manager._candidates
+
+
+def test_delete_unknown_candidate_returns_false(tmp_path):
+    manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
+    assert manager.delete_candidate("missing") is False
+
