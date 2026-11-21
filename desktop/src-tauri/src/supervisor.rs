@@ -244,7 +244,7 @@ pub struct Supervisor {
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PublicOAuthClientConfig {
     #[serde(default)]
     schema_version: u32,
@@ -985,6 +985,19 @@ mod oauth_config_tests {
         fs::write(
             root.join("community-highlights-oauth.json"),
             r#"{"schemaVersion":2,"twitchClientId":"valid-id","googleOauthClientId":"valid-id"}"#,
+        )
+        .unwrap();
+        assert!(load_public_oauth_client_config(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unexpected_fields_such_as_client_secrets() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("community-highlights-oauth.json"),
+            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"valid-id","clientSecret":"never-package-this"}"#,
         )
         .unwrap();
         assert!(load_public_oauth_client_config(&root).is_err());
