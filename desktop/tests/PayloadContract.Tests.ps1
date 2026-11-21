@@ -27,6 +27,7 @@ Describe "Assembled Clippy application payload contract" {
             "setup-runtime.ps1",
             "runtime-archive.ps1",
             "runtime-health.ps1",
+            "storage-path.ps1",
             "runtime-ffmpeg.ps1",
             "runtime-contract.json",
             "runtime-manifest-state.ps1",
@@ -53,7 +54,7 @@ Describe "Assembled Clippy application payload contract" {
     }
 
     It "contains the current setup contract and helpers, not a stale build" {
-        foreach ($relative in @('setup-runtime.ps1','runtime-health.ps1','runtime-contract.json','runtime-archive.ps1','runtime-manifest-state.ps1','runtime-ffmpeg.ps1')) {
+        foreach ($relative in @('setup-runtime.ps1','runtime-health.ps1','storage-path.ps1','runtime-contract.json','runtime-archive.ps1','runtime-manifest-state.ps1','runtime-ffmpeg.ps1')) {
             $stream = (Get-PayloadZipEntry $relative).Open()
             $reader = [IO.StreamReader]::new($stream)
             try { $packaged = $reader.ReadToEnd() } finally { $reader.Dispose() }
@@ -62,10 +63,27 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
+    It "packages only public Community Highlights OAuth client IDs" {
+        $entry = Get-PayloadZipEntry "community-highlights-oauth.json"
+        $entry | Should -Not -BeNullOrEmpty
+        $stream = $entry.Open()
+        try {
+            $reader = [IO.StreamReader]::new($stream)
+            try { $config = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+        } finally {
+            $stream.Dispose()
+        }
+
+        $config.schemaVersion | Should -Be 1
+        $config.twitchClientId | Should -Be ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
+        $config.googleOauthClientId | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
+        @($config.PSObject.Properties.Name) | Should -Be @("schemaVersion", "twitchClientId", "googleOauthClientId")
+    }
+
     It "uses the persisted data directory for all user-data components" {
         $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
         $setupSource | Should -Match 'storage-location\.json'
-        $setupSource | Should -Match '\$DataRoot = \[IO\.Path\]::GetFullPath'
+        $setupSource | Should -Match 'ConvertTo-ClippyPowerShellPath'
         foreach ($component in @("output", "uploads", "models")) {
             $pattern = 'Join-Path \$DataRoot "' + [regex]::Escape($component) + '"'
             $setupSource | Should -Match $pattern
@@ -77,6 +95,7 @@ Describe "Assembled Clippy application payload contract" {
     It "smoke-tests runtime setup with a relocated data directory" {
         $smokeSource = Get-Content (Join-Path $PSScriptRoot "../smoke-test-runtime.ps1") -Raw
         $smokeSource | Should -Match 'external-clippy-data'
+        $smokeSource | Should -Match '\$legacyExtendedDataRoot'
         $smokeSource | Should -Match 'storage-location\.json'
         $smokeSource | Should -Match '\$env:CLIPPY_DATA_DIR = \$dataRoot'
         $smokeSource | Should -Match 'unexpectedly created a default data folder'
@@ -94,7 +113,7 @@ Describe "Assembled Clippy application payload contract" {
             $stream.Dispose()
         }
 
-        foreach ($helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1", "runtime-ffmpeg.ps1")) {
+        foreach ($helper in @("runtime-manifest-state.ps1", "runtime-archive.ps1", "runtime-ffmpeg.ps1", "storage-path.ps1")) {
             $setupSource | Should -Match ([regex]::Escape($helper))
             Get-PayloadZipEntry $helper | Should -Not -BeNullOrEmpty
         }
