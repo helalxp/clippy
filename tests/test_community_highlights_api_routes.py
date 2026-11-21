@@ -16,9 +16,9 @@ class FakeCredentialStore:
         return self.bundle
 
 
-def _client(monkeypatch):
+def _client(monkeypatch, *, credential_store_factory=FakeCredentialStore):
     monkeypatch.setattr(backend_app, "_DESKTOP_API_TOKEN", "test-desktop-session-token")
-    monkeypatch.setattr(community_api, "WindowsCredentialStore", FakeCredentialStore)
+    monkeypatch.setattr(community_api, "WindowsCredentialStore", credential_store_factory)
     monkeypatch.setattr(community_api, "twitch_authorization_available", lambda: True)
     monkeypatch.setattr(community_api, "google_authorization_available", lambda: True)
     # Do not enter TestClient as a context manager: these route tests must not
@@ -190,8 +190,6 @@ def test_twitch_disconnect_stops_chat_and_removes_local_credentials_after_confir
         "refresh_token": "twitch-refresh-secret",
     }
     store.delete = lambda provider: setattr(store, "bundle", None)
-    monkeypatch.setattr(community_api, "WindowsCredentialStore", lambda: store)
-
     events = []
 
     async def begin(provider):
@@ -208,7 +206,7 @@ def test_twitch_disconnect_stops_chat_and_removes_local_credentials_after_confir
     monkeypatch.setattr(community_api.chat_sessions, "begin_provider_disconnect", begin)
     monkeypatch.setattr(community_api.chat_sessions, "end_provider_disconnect", finish)
     monkeypatch.setattr(community_api, "revoke_twitch_credentials", revoke)
-    client = _client(monkeypatch)
+    client = _client(monkeypatch, credential_store_factory=lambda: store)
 
     response = client.delete("/api/community-highlights/connections/twitch", headers=_headers())
 
@@ -228,8 +226,6 @@ def test_google_disconnect_is_local_even_when_remote_revocation_cannot_be_confir
         "refresh_token": "google-refresh-secret",
     }
     store.delete = lambda provider: setattr(store, "bundle", None)
-    monkeypatch.setattr(community_api, "WindowsCredentialStore", lambda: store)
-
     events = []
 
     async def begin(provider):
@@ -245,7 +241,7 @@ def test_google_disconnect_is_local_even_when_remote_revocation_cannot_be_confir
     monkeypatch.setattr(community_api.chat_sessions, "begin_provider_disconnect", begin)
     monkeypatch.setattr(community_api.chat_sessions, "end_provider_disconnect", finish)
     monkeypatch.setattr(community_api, "revoke_google_credentials", revoke)
-    client = _client(monkeypatch)
+    client = _client(monkeypatch, credential_store_factory=lambda: store)
 
     response = client.delete("/api/community-highlights/connections/youtube", headers=_headers())
 
@@ -262,8 +258,6 @@ def test_disconnect_preserves_local_credentials_when_credential_manager_delete_f
     store = FakeCredentialStore()
     store.bundle = {"access_token": "still-saved"}
     store.delete = lambda _provider: (_ for _ in ()).throw(CredentialStoreError("storage unavailable"))
-    monkeypatch.setattr(community_api, "WindowsCredentialStore", lambda: store)
-
     events = []
 
     async def no_sessions(_provider):
@@ -278,7 +272,7 @@ def test_disconnect_preserves_local_credentials_when_credential_manager_delete_f
     monkeypatch.setattr(community_api.chat_sessions, "begin_provider_disconnect", no_sessions)
     monkeypatch.setattr(community_api.chat_sessions, "end_provider_disconnect", end_sessions)
     monkeypatch.setattr(community_api, "revoke_twitch_credentials", revoke)
-    client = _client(monkeypatch)
+    client = _client(monkeypatch, credential_store_factory=lambda: store)
 
     response = client.delete("/api/community-highlights/connections/twitch", headers=_headers())
 
