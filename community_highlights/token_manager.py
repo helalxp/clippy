@@ -69,6 +69,8 @@ async def _ensure_access_token_locked(
             if validation.status_code != 401:
                 validation.raise_for_status()
                 identity = validation.json()
+                if not isinstance(identity, dict) or not isinstance(identity.get("scopes"), list):
+                    raise ProviderTokenError("Twitch returned invalid token validation details.")
                 scopes = set(identity.get("scopes") or [])
                 if identity.get("client_id") == client_id and "chat:read" in scopes:
                     store.save(provider, {
@@ -103,6 +105,8 @@ async def _ensure_access_token_locked(
             )
             response.raise_for_status()
             refreshed = response.json()
+            if not isinstance(refreshed, dict):
+                raise ProviderTokenError("Twitch returned an invalid token response.")
             access_token = refreshed.get("access_token")
             refresh_token = refreshed.get("refresh_token")
             if not access_token or not refresh_token:
@@ -145,6 +149,8 @@ async def _ensure_access_token_locked(
             )
             response.raise_for_status()
             refreshed = response.json()
+            if not isinstance(refreshed, dict):
+                raise ProviderTokenError("Google returned an invalid token response.")
             access_token = refreshed.get("access_token")
             if not access_token:
                 raise ProviderTokenError("Google did not return a refreshed access token.")
@@ -154,6 +160,8 @@ async def _ensure_access_token_locked(
             )
             info.raise_for_status()
             token_info = info.json()
+            if not isinstance(token_info, dict):
+                raise ProviderTokenError("Google returned invalid token details.")
             scopes = set((token_info.get("scope") or "").split())
             if not google_token_info_matches_client(token_info, client_id):
                 raise ProviderTokenError("Google returned a token for an unexpected OAuth client.")
