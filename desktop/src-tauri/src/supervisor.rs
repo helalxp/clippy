@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     fs::{self, File, OpenOptions},
@@ -243,6 +243,56 @@ pub struct Supervisor {
     api_token: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PublicOAuthClientConfig {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    twitch_client_id: String,
+    #[serde(default)]
+    google_oauth_client_id: String,
+}
+
+impl PublicOAuthClientConfig {
+    fn validate(self) -> Result<Self, String> {
+        if self.schema_version != 1 {
+            return Err("Packaged Community Highlights OAuth configuration has an unsupported schema.".into());
+        }
+        for (name, value) in [
+            ("Twitch", self.twitch_client_id.as_str()),
+            ("Google", self.google_oauth_client_id.as_str()),
+        ] {
+            if value.len() > 512
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            {
+                return Err(format!("Packaged {name} OAuth client ID contains unsupported characters."));
+            }
+        }
+        Ok(self)
+    }
+}
+
+fn load_public_oauth_client_config(app_root: &Path) -> Result<PublicOAuthClientConfig, String> {
+    let path = app_root.join("community-highlights-oauth.json");
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Older development installations may not yet have the optional
+            // public-ID payload. The release workflow requires it for releases.
+            return Ok(PublicOAuthClientConfig::default());
+        }
+        Err(error) => {
+            return Err(format!("Cannot read packaged Community Highlights OAuth configuration: {error}"));
+        }
+    };
+    let config: PublicOAuthClientConfig = serde_json::from_str(&raw)
+        .map_err(|error| format!("Packaged Community Highlights OAuth configuration is invalid: {error}"))?;
+    config.validate()
+}
+
 #[derive(Clone)]
 struct RuntimePaths {
     root: PathBuf,
@@ -455,6 +505,7 @@ impl Supervisor {
         let backend_port_arg = backend_port.to_string();
         let renderer_port_arg = renderer_port.to_string();
         let api_token = generate_api_token()?;
+        let oauth_clients = load_public_oauth_client_config(&paths.root)?;
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
@@ -517,6 +568,11 @@ impl Supervisor {
             .env("HOST", BACKEND_HOST)
             .env("PORT", backend_port_arg.clone())
             .env("CLIPPY_API_TOKEN", &api_token)
+            // These IDs identify public OAuth clients. They are not secrets,
+            // and are deliberately supplied as explicit values (including
+            // empty values) so user-shell environment cannot change app config.
+            .env("CLIPPY_TWITCH_CLIENT_ID", &oauth_clients.twitch_client_id)
+            .env("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", &oauth_clients.google_oauth_client_id)
             .stdout(Stdio::from(
                 backend_log.try_clone().map_err(|e| e.to_string())?,
             ))
@@ -865,6 +921,73 @@ mod managed_path_tests {
             "supervised PATH must include the CUDA DLL directory: {entries:?}"
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod oauth_config_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root() -> PathBuf {
+        env::temp_dir().join(format!(
+            "clippy-oauth-config-test-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ))
+    }
+
+    #[test]
+    fn loads_public_oauth_client_ids_from_packaged_config() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("community-highlights-oauth.json"),
+            r#"{"schemaVersion":1,"twitchClientId":"twitch-client_123","googleOauthClientId":"google.apps.example"}"#,
+        )
+        .unwrap();
+
+        let config = load_public_oauth_client_config(&root).unwrap();
+        assert_eq!(config.twitch_client_id, "twitch-client_123");
+        assert_eq!(config.google_oauth_client_id, "google.apps.example");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_public_oauth_config_disables_only_provider_authorization() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let config = load_public_oauth_client_config(&root).unwrap();
+        assert!(config.twitch_client_id.is_empty());
+        assert!(config.google_oauth_client_id.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_public_oauth_client_ids() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("community-highlights-oauth.json"),
+            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"bad id"}"#,
+        )
+        .unwrap();
+        assert!(load_public_oauth_client_config(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_oauth_config_schema() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("community-highlights-oauth.json"),
+            r#"{"schemaVersion":2,"twitchClientId":"valid-id","googleOauthClientId":"valid-id"}"#,
+        )
+        .unwrap();
+        assert!(load_public_oauth_client_config(&root).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }
