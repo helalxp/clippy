@@ -176,3 +176,73 @@ async def test_cancel_flow_discards_device_code():
 
     assert await twitch_oauth.cancel_twitch_flow(flow_id) is True
     assert flow_id not in twitch_oauth._flows
+
+
+@run_async
+async def test_start_flow_rejects_non_object_provider_response():
+    client = FakeClient([(200, ["not", "an", "object"])])
+
+    with pytest.raises(twitch_oauth.TwitchOAuthError, match="invalid authorization response"):
+        await twitch_oauth.start_twitch_flow(client)
+
+
+@run_async
+async def test_poll_flow_rejects_non_object_token_response():
+    flow_id = "malformed-token-response-flow-0123456789"
+    twitch_oauth._flows[flow_id] = {
+        "device_code": "server-only",
+        "client_id": "public-client-id",
+        "expires_at": time.monotonic() + 600,
+        "interval": 5,
+        "next_poll": 0,
+        "status": "pending",
+        "message": "Waiting",
+    }
+    client = FakeClient([(200, ["not", "an", "object"])])
+
+    result = await twitch_oauth.poll_twitch_flow(flow_id, client=client)
+
+    assert result["status"] == "error"
+    assert "invalid authorization response" in result["message"]
+
+
+@run_async
+async def test_poll_flow_rejects_non_object_token_validation_response():
+    flow_id = "malformed-token-validation-flow-0123456789"
+    twitch_oauth._flows[flow_id] = {
+        "device_code": "server-only",
+        "client_id": "public-client-id",
+        "expires_at": time.monotonic() + 600,
+        "interval": 5,
+        "next_poll": 0,
+        "status": "pending",
+        "message": "Waiting",
+    }
+    client = FakeClient([
+        (200, {"access_token": "access", "refresh_token": "refresh"}),
+        (200, ["not", "an", "object"]),
+    ])
+    store = FakeStore()
+
+    result = await twitch_oauth.poll_twitch_flow(
+        flow_id,
+        client=client,
+        store_factory=lambda: store,
+    )
+
+    assert result["status"] == "error"
+    assert store.saved == {}
+
+@run_async
+async def test_missing_twitch_client_id_disables_only_twitch_authorization(monkeypatch):
+    from community_highlights import google_oauth
+
+    monkeypatch.delenv("CLIPPY_TWITCH_CLIENT_ID", raising=False)
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setattr(google_oauth, "WindowsCredentialStore", lambda: FakeStore())
+
+    assert twitch_oauth.twitch_authorization_available() is False
+    assert google_oauth.google_authorization_available() is True
+
+    with pytest.raises(twitch_oauth.TwitchOAuthError, match="Twitch sign-in is not configured"):
+        await twitch_oauth.start_twitch_flow(FakeClient([]))

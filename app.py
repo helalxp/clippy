@@ -1,4 +1,5 @@
 import os
+import logging
 import llm_backend
 import re
 import sys
@@ -2611,10 +2612,36 @@ def _assert_data_storage_available() -> None:
         raise HTTPException(status_code=503, detail="Clippy is preparing a maintenance operation. Try again after the app restarts.")
 
 
+def _log_community_highlights_failure(request: Request, response) -> None:
+    """Log route/status diagnostics without recording IDs, query strings or secrets."""
+    if not request.url.path.startswith("/api/community-highlights"):
+        return
+    if response.status_code < 400:
+        return
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    if route_path is None:
+        # An unmatched path can contain opaque OAuth flow IDs or candidate IDs.
+        safe_path = re.sub(r"/[A-Za-z0-9_-]{24,}(?=/|$)", "/<id>", request.url.path)
+    else:
+        safe_path = route_path
+    # Unmatched paths are attacker-controlled input. Strip line breaks and cap
+    # their length before writing them to the local log.
+    safe_path = safe_path.replace("\\r", "").replace("\\n", "")[:256]
+    logging.getLogger("clippy.community_highlights").warning(
+        "Community Highlights API request failed: method=%s route=%s status=%s",
+        request.method,
+        safe_path,
+        response.status_code,
+    )
+
+
 @app.middleware("http")
 async def require_desktop_api_token(request: Request, call_next):
     if not _DESKTOP_API_TOKEN:
-        return await call_next(request)
+        response = await call_next(request)
+        _log_community_highlights_failure(request, response)
+        return response
     if request.method == "OPTIONS" or request.url.path in ("/health", "/health/ready"):
         return await call_next(request)
     supplied = request.headers.get("X-Clippy-Token", "")
@@ -2627,8 +2654,14 @@ async def require_desktop_api_token(request: Request, call_next):
     ):
         supplied = request.query_params.get("token", "")
     if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
-        return JSONResponse({"detail": "This local Clippy API requires its active desktop session token."}, status_code=401)
-    return await call_next(request)
+        response = JSONResponse(
+            {"detail": "This local Clippy API requires its active desktop session token."},
+            status_code=401,
+        )
+    else:
+        response = await call_next(request)
+    _log_community_highlights_failure(request, response)
+    return response
 
 
 class _MaintenanceQuiescenceMiddleware:

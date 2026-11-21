@@ -1,12 +1,13 @@
 {
   "name": "openshorts-app",
   "private": true,
-  "version": "0.3.2-rc.1",
+  "version": "0.3.2-rc.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
+    "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {

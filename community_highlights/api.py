@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
+from typing import Any
 
 from .chat import chat_sessions
 from .capture_sessions import CaptureSettings, capture_sessions
@@ -18,6 +19,7 @@ from .credentials import CredentialStoreError, WindowsCredentialStore
 from .google_oauth import (
     GoogleOAuthError,
     cancel_google_flow,
+    cancel_all_google_flows,
     google_authorization_available,
     google_flow_status,
     start_google_flow,
@@ -25,16 +27,21 @@ from .google_oauth import (
 from .twitch_oauth import (
     TwitchOAuthError,
     cancel_twitch_flow,
+    cancel_all_twitch_flows,
     poll_twitch_flow,
     start_twitch_flow,
     twitch_authorization_available,
 )
+from .revocation import revoke_google_credentials, revoke_twitch_credentials
+from .credential_lifecycle import provider_disconnect_lock
 
 router = APIRouter()
 
 
-def connection_status(store_factory=WindowsCredentialStore) -> dict:
+def connection_status(store_factory=None) -> dict:
     """Return provider connection metadata without exposing stored credentials."""
+    if store_factory is None:
+        store_factory = WindowsCredentialStore
     try:
         store = store_factory()
     except CredentialStoreError:
@@ -110,13 +117,68 @@ async def stop_twitch_authorization(flow_id: str):
     return {"cancelled": True}
 
 
-@router.delete("/api/community-highlights/connections/twitch")
-async def disconnect_twitch():
+async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
+    """Stop chat and atomically revoke/delete credentials relative to token writes."""
+    await chat_sessions.begin_provider_disconnect(provider)
     try:
-        WindowsCredentialStore().delete("twitch")
+        # Refresh, initial OAuth token exchange, and disconnect all share this
+        # provider-specific lock. An in-flight token write completes before
+        # revocation, or is rejected after its flow has been cancelled.
+        async with provider_disconnect_lock(provider):
+            if provider == "twitch":
+                await cancel_all_twitch_flows()
+            else:
+                await cancel_all_google_flows()
+
+            store = WindowsCredentialStore()
+            bundle = store.load(provider)
+            if not bundle:
+                revocation_status = "not_connected"
+                message = "No saved provider credentials were present."
+            else:
+                try:
+                    confirmed = await revoker(bundle)
+                except Exception:
+                    # Local disconnect must remain possible during provider outages.
+                    # Provider request details may contain credentials and are not
+                    # returned to the frontend or written to logs.
+                    confirmed = False
+                revocation_status = "revoked" if confirmed else "not_confirmed"
+                if provider == "youtube":
+                    message = (
+                        "Google confirmed token revocation. This removes OAuth scopes granted to the "
+                        "same Google Cloud project and invalidates tokens for every OAuth client "
+                        "registered in that project."
+                        if confirmed else
+                        "Clippy removed its saved Google credentials, but Google did not confirm revocation. "
+                        "Review third-party access in your Google Account."
+                    )
+                else:
+                    message = (
+                        "Twitch accepted revocation of the saved access token."
+                        if confirmed else
+                        "Clippy removed its saved Twitch credentials, but Twitch did not confirm access-token "
+                        "revocation. Review your app under Twitch Settings > Connections."
+                    )
+            # Remove local credentials even when remote revocation cannot be
+            # confirmed. No refresh or OAuth callback can restore them after
+            # the shared lock is released because all outstanding flows were
+            # cancelled while holding the same lock.
+            store.delete(provider)
+            return {
+                "connected": False,
+                "revocation_status": revocation_status,
+                "message": message,
+            }
     except CredentialStoreError as error:
         raise HTTPException(status_code=503, detail=str(error)) from None
-    return {"connected": False}
+    finally:
+        await chat_sessions.end_provider_disconnect(provider)
+
+
+@router.delete("/api/community-highlights/connections/twitch")
+async def disconnect_twitch():
+    return await _disconnect_provider("twitch", revoke_twitch_credentials)
 
 
 
@@ -148,11 +210,7 @@ async def stop_google_authorization(flow_id: str):
 
 @router.delete("/api/community-highlights/connections/youtube")
 async def disconnect_youtube():
-    try:
-        WindowsCredentialStore().delete("youtube")
-    except CredentialStoreError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from None
-    return {"connected": False}
+    return await _disconnect_provider("youtube", revoke_google_credentials)
 
 
 
@@ -284,6 +342,27 @@ async def get_highlight_candidate(candidate_id: str):
     if candidate is None:
         raise HTTPException(status_code=404, detail="Highlight candidate not found.")
     return candidate[0]
+
+
+@router.delete("/api/community-highlights/candidates/{candidate_id}")
+async def delete_highlight_candidate(candidate_id: str):
+    try:
+        deleted = capture_sessions.delete_candidate(candidate_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except OSError:
+        raise HTTPException(
+            status_code=409,
+            detail="The highlight file could not be deleted. Close any app using it and try again.",
+        ) from None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="The highlight file failed its storage safety check.",
+        ) from None
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Highlight candidate not found.")
+    return {"deleted": True}
 
 
 @router.get("/api/community-highlights/candidates/{candidate_id}/file")

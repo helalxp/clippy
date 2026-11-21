@@ -11,6 +11,9 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    outputs:
+      twitch_client_id: ${{ steps.oauth.outputs.twitch_client_id }}
+      google_client_id: ${{ steps.oauth.outputs.google_client_id }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -24,6 +27,37 @@ jobs:
           PyJWT email-validator python-multipart
       - name: Run backend tests
         run: pytest tests/ -v
+      - name: Validate shared Community Highlights OAuth client IDs
+        id: oauth
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+
+          # Google is required for the current YouTube test path. Twitch remains
+          # optional until its application registration is ready; an empty ID
+          # disables Twitch sign-in in the packaged application.
+          google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID"
+          twitch="$CLIPPY_TWITCH_CLIENT_ID"
+
+          if [ -z "$google" ]; then
+            echo "::error::Missing Google OAuth Client ID. Configure CLIPPY_GOOGLE_OAUTH_CLIENT_ID before tagging this release."
+            exit 1
+          fi
+
+          for entry in "Google:$google" "Twitch:$twitch"; do
+            name="${entry%%:*}"
+            value="${entry#*:}"
+            if [ -n "$value" ] && { [ "${#value}" -gt 512 ] || [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ ]]; }; then
+              echo "::error::$name OAuth Client ID has an invalid value."
+              exit 1
+            fi
+          done
+
+          echo "twitch_client_id=$twitch" >> "$GITHUB_OUTPUT"
+          echo "google_client_id=$google" >> "$GITHUB_OUTPUT"
+          echo "Community Highlights OAuth configuration validated (Twitch configured: $([ -n "$twitch" ] && echo yes || echo no))."
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -179,12 +213,17 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
         run: ./desktop/build.ps1 -CreateUpdaterArtifacts
 
       # The payload contract tests must run after prepare-payload.ps1 has built
       # the exact ZIP embedded in the installer, not against source files alone.
       - name: Run PowerShell runtime and assembled-payload contract tests
         shell: pwsh
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI

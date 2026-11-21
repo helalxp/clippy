@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, LockKeyhole, Twitch, Loader2, ExternalLink, Unplug } from 'lucide-react';
 import { apiJson } from '../lib/api';
+import {
+  navigateAuthorizationWindow,
+  openAuthorizationPlaceholder,
+} from '../lib/externalAuthorization';
 
 const PROVIDERS = [
   {
@@ -28,14 +32,16 @@ async function openAuthorizationUrl(url, pendingWindow = null) {
     await tauri.core.invoke('open_external_url', { url });
     return;
   }
-  const opened = pendingWindow || window.open(url, '_blank', 'noopener,noreferrer');
-  if (pendingWindow) pendingWindow.location = url;
-  if (!opened) throw new Error('Your browser blocked the authorization window.');
+  // When the URL is already known (the reopen action), open a fresh blank
+  // context synchronously and sever opener before navigating to the provider.
+  const opened = pendingWindow || openAuthorizationPlaceholder();
+  navigateAuthorizationWindow(opened, url);
 }
 
 export default function CommunityHighlightsConnections({ compact = false }) {
   const [connections, setConnections] = useState(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [flow, setFlow] = useState(null);
   const [flowMessage, setFlowMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -87,11 +93,15 @@ export default function CommunityHighlightsConnections({ compact = false }) {
   };
 
   const connectProvider = async (provider) => {
-    const pendingWindow = window.__TAURI__ ? null : window.open('about:blank', '_blank');
+    let pendingWindow = null;
     setError('');
+    setNotice('');
     setBusy(true);
     setFlowMessage(`Starting secure ${provider === 'twitch' ? 'Twitch' : 'Google'} sign-in…`);
     try {
+      // This runs synchronously in the click handler, before the async API call,
+      // so popup blockers do not discard the eventual provider navigation.
+      if (!window.__TAURI__) pendingWindow = openAuthorizationPlaceholder();
       const started = await apiJson(`/api/community-highlights/${provider}/authorize`, { method: 'POST' });
       activeFlow.current = started.flow_id;
       setFlow({ ...started, provider });
@@ -115,6 +125,15 @@ export default function CommunityHighlightsConnections({ compact = false }) {
     }
   };
 
+  const reopenAuthorization = async (url) => {
+    setError('');
+    try {
+      await openAuthorizationUrl(url);
+    } catch (requestError) {
+      setError(requestError?.message || 'Could not open provider authorization.');
+    }
+  };
+
   const cancelAuthorization = async () => {
     stopPolling();
     const flowId = activeFlow.current;
@@ -131,11 +150,18 @@ export default function CommunityHighlightsConnections({ compact = false }) {
   };
 
   const disconnectProvider = async (provider) => {
+    if (provider === 'youtube' && !window.confirm(
+      'Disconnect Google from Community Highlights? Google documents that revoking a token removes OAuth scopes granted to the same Google Cloud project and invalidates tokens for its registered clients. Continue?'
+    )) return;
     setError('');
+    setNotice('');
     setBusy(true);
     try {
-      await apiJson(`/api/community-highlights/connections/${provider}`, { method: 'DELETE' });
+      const result = await apiJson(`/api/community-highlights/connections/${provider}`, { method: 'DELETE' });
       await refreshConnections();
+      if (result?.message && result.revocation_status !== 'not_connected') {
+        setNotice(result.message);
+      }
     } catch (requestError) {
       setError(requestError?.detail || `Could not disconnect ${provider}.`);
     } finally {
@@ -163,7 +189,6 @@ export default function CommunityHighlightsConnections({ compact = false }) {
         {PROVIDERS.map((provider) => {
           const state = connections?.[provider.id];
           const connected = state?.connected === true;
-          const twitch = provider.id === 'twitch';
           const authorizationAvailable = state?.authorization_available === true;
           return (
             <div key={provider.id} className="rounded-card border border-rule bg-paper2 p-4 flex flex-col min-w-0">
@@ -186,7 +211,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
                 </button>
               ) : flow?.provider === provider.id ? (
                 <div className="mt-4 space-y-2">
-                  <button type="button" onClick={() => openAuthorizationUrl(flow.verification_url || flow.authorization_url)}
+                  <button type="button" onClick={() => reopenAuthorization(flow.verification_url || flow.authorization_url)}
                     className="w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 flex items-center justify-center gap-2">
                     <ExternalLink size={15} /> Open {provider.name} authorization
                   </button>
@@ -224,6 +249,9 @@ export default function CommunityHighlightsConnections({ compact = false }) {
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
+      )}
+      {notice && (
+        <p role="status" className="mt-4 text-xs text-muted leading-relaxed">{notice}</p>
       )}
       <div className="mt-5 pt-4 border-t border-rule flex items-start gap-2 text-xs text-muted leading-relaxed">
         <LockKeyhole size={14} className="shrink-0 mt-0.5 text-brass" />

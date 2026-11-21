@@ -239,9 +239,8 @@ class CaptureSessionManager:
                 post_seconds=post_seconds,
                 reason=reason,
             )
-            self._prune_candidates_locked()
             if len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES:
-                raise ValueError("The highlight candidate queue is full. Review or clear existing candidates first.")
+                raise ValueError("The highlight queue is full. Delete an existing candidate before creating another.")
             pre_records = select_segments_for_window(
                 session.capture.read_segment_index(),
                 triggered_at=triggered_at,
@@ -330,16 +329,6 @@ class CaptureSessionManager:
         finally:
             session.capture.release_segments(protected)
 
-    def _prune_candidates_locked(self) -> None:
-        terminal = [
-            item for item in self._candidates.values()
-            if (item.status == "error" or (item.status == "ready" and item.review_status == "rejected"))
-            and (item.worker is None or not item.worker.is_alive())
-        ]
-        while len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES and terminal:
-            oldest = terminal.pop(0)
-            self._candidates.pop(oldest.candidate_id, None)
-
     def list_candidates(self, capture_session_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             items = list(self._candidates.values())
@@ -365,6 +354,41 @@ class CaptureSessionManager:
                 except OSError:
                     candidate.error = "Rejected, but Windows could not remove the file because it is still in use."
             return candidate.snapshot()
+
+    def delete_candidate(self, candidate_id: str) -> bool:
+        """Delete one completed candidate and its media on explicit user request.
+
+        Candidate output paths are generated internally. Re-derive the only
+        permitted location and verify its parent has not been redirected by a
+        symlink before unlinking. Never remove a candidate while its worker is
+        still writing or releasing capture segments.
+        """
+        with self._lock:
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None:
+                return False
+            if candidate.status == "capturing" or (
+                candidate.worker is not None and candidate.worker.is_alive()
+            ):
+                raise ValueError("This highlight is still being created. Try deleting it when processing finishes.")
+
+            output_path = candidate.output_path
+            if output_path is not None:
+                root = self._output_root.resolve()
+                expected_parent = root / candidate.capture_session_id / "highlights"
+                expected_file = expected_parent / f"{candidate.candidate_id}.ts"
+                actual_file = Path(os.path.abspath(output_path))
+                resolved_parent = expected_parent.resolve()
+                if actual_file != expected_file or not resolved_parent.is_relative_to(root):
+                    raise RuntimeError("Candidate output path failed its storage-boundary check.")
+                if resolved_parent != expected_parent:
+                    raise RuntimeError("Candidate output directory is not a trusted directory.")
+                # If another process has the file open on Windows, unlink raises
+                # and metadata remains available for a safe retry.
+                output_path.unlink(missing_ok=True)
+
+            del self._candidates[candidate_id]
+            return True
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
         with self._lock:

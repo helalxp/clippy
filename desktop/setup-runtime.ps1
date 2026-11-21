@@ -5,6 +5,7 @@ $ProgressPreference = "SilentlyContinue" # Avoid the extremely slow per-byte pro
 # Wait before any mutation so the shell can assign our process to its cleanup job.
 if ($env:CLIPPY_SETUP_WAIT_STDIN -eq '1' -and [Console]::ReadLine() -ne 'GO') { throw 'Setup launch was cancelled.' }
 . (Join-Path $PSScriptRoot 'runtime-health.ps1')
+. (Join-Path $PSScriptRoot 'storage-path.ps1')
 $Root = Join-Path $env:LOCALAPPDATA 'Clippy'
 $DesktopMutex = $null
 if ($env:CLIPPY_SETUP_WAIT_STDIN -ne '1') { $DesktopMutex = Enter-ClippyMutex $Root 'Desktop' }
@@ -48,7 +49,7 @@ if (Test-Path -LiteralPath $StorageLocationPath -PathType Leaf) {
         if ($StorageLocation.schema_version -ne 1 -or [string]::IsNullOrWhiteSpace($ConfiguredDataRoot)) {
             throw "Storage location configuration is incomplete or unsupported."
         }
-        $DataRoot = [IO.Path]::GetFullPath($ConfiguredDataRoot)
+        $DataRoot = ConvertTo-ClippyPowerShellPath -Path $ConfiguredDataRoot
         if ($DataRoot -notmatch '^[A-Za-z]:\\|^\\\\') {
             throw "Configured Clippy data directory must be an absolute Windows path."
         }

@@ -1,7 +1,9 @@
+import asyncio
 from datetime import datetime, timezone
 
 from community_highlights.chat import (
     ChatSession,
+    ChatSessionManager,
     _parse_twitch_message,
     _parse_youtube_message,
 )
@@ -85,3 +87,45 @@ def test_youtube_chat_message_without_required_identity_is_ignored():
         {"id": "message", "snippet": {"displayMessage": "hello"}},
         "abcdefghijk",
     ) is None
+
+
+def test_provider_disconnect_stops_existing_chat_and_blocks_inflight_start():
+    async def scenario():
+        token_entered = asyncio.Event()
+        release_token = asyncio.Event()
+
+        async def token_provider(_provider):
+            token_entered.set()
+            await release_token.wait()
+            return "token"
+
+        manager = ChatSessionManager(token_provider=token_provider)
+        running = asyncio.create_task(asyncio.Event().wait())
+        active = ChatSession(
+            session_id="active-twitch",
+            reference=StreamReference(ChatProvider.TWITCH, "channel"),
+            status="connected",
+            task=running,
+        )
+        manager._sessions[active.session_id] = active
+
+        starting = asyncio.create_task(manager.start("https://www.twitch.tv/another_channel"))
+        await asyncio.wait_for(token_entered.wait(), timeout=10)
+        await manager.begin_provider_disconnect("twitch")
+
+        assert manager._sessions == {}
+        assert active.stop_event.is_set()
+        assert running.cancelled()
+
+        release_token.set()
+        try:
+            await starting
+        except ValueError as error:
+            assert "being disconnected" in str(error)
+        else:
+            raise AssertionError("A chat session started while provider disconnect was in progress.")
+
+        await manager.end_provider_disconnect("twitch")
+        assert "twitch" not in manager._disconnecting_providers
+
+    asyncio.run(scenario())

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio } from 'lucide-react';
+import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 
 const statusLabel = (status) => ({
@@ -167,6 +167,22 @@ export default function CommunityHighlightsMonitor() {
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not save the candidate decision.');
+    } finally {
+      setReviewBusy('');
+    }
+  };
+
+  const deleteCandidate = async (candidateId) => {
+    if (!window.confirm('Delete this highlight candidate and its local video file? This cannot be undone.')) return;
+    setReviewBusy(candidateId);
+    setError('');
+    try {
+      await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}`, {
+        method: 'DELETE',
+      });
+      await refreshSessions();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not delete the highlight candidate.');
     } finally {
       setReviewBusy('');
     }
@@ -397,26 +413,34 @@ export default function CommunityHighlightsMonitor() {
                   <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments · {candidate.review_status || 'pending review'}</p>
                   {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
                 </div>
-                {candidate.status === 'ready' && (
-                  <div className="flex gap-2 shrink-0">
-                    {candidate.review_status !== 'rejected' && (
-                      <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
-                        className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                        {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
-                      </button>
-                    )}
-                    {candidate.review_status === 'pending' ? (
-                      <>
-                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Approve</button>
-                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
-                      </>
-                    ) : (
-                      <span className="text-xs text-muted capitalize">{candidate.review_status}</span>
-                    )}
-                  </div>
-                )}
+                <div className="flex gap-2 shrink-0">
+                  {candidate.status === 'ready' && (
+                    <>
+                      {candidate.review_status !== 'rejected' && (
+                        <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                          {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
+                        </button>
+                      )}
+                      {candidate.review_status === 'pending' ? (
+                        <>
+                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Approve</button>
+                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted capitalize">{candidate.review_status}</span>
+                      )}
+                    </>
+                  )}
+                  <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
+                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing'}
+                    title="Delete candidate and local file"
+                    className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40">
+                    <Trash2 size={13} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

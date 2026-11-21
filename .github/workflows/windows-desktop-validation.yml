@@ -47,13 +47,7 @@ jobs:
 
           $runtimePatterns = @(
             '^desktop/build-python-runtime\.ps1$',
-            '^desktop/runtime-archive\.ps1$',
-            '^desktop/runtime-manifest-state\.ps1$',
-            '^desktop/runtime-health\.ps1$',
-            '^desktop/runtime-ffmpeg\.ps1$',
-            '^desktop/validate-runtime-assets\.ps1$',
             '^desktop/runtime-contract\.json$',
-            '^desktop/setup-runtime\.ps1$',
             '^desktop/runtime-dist/',
             '^requirements[^/]*\.txt$',
             '^requirements/'
@@ -71,6 +65,7 @@ jobs:
 
   validate-windows:
     needs: [detect-runtime-changes, build-python-runtime-cpu]
+    if: ${{ always() && needs.detect-runtime-changes.result == 'success' && (needs.build-python-runtime-cpu.result == 'success' || needs.build-python-runtime-cpu.result == 'skipped') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -102,15 +97,46 @@ jobs:
         working-directory: dashboard
         run: npm ci
 
+      - name: Run dashboard unit tests
+        working-directory: dashboard
+        run: npm test
+
       - name: Build desktop dashboard
         shell: pwsh
         run: ./dashboard/build-desktop.ps1
+
+      - name: Validate shared Community Highlights OAuth IDs
+        shell: pwsh
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+        run: |
+          $google = ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
+          $twitch = ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($google)) {
+            throw "Missing CLIPPY_GOOGLE_OAUTH_CLIENT_ID repository Actions Variable."
+          }
+
+          foreach ($entry in @(
+            @{ Name = "Google"; Value = $google },
+            @{ Name = "Twitch"; Value = $twitch }
+          )) {
+            $value = [string]$entry.Value
+            if ($value.Length -gt 512 -or ($value -and $value -match '[^A-Za-z0-9._-]')) {
+              throw "$($entry.Name) OAuth Client ID has an invalid format."
+            }
+          }
+
+          Write-Host "Google OAuth Client ID is configured."
+          Write-Host "Twitch OAuth Client ID configured: $(-not [string]::IsNullOrWhiteSpace($twitch))"
 
       - name: Validate PowerShell installer scripts
         shell: pwsh
         run: |
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
+          [scriptblock]::Create((Get-Content ./desktop/storage-path.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/smoke-test-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/build.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/create-updater-manifest.ps1 -Raw)) | Out-Null
@@ -125,23 +151,31 @@ jobs:
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
         run: ./desktop/prepare-payload.ps1
 
       # PayloadContract.Tests.ps1 opens the real ZIP produced above. Running the
       # suite earlier would only test source files and miss packaging omissions.
       - name: Run PowerShell runtime and assembled-payload contract tests
         shell: pwsh
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Download CPU runtime for clean first-run smoke test
+        if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
         uses: actions/download-artifact@v4
         with:
           name: clippy-python-runtime-cpu
           path: desktop/runtime-dist
 
       - name: Smoke-test clean first-run runtime setup
+        if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
         shell: pwsh
         timeout-minutes: 30
         run: ./desktop/smoke-test-runtime.ps1
