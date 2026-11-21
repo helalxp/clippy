@@ -2622,7 +2622,7 @@ def _log_community_highlights_failure(request: Request, response) -> None:
     route_path = getattr(route, "path", None)
     if route_path is None:
         # An unmatched path can contain opaque OAuth flow IDs or candidate IDs.
-        safe_path = re.sub(r"/[A-Za-z0-9_-]{20,}(?=/|$)", "/<id>", request.url.path)
+        safe_path = re.sub(r"/[A-Za-z0-9_-]{24,}(?=/|$)", "/<id>", request.url.path)
     else:
         safe_path = route_path
     # Unmatched paths are attacker-controlled input. Strip line breaks and cap
