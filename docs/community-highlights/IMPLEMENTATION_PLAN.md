@@ -33,7 +33,7 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 - [ ] Finish M4 candidate workflow: footage analysis and suggested boundaries, inline preview, frame-accurate trimming, reuse of existing edit components, and handoff of approved candidates to the renderer.
 - [ ] Finish M5 hardening: review/automatic/hybrid modes, bounded retention and cleanup, structured diagnostics, long-running/restart recovery, and user-facing setup/troubleshooting documentation.
 - [ ] Clarify development-platform scope: the secure credential adapter intentionally requires Windows Credential Manager and fails closed on non-Windows hosts. Docker/Linux can run the backend but cannot complete provider OAuth without a deliberate non-production credential-store strategy.
-- [ ] Review a secondary authorization-window edge case: the reopen-authorization UI uses `noopener,noreferrer` and may interpret a successful popup as blocked when the browser returns a null window handle.
+- [x] Correct the authorization-window edge case: create a blank tab synchronously from the click, set its `opener` to `null` before provider navigation, and use the same helper for the reopen action. Add executable Node tests for popup blocking, opener isolation, navigation ordering, and closed windows.
 
 
 
@@ -501,14 +501,29 @@ No live provider authorization is performed by CI. The historical 404 cause rema
 **Scope boundary:** this batch does not implement restart persistence, capture reconnect, timeline calibration, trigger-window merging, AI analysis, preview/trim, renderer handoff, or M5 hardening.
 
 
-### End-to-end OAuth security re-review — follow-up findings
+### Focused repair batch 3 — OAuth token binding, provider disconnect, and browser handoff — 2026-11-21
 
-The source re-review after batch 2 found these additional issues in the existing OAuth implementation. They are not silently folded into batch 2 and remain open for the next focused repair pair.
+**Changes made**
+- Replaced the prior fail-open Google tokeninfo check with a shared strict validator used by both initial authorization and refresh. It requires a non-empty, syntactically valid `aud` field and requires `azp` (the authorized party that requested the token) to exactly match Clippy's configured Google OAuth Client ID. It deliberately does **not** require `aud == azp`: Google's token types documentation states that the audience can differ from the authorized party when OAuth clients belong to the same Cloud project.
+- Added regression tests for a matching authorized party, missing/malformed authorized-party data, a wrong client, and the valid case where `aud` differs from `azp`. The refresh path is also tested for rejecting missing `azp`.
+- Added a provider revocation adapter. Google sends the stored refresh token to Google's documented revocation endpoint. Twitch sends the stored access token and public Client ID to Twitch's documented access-token revocation endpoint. Tokens are sent in request bodies, not URLs; provider request details and token values are never logged.
+- Disconnect now blocks new chat starts for that provider, stops its active chat sessions, attempts provider-side revocation, and removes local Windows Credential Manager credentials. If remote revocation cannot be confirmed, Clippy still disconnects locally and returns an explicit `not_confirmed` status with instructions to review provider account connections. Credential Manager deletion failure remains a 503 and does not claim local disconnection.
+- The Twitch response is carefully worded as access-token revocation. Twitch's public documentation describes revoking an access token; this implementation does not claim more than the provider confirms. The user is directed to Twitch Settings > Connections when remote status cannot be confirmed.
+- Google disconnect asks for confirmation before revocation. Google's documentation warns that revocation removes scopes granted to the Google Cloud project and invalidates tokens for its registered clients, so a project shared with other clients can be affected.
+- Reworked browser authorization popup handling. Clippy opens a blank window synchronously during the click gesture, sets `window.opener = null` before navigating to the provider, and uses the same safe helper for reopening. Added Node built-in tests and wired `npm test` into both Linux CI and Windows desktop validation.
 
-- [ ] **Google token audience validation is fail-open when the tokeninfo response omits audience.** Both initial authorization in community_highlights/google_oauth.py and refresh in community_highlights/token_manager.py only reject a mismatched aud when the field exists. Google Cloud's access-token tokeninfo documentation describes aud as the intended audience and includes it in the response. Require an exact match to the configured client ID and fail closed when it is missing or malformed. Add success, missing-audience, wrong-audience, and scope regression tests for both code paths.
-- [ ] **Disconnect only deletes the local Windows Credential Manager bundle; it does not revoke the provider grant.** Add provider-side revocation using Google's documented OAuth revoke endpoint and Twitch's documented revoke endpoint. Define and test honest behavior when the provider is unreachable: Clippy must not claim remote revocation succeeded, and local credential removal must not leave an apparently connected state. Never log token values.
-- [ ] **Browser authorization popup handling needs a security/usability correction.** The initial browser flow opens about:blank without severing window.opener; the secondary reopen action uses noopener/noreferrer and then treats a null return value as a popup-blocked result, although noopener intentionally returns null. Open a blank window synchronously from the user gesture, sever opener before navigation, and test both initial and reopen behavior without false blocked-popup errors.
+**Validation status:** code, focused backend tests, dashboard Node tests, frontend build, and Windows desktop validation are queued on the updated branch. The previous PR #32 commit's backend and frontend checks passed; those results do not validate this batch. No live OAuth authorization or provider revocation is performed by CI. Test credentials are still not configured in the repository Actions Variables.
 
-**Verified security boundaries retained:** Google uses the native-app loopback callback with PKCE S256 and random state; Twitch uses the public-client Device Code Grant; tokens are held in the Windows Credential Manager; the backend receives only public Client IDs; the desktop API requires a per-launch token. These controls do not eliminate the follow-up issues above.
+**Provider-specific scope and limitations**
+- Google: the implementation revokes the stored refresh token; Google's documented revocation has project-wide effects for grants and clients within that Cloud project. Keep this OAuth project dedicated to Clippy and do not share it with unrelated products.
+- Twitch: the documented revoke endpoint accepts an access token. A successful response confirms the access-token revocation request; it is not represented as proof that every provider-side grant has been removed. If Twitch cannot confirm revocation, users are directed to inspect the app in their Twitch Connections settings.
+- Local disconnect is independent of provider availability: chat sessions are stopped and local credentials are deleted even when remote revocation cannot be confirmed. The UI explicitly communicates that distinction.
 
-**Documentation reviewed:** FastAPI's official testing guidance for HTTP-level TestClient coverage; OWASP Logging Cheat Sheet for excluding secrets and sanitizing untrusted log data; Google Cloud access-token tokeninfo documentation and native-app OAuth revocation documentation; Twitch Device Code Grant, token validation, and revocation documentation.
+**Official documentation checked**
+- Google Cloud token types and tokeninfo fields: https://docs.cloud.google.com/docs/authentication/token-types
+- Google OAuth 2.0 for Desktop Apps, PKCE, and token revocation (including project-wide revocation behavior): https://developers.google.com/identity/protocols/oauth2/native-app
+- Twitch token revocation: https://dev.twitch.tv/docs/authentication/revoke-tokens/
+- Twitch access-token lifecycle and validation: https://dev.twitch.tv/docs/authentication/validate-tokens/
+- Twitch Device Code Grant and public-client refresh behavior: https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/
+- Browser popup and `noopener` return semantics: https://developer.mozilla.org/en-US/docs/Web/API/Window/open
+
