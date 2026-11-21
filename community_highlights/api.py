@@ -33,8 +33,10 @@ from .twitch_oauth import (
 router = APIRouter()
 
 
-def connection_status(store_factory=WindowsCredentialStore) -> dict:
+def connection_status(store_factory=None) -> dict:
     """Return provider connection metadata without exposing stored credentials."""
+    if store_factory is None:
+        store_factory = WindowsCredentialStore
     try:
         store = store_factory()
     except CredentialStoreError:
