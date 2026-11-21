@@ -109,8 +109,8 @@ def test_provider_disconnect_stops_existing_chat_and_blocks_inflight_start():
         )
         manager._sessions[active.session_id] = active
 
-        starting = asyncio.create_task(manager.start("https://www.twitch.tv/another-channel"))
-        await token_entered.wait()
+        starting = asyncio.create_task(manager.start("https://www.twitch.tv/another_channel"))
+        await asyncio.wait_for(token_entered.wait(), timeout=10)
         await manager.begin_provider_disconnect("twitch")
 
         assert manager._sessions == {}
