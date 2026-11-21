@@ -258,6 +258,8 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 )
                 response.raise_for_status()
                 tokens = response.json()
+                if not isinstance(tokens, dict):
+                    raise GoogleOAuthError("Google returned an invalid token response.")
                 access_token = tokens.get("access_token")
                 if not isinstance(access_token, str) or not access_token:
                     raise GoogleOAuthError("Google did not return an access token.")
@@ -268,6 +270,8 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 )
                 info_response.raise_for_status()
                 token_info = info_response.json()
+                if not isinstance(token_info, dict):
+                    raise GoogleOAuthError("Google returned invalid token details.")
 
             scopes = set((token_info.get("scope") or "").split())
             if not google_token_info_matches_client(token_info, flow["client_id"]):
