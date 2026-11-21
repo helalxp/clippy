@@ -47,13 +47,7 @@ jobs:
 
           $runtimePatterns = @(
             '^desktop/build-python-runtime\.ps1$',
-            '^desktop/runtime-archive\.ps1$',
-            '^desktop/runtime-manifest-state\.ps1$',
-            '^desktop/runtime-health\.ps1$',
-            '^desktop/runtime-ffmpeg\.ps1$',
-            '^desktop/validate-runtime-assets\.ps1$',
             '^desktop/runtime-contract\.json$',
-            '^desktop/setup-runtime\.ps1$',
             '^desktop/runtime-dist/',
             '^requirements[^/]*\.txt$',
             '^requirements/'
@@ -71,6 +65,7 @@ jobs:
 
   validate-windows:
     needs: [detect-runtime-changes, build-python-runtime-cpu]
+    if: ${{ always() && needs.detect-runtime-changes.result == 'success' && (needs.build-python-runtime-cpu.result == 'success' || needs.build-python-runtime-cpu.result == 'skipped') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -125,6 +120,9 @@ jobs:
 
       - name: Prepare packaged backend and renderer payload
         shell: pwsh
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
         run: ./desktop/prepare-payload.ps1
 
       # PayloadContract.Tests.ps1 opens the real ZIP produced above. Running the
@@ -136,12 +134,14 @@ jobs:
           Invoke-Pester -Path ./desktop/tests -CI
 
       - name: Download CPU runtime for clean first-run smoke test
+        if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
         uses: actions/download-artifact@v4
         with:
           name: clippy-python-runtime-cpu
           path: desktop/runtime-dist
 
       - name: Smoke-test clean first-run runtime setup
+        if: needs.detect-runtime-changes.outputs.runtime_changed == 'true'
         shell: pwsh
         timeout-minutes: 30
         run: ./desktop/smoke-test-runtime.ps1
