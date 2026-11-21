@@ -130,6 +130,19 @@ def test_unknown_community_highlights_route_returns_404_and_logs_redacted_path(m
     assert "never-log" not in caplog.text
 
 
+def test_unknown_route_diagnostic_strips_log_line_breaks(monkeypatch, caplog):
+    client = _client(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="clippy.community_highlights"):
+        response = client.get(
+            "/api/community-highlights/unknown/%0d%0aFORGED-LOG-LINE",
+            headers=_headers(),
+        )
+    assert response.status_code == 404
+    assert "FORGED-LOG-LINE" in caplog.text
+    assert "\\nFORGED-LOG-LINE" not in caplog.text
+    assert "\\r" not in caplog.text
+
+
 def test_candidate_delete_route_reports_success_and_missing_candidate(monkeypatch):
     client = _client(monkeypatch)
     monkeypatch.setattr(community_api.capture_sessions, "delete_candidate", lambda _candidate_id: True)
