@@ -12,11 +12,11 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
-- [x] Persist compatible Windows paths for newly selected data directories, normalize compatible legacy \`\\\\?\\\` drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
-- [ ] Configure the repository Actions Variables \`CLIPPY_TWITCH_CLIENT_ID\` and \`CLIPPY_GOOGLE_OAUTH_CLIENT_ID\`. These are public client identifiers, not secrets. The release workflow now requires them; they are not set by code changes.
+- [x] Persist compatible Windows paths for newly selected data directories, normalize legacy Win32 extended-prefix drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
+- [ ] Configure the repository Actions Variables `CLIPPY_TWITCH_CLIENT_ID` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID`. These are public client identifiers, not secrets. The release workflow now requires them; they are not set by code changes.
 
 ### Remaining audit work
-- [ ] Diagnose the reported Community Highlights \`404 not found\` responses using the exact failing request path and response body. The router is registered in the app and its package is included; the current source audit cannot identify which request returned 404. Add FastAPI route-level HTTP tests for connection status, OAuth start/status/cancel, and desktop-token authorization. Add targeted, secret-safe diagnostics because Uvicorn access logging is currently disabled in the supervised backend.
+- [ ] Diagnose the reported Community Highlights `404 not found` responses using the exact failing request path and response body. The router is registered in the app and its package is included; the current source audit cannot identify which request returned 404. Add FastAPI route-level HTTP tests for connection status, OAuth start/status/cancel, and desktop-token authorization. Add targeted, secret-safe diagnostics because Uvicorn access logging is currently disabled in the supervised backend.
 - [ ] Fix approved-candidate queue exhaustion. The in-memory queue is capped at 20, but approved candidates are not pruned and there is no explicit delete operation. Add user-controlled deletion that removes candidate metadata and media together; never silently delete approved work.
 - [ ] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Mark interrupted captures explicitly on startup. Keep provider tokens in Windows Credential Manager, not SQLite.
 - [ ] Complete provider/capture lifecycle verification: mocked provider lifecycle/reconnect tests are incomplete; run authorized Twitch/YouTube chat and Streamlink/FFmpeg capture checks on Windows; verify audio/video continuity, timestamps, disconnect handling, and graceful shutdown. Chat reconnect exists, but capture-worker recovery is not yet proven or implemented as a bounded reconnect path.
@@ -25,7 +25,7 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 - [ ] Finish M4 candidate workflow: footage analysis and suggested boundaries, inline preview, frame-accurate trimming, reuse of existing edit components, and handoff of approved candidates to the renderer.
 - [ ] Finish M5 hardening: review/automatic/hybrid modes, bounded retention and cleanup, structured diagnostics, long-running/restart recovery, and user-facing setup/troubleshooting documentation.
 - [ ] Clarify development-platform scope: the secure credential adapter intentionally requires Windows Credential Manager and fails closed on non-Windows hosts. Docker/Linux can run the backend but cannot complete provider OAuth without a deliberate non-production credential-store strategy.
-- [ ] Review a secondary authorization-window edge case: the reopen-authorization UI uses \`noopener,noreferrer\` and may interpret a successful popup as blocked when the browser returns a null window handle.
+- [ ] Review a secondary authorization-window edge case: the reopen-authorization UI uses `noopener,noreferrer` and may interpret a successful popup as blocked when the browser returns a null window handle.
 
 
 
@@ -450,12 +450,12 @@ After the preflight passes, continue with the interactive sign-in, chat, rolling
 ### Focused repair batch 1 — public OAuth configuration and Windows path compatibility — 2026-11-21
 
 **Changes made**
-- Added a generated \`community-highlights-oauth.json\` file to the staged desktop payload. It contains only \`schemaVersion\`, \`twitchClientId\`, and \`googleOauthClientId\`; it never contains a provider client secret.
+- Added a generated `community-highlights-oauth.json` file to the staged desktop payload. It contains only `schemaVersion`, `twitchClientId`, and `googleOauthClientId`; it never contains a provider client secret.
 - Validated the public IDs during payload preparation and wired GitHub repository Actions Variables through both the Windows validation payload build and the tagged release build. The release validation job fails before CPU/CUDA runtime builds if either variable is missing or malformed.
-- Updated the Tauri supervisor to load the packaged public-ID file and explicitly set \`CLIPPY_TWITCH_CLIENT_ID\` and \`CLIPPY_GOOGLE_OAUTH_CLIENT_ID\` for the backend, rather than relying on ambient developer-machine environment variables. Missing config remains non-fatal for older development installations; release packaging is gated.
-- Replaced the storage-path canonicalization used for Clippy data configuration with \`dunce::canonicalize\`, which emits the most compatible Windows path when that can be done safely.
-- Added \`storage-path.ps1\` to normalize legacy extended drive and UNC paths before the runtime setup uses PowerShell path joins. It refuses unsupported device paths and paths that genuinely require extended-length handling rather than silently corrupting them.
-- Updated the clean runtime smoke fixture to reproduce a legacy extended path and added focused Pester and Rust tests, including a Windows test that passes the exact Rust-persisted path to Windows PowerShell \`Join-Path\`.
+- Updated the Tauri supervisor to load the packaged public-ID file and explicitly set `CLIPPY_TWITCH_CLIENT_ID` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID` for the backend, rather than relying on ambient developer-machine environment variables. Missing config remains non-fatal for older development installations; release packaging is gated.
+- Replaced the storage-path canonicalization used for Clippy data configuration with `dunce::canonicalize`, which emits the most compatible Windows path when that can be done safely.
+- Added `storage-path.ps1` to normalize legacy extended drive and UNC paths before the runtime setup uses PowerShell path joins. It refuses unsupported device paths and paths that genuinely require extended-length handling rather than silently corrupting them.
+- Updated the clean runtime smoke fixture to reproduce a legacy extended path and added focused Pester and Rust tests, including a Windows test that passes the exact Rust-persisted path to Windows PowerShell `Join-Path`.
 - Narrowed Windows runtime-package change detection to actual Python runtime inputs. For payload, PowerShell, or Rust-only changes, the Windows validation job still runs, but the CPU/CUDA Python runtime packages and full runtime smoke download are skipped.
 
 **Validation status:** the final focused PR CI and Windows validation pass is pending. No CUDA or CPU Python runtime archive build is expected for this batch because no Python runtime inputs or requirements changed.
