@@ -89,7 +89,7 @@ async def test_disconnect_waits_for_token_refresh_before_deleting_rotated_creden
     refresh_task = asyncio.create_task(
         ensure_access_token("twitch", store_factory=lambda: store, client=RefreshClient())
     )
-    await refresh_started.wait()
+    await asyncio.wait_for(refresh_started.wait(), timeout=10)
 
     disconnect_entered = asyncio.Event()
 
@@ -154,7 +154,7 @@ async def test_disconnect_waits_for_inflight_twitch_device_exchange_then_removes
             store_factory=lambda: store,
         )
     )
-    await validation_started.wait()
+    await asyncio.wait_for(validation_started.wait(), timeout=10)
 
     disconnect_entered = asyncio.Event()
 
@@ -233,7 +233,7 @@ async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_
             {"state": ["expected-state"], "code": ["authorization-code"]},
         )
     )
-    await tokeninfo_started.wait()
+    await asyncio.wait_for(tokeninfo_started.wait(), timeout=10)
 
     disconnect_entered = asyncio.Event()
 
@@ -294,7 +294,7 @@ async def test_twitch_device_request_started_before_disconnect_cannot_register_a
             })
 
     start = asyncio.create_task(twitch_oauth.start_twitch_flow(client=DeviceClient()))
-    await request_started.wait()
+    await asyncio.wait_for(request_started.wait(), timeout=10)
 
     async with provider_disconnect_lock("twitch"):
         assert await twitch_oauth.cancel_all_twitch_flows() == 0
@@ -340,7 +340,7 @@ async def test_google_listener_started_before_disconnect_cannot_register_a_late_
             store_factory=lambda: MemoryStore(),
         )
     )
-    await listener_starting.wait()
+    await asyncio.wait_for(listener_starting.wait(), timeout=10)
 
     async with provider_disconnect_lock("youtube"):
         assert await google_oauth.cancel_all_google_flows() == 0
