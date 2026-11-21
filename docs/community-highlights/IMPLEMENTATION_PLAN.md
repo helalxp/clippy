@@ -475,13 +475,13 @@ After the preflight passes, continue with the interactive sign-in, chat, rolling
 
 ### OAuth testing identity and production transition
 
-The Google Cloud OAuth project and Twitch Developer application currently configured for this feature are temporary **testing registrations**. The current names and support/contact information are not the final Clippy brand identity. The public Client IDs supplied to GitHub Actions for this phase are test IDs only. This is intentional and must remain explicit in release planning.
+The Google Cloud OAuth project and Twitch Developer application currently configured for this feature are temporary **testing registrations**. The current names and support/contact information are not the final Clippy brand identity. The current provider registrations are being used for development and friend testing. The build does not distinguish test and production Client IDs: RC and stable tags read the same two generic Actions Variables. Any final production registration/branding transition is deferred to the later production-cleanup phase.
 
 Before a public production release:
 1. Establish the final Clippy brand identity and brand-owned support/contact email.
 2. Create or configure separate production Google and Twitch application registrations, using the final app display name, support email, and required production callback/redirect settings for the actual implemented flows.
 3. Complete Google's production audience, consent-screen branding, homepage/privacy-policy/terms, scope classification, and any applicable verification steps. The homepage and privacy policy must be hosted on a verified domain controlled by the brand, and the privacy policy must accurately disclose access, use, storage, and sharing of YouTube user data.
-4. Replace the repository Actions Variables with the production public Client IDs only after the production registrations are ready and production configuration has been reviewed. Do not ship the test Client IDs in a public production build.
+4. During the later production-cleanup phase, update the existing generic Actions Variables to the final public Client IDs after registrations and branding are ready. No separate *_TEST or *_PRODUCTION variable sets are used in the current workflow.
 5. Keep client secrets out of the desktop app, packaged OAuth JSON, GitHub Actions Variables, frontend, and logs. The desktop OAuth clients are public clients; the current implementation uses PKCE for Google and Device Code Grant for Twitch.
 
 Google's current policy documentation says External apps in Testing are limited to 100 test users and authorizations for scopes beyond the basic profile/email subset expire after seven days. A production app is subject to applicable branding and scope verification before general distribution. The exact verification path depends on the final audience and scope classification. References: Google Cloud Help, "Manage App Audience", "Manage OAuth App Branding", and "Verification requirements".
@@ -534,18 +534,15 @@ No live provider authorization is performed by CI. The historical 404 cause rema
 
 
 
-### Release OAuth identity isolation — 2026-11-21
+### Shared OAuth Client ID configuration — 2026-11-21
 
-The final end-to-end release review found that one generic Actions Variable pair was used for both release candidates and stable tags. Since the currently registered provider applications are testing identities, that could have allowed a stable installer to ship the testing Client IDs.
+The user chose to keep one shared OAuth configuration for development, friend testing, release candidates, and stable builds. Separate test/production variable sets are intentionally deferred to the later production-cleanup phase.
 
-**Fix applied**
-- The tag-driven release workflow now selects the `*_TEST` variables for tags containing a hyphen (for example `v0.3.2-rc.1`) and the `*_PRODUCTION` variables for stable tags.
-- There is no fallback between profiles. If either public Client ID for the selected profile is empty or malformed, validation fails before Windows runtime packaging starts.
-- The selected values are passed as job outputs to the Windows payload build and its assembled-payload contract tests. The raw client IDs are not printed in workflow logs.
-- Pull-request Windows payload validation uses only the test Client ID pair. Local `.env` runtime variable names remain unchanged.
+**Current configuration**
+- GitHub Actions reads `CLIPPY_GOOGLE_OAUTH_CLIENT_ID` for both RC and stable tags. This value is required because the current live test path is Google sign-in and YouTube chat access.
+- GitHub Actions reads `CLIPPY_TWITCH_CLIENT_ID` for both RC and stable tags, but it is optional for this phase. When blank, the payload contains an empty Twitch ID, the connection status reports Twitch authorization unavailable, and the Twitch sign-in button remains disabled. It does not block Google sign-in or packaging.
+- A non-empty ID is still format-validated. Neither value is a client secret; no provider client secret is packaged.
+- Windows PR validation and tagged releases use the same generic variable names. There are no `*_TEST` or `*_PRODUCTION` variables in the current workflow.
+- Final brand ownership, production registration, consent-screen verification, and any eventual production-specific identity changes remain a separate cleanup milestone.
 
-Required repository Actions Variables:
-- Test: `CLIPPY_TWITCH_CLIENT_ID_TEST`, `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST`
-- Production: `CLIPPY_TWITCH_CLIENT_ID_PRODUCTION`, `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION`
-
-**Validation status:** the release workflow and PR/Windows workflow changes require fresh CI and Windows validation on the updated commit. No Actions Variable values have been configured through code. A stable release cannot proceed until the production pair is explicitly saved in repository settings.
+**Validation after this configuration change:** pending a fresh backend CI run, frontend CI run, and Windows desktop validation on the new commit. The preceding Windows validation passed its build and contract checks; CPU/CUDA runtime rebuild and first-run runtime smoke were skipped because no Python runtime inputs changed. The preceding frontend build passed; the backend CI job was still running at the time of this update. No live Google authorization, live YouTube chat, Twitch authorization, or stream capture has been completed by CI.
