@@ -24,6 +24,23 @@ jobs:
           PyJWT email-validator python-multipart
       - name: Run backend tests
         run: pytest tests/ -v
+      - name: Require Community Highlights public OAuth client IDs
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+        run: |
+          for name in CLIPPY_TWITCH_CLIENT_ID CLIPPY_GOOGLE_OAUTH_CLIENT_ID; do
+            value="${!name}"
+            if [ -z "$value" ]; then
+              echo "::error::Missing repository Actions Variable $name. Configure the public OAuth client ID before creating a release."
+              exit 1
+            fi
+            if [ "${#value}" -gt 512 ] || [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::Repository Actions Variable $name has an invalid value."
+              exit 1
+            fi
+          done
+          echo "Community Highlights public OAuth client IDs are configured."
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -179,6 +196,8 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
         run: ./desktop/build.ps1 -CreateUpdaterArtifacts
 
       # The payload contract tests must run after prepare-payload.ps1 has built
