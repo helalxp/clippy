@@ -127,3 +127,24 @@ async def test_google_refresh_accepts_distinct_project_audience_with_matching_au
 
     assert token == "new-access"
     assert store.saved["client_id"] == "google-client"
+
+
+@run_async
+async def test_google_refresh_rejects_non_object_provider_responses(monkeypatch):
+    import pytest
+    from community_highlights.token_manager import ProviderTokenError
+
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    store = FakeStore({
+        "client_id": "google-client",
+        "refresh_token": "existing-refresh",
+        "expires_at": 0,
+        "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
+    })
+    client = FakeClient([
+        (200, ["not", "an", "object"]),
+    ])
+
+    with pytest.raises(ProviderTokenError):
+        await ensure_access_token("youtube", store_factory=lambda: store, client=client)
+    assert store.saved is None
