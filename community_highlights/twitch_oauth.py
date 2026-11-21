@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
-from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
+from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting, provider_operation_generation
 
 TWITCH_DEVICE_URL = "https://id.twitch.tv/oauth2/device"
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
@@ -64,6 +64,7 @@ async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str
         raise TwitchOAuthError("Twitch sign-in is not configured in this Clippy build.")
     if provider_is_disconnecting("twitch"):
         raise TwitchOAuthError("Twitch is being disconnected. Try again shortly.")
+    start_generation = provider_operation_generation("twitch")
     WindowsCredentialStore()
 
     owned_client = client is None
@@ -96,8 +97,11 @@ async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str
     now = time.monotonic()
     flow_id = secrets.token_urlsafe(32)
     async with provider_credential_lock("twitch"):
-        if provider_is_disconnecting("twitch"):
-            raise TwitchOAuthError("Twitch is being disconnected. Try again shortly.")
+        if (
+            provider_is_disconnecting("twitch")
+            or provider_operation_generation("twitch") != start_generation
+        ):
+            raise TwitchOAuthError("Twitch sign-in was superseded by a disconnect.")
         async with _flow_lock:
             for key, flow in list(_flows.items()):
                 if flow["expires_at"] <= now or flow["status"] != "pending":
