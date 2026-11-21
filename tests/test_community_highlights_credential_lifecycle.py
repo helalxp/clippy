@@ -113,10 +113,11 @@ async def test_disconnect_waits_for_token_refresh_before_deleting_rotated_creden
 
 
 @run_async
-async def test_twitch_device_flow_cancelled_during_exchange_cannot_resurrect_credentials():
+async def test_disconnect_waits_for_inflight_twitch_device_exchange_then_removes_saved_tokens():
     flow_id = "race-twitch-flow-012345678901234567890123456789"
     store = MemoryStore()
-    validation_finished = asyncio.Event()
+    validation_started = asyncio.Event()
+    allow_validation = asyncio.Event()
 
     class OAuthClient:
         async def post(self, _url, data):
@@ -128,7 +129,8 @@ async def test_twitch_device_flow_cancelled_during_exchange_cannot_resurrect_cre
             })
 
         async def get(self, _url, headers=None):
-            validation_finished.set()
+            validation_started.set()
+            await allow_validation.wait()
             return Response({
                 "client_id": "twitch-client",
                 "scopes": ["chat:read"],
@@ -145,29 +147,43 @@ async def test_twitch_device_flow_cancelled_during_exchange_cannot_resurrect_cre
         "status": "pending",
         "message": "Waiting",
     }
-
-    async with provider_disconnect_lock("twitch"):
-        polling = asyncio.create_task(
-            twitch_oauth.poll_twitch_flow(
-                flow_id,
-                client=OAuthClient(),
-                store_factory=lambda: store,
-            )
+    polling = asyncio.create_task(
+        twitch_oauth.poll_twitch_flow(
+            flow_id,
+            client=OAuthClient(),
+            store_factory=lambda: store,
         )
-        await validation_finished.wait()
-        assert await twitch_oauth.cancel_all_twitch_flows() == 1
+    )
+    await validation_started.wait()
 
+    disconnect_entered = asyncio.Event()
+
+    async def disconnect():
+        async with provider_disconnect_lock("twitch"):
+            disconnect_entered.set()
+            assert await twitch_oauth.cancel_all_twitch_flows() == 1
+            store.delete("twitch")
+
+    disconnect_task = asyncio.create_task(disconnect())
+    await asyncio.sleep(0)
+    assert not disconnect_entered.is_set()
+
+    allow_validation.set()
     result = await polling
-    assert result["status"] == "cancelled"
-    assert store.saved is None
+    await disconnect_task
+
+    assert result["status"] == "connected"
+    assert store.saved["refresh_token"] == "new-refresh"
     assert store.bundle is None
+    assert flow_id not in twitch_oauth._flows
 
 
 @run_async
-async def test_google_loopback_callback_cancelled_during_exchange_cannot_save_credentials(monkeypatch):
+async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_tokens(monkeypatch):
     flow_id = "race-google-flow-012345678901234567890123456789"
     store = MemoryStore()
-    tokeninfo_finished = asyncio.Event()
+    tokeninfo_started = asyncio.Event()
+    allow_tokeninfo = asyncio.Event()
 
     class OAuthClient:
         async def __aenter__(self):
@@ -185,7 +201,8 @@ async def test_google_loopback_callback_cancelled_during_exchange_cannot_save_cr
             })
 
         async def get(self, _url, params=None):
-            tokeninfo_finished.set()
+            tokeninfo_started.set()
+            await allow_tokeninfo.wait()
             return Response({
                 "aud": "another-client-in-same-project",
                 "azp": "google-client",
@@ -210,20 +227,34 @@ async def test_google_loopback_callback_cancelled_during_exchange_cannot_save_cr
     }
     google_oauth._GOOGLE_FLOWS[flow_id] = flow
 
-    async with provider_disconnect_lock("youtube"):
-        callback = asyncio.create_task(
-            google_oauth._complete_google_callback(
-                flow_id,
-                {"state": ["expected-state"], "code": ["authorization-code"]},
-            )
+    callback = asyncio.create_task(
+        google_oauth._complete_google_callback(
+            flow_id,
+            {"state": ["expected-state"], "code": ["authorization-code"]},
         )
-        await tokeninfo_finished.wait()
-        assert await google_oauth.cancel_all_google_flows() == 1
+    )
+    await tokeninfo_started.wait()
 
+    disconnect_entered = asyncio.Event()
+
+    async def disconnect():
+        async with provider_disconnect_lock("youtube"):
+            disconnect_entered.set()
+            assert await google_oauth.cancel_all_google_flows() == 1
+            store.delete("youtube")
+
+    disconnect_task = asyncio.create_task(disconnect())
+    await asyncio.sleep(0)
+    assert not disconnect_entered.is_set()
+
+    allow_tokeninfo.set()
     await callback
+    await disconnect_task
+
     assert flow["status"] == "cancelled"
-    assert store.saved is None
+    assert store.saved["refresh_token"] == "google-refresh"
     assert store.bundle is None
+    assert flow_id not in google_oauth._GOOGLE_FLOWS
 
 
 @run_async
