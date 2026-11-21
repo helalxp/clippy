@@ -29,6 +29,7 @@ from .twitch_oauth import (
     start_twitch_flow,
     twitch_authorization_available,
 )
+from .revocation import revoke_google_credentials, revoke_twitch_credentials
 
 router = APIRouter()
 
@@ -112,13 +113,56 @@ async def stop_twitch_authorization(flow_id: str):
     return {"cancelled": True}
 
 
-@router.delete("/api/community-highlights/connections/twitch")
-async def disconnect_twitch():
+async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
+    """Stop chat, revoke provider credentials when possible, then clear local storage."""
+    await chat_sessions.begin_provider_disconnect(provider)
     try:
-        WindowsCredentialStore().delete("twitch")
+        store = WindowsCredentialStore()
+        bundle = store.load(provider)
+        if not bundle:
+            revocation_status = "not_connected"
+            message = "No saved provider credentials were present."
+        else:
+            try:
+                confirmed = await revoker(bundle)
+            except Exception:
+                # Local disconnect must remain possible during provider outages.
+                # Provider request details may contain credentials and are not
+                # returned to the frontend or written to logs.
+                confirmed = False
+            revocation_status = "revoked" if confirmed else "not_confirmed"
+            if provider == "youtube":
+                message = (
+                    "Google confirmed token revocation. Google may invalidate other OAuth clients "
+                    "registered in the same Cloud project."
+                    if confirmed else
+                    "Clippy removed its saved Google credentials, but Google did not confirm revocation. "
+                    "Review third-party access in your Google Account."
+                )
+            else:
+                message = (
+                    "Twitch accepted revocation of the saved access token."
+                    if confirmed else
+                    "Clippy removed its saved Twitch credentials, but Twitch did not confirm access-token "
+                    "revocation. Review your app under Twitch Settings > Connections."
+                )
+        # Remove local credentials even when remote revocation cannot be
+        # confirmed. The response distinguishes this local-only disconnect.
+        store.delete(provider)
+        return {
+            "connected": False,
+            "revocation_status": revocation_status,
+            "message": message,
+        }
     except CredentialStoreError as error:
         raise HTTPException(status_code=503, detail=str(error)) from None
-    return {"connected": False}
+    finally:
+        await chat_sessions.end_provider_disconnect(provider)
+
+
+@router.delete("/api/community-highlights/connections/twitch")
+async def disconnect_twitch():
+    return await _disconnect_provider("twitch", revoke_twitch_credentials)
 
 
 
@@ -150,11 +194,7 @@ async def stop_google_authorization(flow_id: str):
 
 @router.delete("/api/community-highlights/connections/youtube")
 async def disconnect_youtube():
-    try:
-        WindowsCredentialStore().delete("youtube")
-    except CredentialStoreError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from None
-    return {"connected": False}
+    return await _disconnect_provider("youtube", revoke_google_credentials)
 
 
 
