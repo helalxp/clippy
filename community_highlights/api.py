@@ -18,6 +18,7 @@ from .credentials import CredentialStoreError, WindowsCredentialStore
 from .google_oauth import (
     GoogleOAuthError,
     cancel_google_flow,
+    cancel_all_google_flows,
     google_authorization_available,
     google_flow_status,
     start_google_flow,
@@ -25,11 +26,13 @@ from .google_oauth import (
 from .twitch_oauth import (
     TwitchOAuthError,
     cancel_twitch_flow,
+    cancel_all_twitch_flows,
     poll_twitch_flow,
     start_twitch_flow,
     twitch_authorization_available,
 )
 from .revocation import revoke_google_credentials, revoke_twitch_credentials
+from .credential_lifecycle import provider_disconnect_lock
 
 router = APIRouter()
 
@@ -114,46 +117,57 @@ async def stop_twitch_authorization(flow_id: str):
 
 
 async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
-    """Stop chat, revoke provider credentials when possible, then clear local storage."""
+    """Stop chat and atomically revoke/delete credentials relative to token writes."""
     await chat_sessions.begin_provider_disconnect(provider)
     try:
-        store = WindowsCredentialStore()
-        bundle = store.load(provider)
-        if not bundle:
-            revocation_status = "not_connected"
-            message = "No saved provider credentials were present."
-        else:
-            try:
-                confirmed = await revoker(bundle)
-            except Exception:
-                # Local disconnect must remain possible during provider outages.
-                # Provider request details may contain credentials and are not
-                # returned to the frontend or written to logs.
-                confirmed = False
-            revocation_status = "revoked" if confirmed else "not_confirmed"
-            if provider == "youtube":
-                message = (
-                    "Google confirmed token revocation. Google may invalidate other OAuth clients "
-                    "registered in the same Cloud project."
-                    if confirmed else
-                    "Clippy removed its saved Google credentials, but Google did not confirm revocation. "
-                    "Review third-party access in your Google Account."
-                )
+        # Refresh, initial OAuth token exchange, and disconnect all share this
+        # provider-specific lock. An in-flight token write completes before
+        # revocation, or is rejected after its flow has been cancelled.
+        async with provider_disconnect_lock(provider):
+            if provider == "twitch":
+                await cancel_all_twitch_flows()
             else:
-                message = (
-                    "Twitch accepted revocation of the saved access token."
-                    if confirmed else
-                    "Clippy removed its saved Twitch credentials, but Twitch did not confirm access-token "
-                    "revocation. Review your app under Twitch Settings > Connections."
-                )
-        # Remove local credentials even when remote revocation cannot be
-        # confirmed. The response distinguishes this local-only disconnect.
-        store.delete(provider)
-        return {
-            "connected": False,
-            "revocation_status": revocation_status,
-            "message": message,
-        }
+                await cancel_all_google_flows()
+
+            store = WindowsCredentialStore()
+            bundle = store.load(provider)
+            if not bundle:
+                revocation_status = "not_connected"
+                message = "No saved provider credentials were present."
+            else:
+                try:
+                    confirmed = await revoker(bundle)
+                except Exception:
+                    # Local disconnect must remain possible during provider outages.
+                    # Provider request details may contain credentials and are not
+                    # returned to the frontend or written to logs.
+                    confirmed = False
+                revocation_status = "revoked" if confirmed else "not_confirmed"
+                if provider == "youtube":
+                    message = (
+                        "Google confirmed token revocation. Google may invalidate other OAuth clients "
+                        "registered in the same Cloud project."
+                        if confirmed else
+                        "Clippy removed its saved Google credentials, but Google did not confirm revocation. "
+                        "Review third-party access in your Google Account."
+                    )
+                else:
+                    message = (
+                        "Twitch accepted revocation of the saved access token."
+                        if confirmed else
+                        "Clippy removed its saved Twitch credentials, but Twitch did not confirm access-token "
+                        "revocation. Review your app under Twitch Settings > Connections."
+                    )
+            # Remove local credentials even when remote revocation cannot be
+            # confirmed. No refresh or OAuth callback can restore them after
+            # the shared lock is released because all outstanding flows were
+            # cancelled while holding the same lock.
+            store.delete(provider)
+            return {
+                "connected": False,
+                "revocation_status": revocation_status,
+                "message": message,
+            }
     except CredentialStoreError as error:
         raise HTTPException(status_code=503, detail=str(error)) from None
     finally:
