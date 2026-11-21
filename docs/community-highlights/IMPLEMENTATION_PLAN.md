@@ -15,6 +15,12 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 - [x] Persist compatible Windows paths for newly selected data directories, normalize legacy Win32 extended-prefix drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
 - [ ] Configure the repository Actions Variables `CLIPPY_TWITCH_CLIENT_ID` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID`. These are public client identifiers, not secrets. The release workflow now requires them; they are not set by code changes.
 
+### OAuth application identity and environment separation
+- [x] Record that the current Google OAuth project and Twitch developer application are temporary testing registrations. Their current display names, support/contact details, and client IDs are not the final Clippy production identity.
+- [ ] Before public production release, create or configure production OAuth registrations under the final Clippy brand and brand-owned support email. Replace the GitHub Actions Variables with the production public Client IDs only after the production registrations are ready. Never put client secrets in the desktop payload or Actions Variables.
+- [ ] Keep development/testing and production OAuth projects/apps separate where provider policy and app configuration support it. Do not silently switch the existing test IDs to production IDs mid-test.
+- [ ] For Google production readiness, confirm the app audience/publishing status, test-user restrictions, consent-screen branding, verified homepage/privacy-policy/terms links on a domain controlled by the Clippy brand, requested-scope classification, and any required brand/scope verification. Google documents that External apps in Testing are limited to 100 test users and authorizations for non-basic scopes expire after seven days; production publication and verification requirements depend on the requested scopes and branding. See the Google OAuth production checklist in the work log below.
+
 ### Remaining audit work
 - [ ] Diagnose the reported Community Highlights `404 not found` responses using the exact failing request path and response body. The router is registered in the app and its package is included; the current source audit cannot identify which request returned 404. Add FastAPI route-level HTTP tests for connection status, OAuth start/status/cancel, and desktop-token authorization. Add targeted, secret-safe diagnostics because Uvicorn access logging is currently disabled in the supervised backend.
 - [ ] Fix approved-candidate queue exhaustion. The in-memory queue is capped at 20, but approved candidates are not pruned and there is no explicit delete operation. Add user-controlled deletion that removes candidate metadata and media together; never silently delete approved work.
@@ -458,6 +464,20 @@ After the preflight passes, continue with the interactive sign-in, chat, rolling
 - Updated the clean runtime smoke fixture to reproduce a legacy extended path and added focused Pester and Rust tests, including a Windows test that passes the exact Rust-persisted path to Windows PowerShell `Join-Path`.
 - Narrowed Windows runtime-package change detection to actual Python runtime inputs. For payload, PowerShell, or Rust-only changes, the Windows validation job still runs, but the CPU/CUDA Python runtime packages and full runtime smoke download are skipped.
 
-**Validation status:** the final focused PR CI and Windows validation pass is pending. No CUDA or CPU Python runtime archive build is expected for this batch because no Python runtime inputs or requirements changed.
+**Validation status:** frontend CI passed. The Windows workflow passed dashboard build, PowerShell script parsing, payload preparation, all 31 Pester tests, Python syntax, and Rust check. CPU/CUDA runtime builds and clean runtime download smoke were correctly skipped because no Python runtime inputs changed. The Rust unit-test step initially failed one new Windows path regression assertion: it compared the PowerShell result to the unnormalized original path, while the saved path is intentionally `dunce::canonicalize`-normalized. The implementation path and Pester tests passed; the test expectation has now been corrected to compare against the same normalized path. One final CI/Windows validation run is required to verify that correction.
 
 **Explicitly not addressed in this batch:** API 404 diagnosis/route-level tests, candidate queue deletion/capacity, restart persistence, live capture reconnect and continuity, timeline drift validation, overlapping-trigger merge, M4 preview/trim/renderer handoff, and M5 hardening. These remain in the audit register above and are not being marked complete.
+
+
+### OAuth testing identity and production transition
+
+The Google Cloud OAuth project and Twitch Developer application currently configured for this feature are temporary **testing registrations**. The current names and support/contact information are not the final Clippy brand identity. The public Client IDs supplied to GitHub Actions for this phase are test IDs only. This is intentional and must remain explicit in release planning.
+
+Before a public production release:
+1. Establish the final Clippy brand identity and brand-owned support/contact email.
+2. Create or configure separate production Google and Twitch application registrations, using the final app display name, support email, and required production callback/redirect settings for the actual implemented flows.
+3. Complete Google's production audience, consent-screen branding, homepage/privacy-policy/terms, scope classification, and any applicable verification steps. The homepage and privacy policy must be hosted on a verified domain controlled by the brand, and the privacy policy must accurately disclose access, use, storage, and sharing of YouTube user data.
+4. Replace the repository Actions Variables with the production public Client IDs only after the production registrations are ready and production configuration has been reviewed. Do not ship the test Client IDs in a public production build.
+5. Keep client secrets out of the desktop app, packaged OAuth JSON, GitHub Actions Variables, frontend, and logs. The desktop OAuth clients are public clients; the current implementation uses PKCE for Google and Device Code Grant for Twitch.
+
+Google's current policy documentation says External apps in Testing are limited to 100 test users and authorizations for scopes beyond the basic profile/email subset expire after seven days. A production app is subject to applicable branding and scope verification before general distribution. The exact verification path depends on the final audience and scope classification. References: Google Cloud Help, "Manage App Audience", "Manage OAuth App Branding", and "Verification requirements".
