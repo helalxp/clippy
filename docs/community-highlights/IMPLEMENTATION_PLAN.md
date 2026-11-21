@@ -13,12 +13,13 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
 - [x] Persist compatible Windows paths for newly selected data directories, normalize legacy Win32 extended-prefix drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
-- [ ] Configure the repository Actions Variables `CLIPPY_TWITCH_CLIENT_ID` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID`. These are public client identifiers, not secrets. The release workflow now requires them; they are not set by code changes.
+- [ ] Configure the repository Actions Variables `CLIPPY_TWITCH_CLIENT_ID_TEST` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST` for prereleases, and `CLIPPY_TWITCH_CLIENT_ID_PRODUCTION` and `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION` for stable releases. These are public client identifiers, not secrets. The release workflow selects the pair by tag type and fails closed if the matching pair is absent; it never falls back from stable production to test IDs.
 
 ### OAuth application identity and environment separation
 - [x] Record that the current Google OAuth project and Twitch developer application are temporary testing registrations. Their current display names, support/contact details, and client IDs are not the final Clippy production identity.
-- [ ] Before public production release, create or configure production OAuth registrations under the final Clippy brand and brand-owned support email. Replace the GitHub Actions Variables with the production public Client IDs only after the production registrations are ready. Never put client secrets in the desktop payload or Actions Variables.
+- [ ] Before public production release, create or configure production OAuth registrations under the final Clippy brand and brand-owned support email. Populate only the `_PRODUCTION` Actions Variables with those production public Client IDs after review. Keep the current test registrations exclusively in the `_TEST` Variables. Never put client secrets in the desktop payload or Actions Variables.
 - [ ] Keep development/testing and production OAuth projects/apps separate where provider policy and app configuration support it. Do not silently switch the existing test IDs to production IDs mid-test.
+- [x] Separate release OAuth identities by tag type: prerelease tags (containing a hyphen, such as v0.3.2-rc.1) consume only `_TEST` Actions Variables; stable tags consume only `_PRODUCTION` Actions Variables. Missing or malformed values fail the release validation before runtime builds. Windows PR validation consumes only the `_TEST` pair.
 - [ ] For Google production readiness, confirm the app audience/publishing status, test-user restrictions, consent-screen branding, verified homepage/privacy-policy/terms links on a domain controlled by the Clippy brand, requested-scope classification, and any required brand/scope verification. Google documents that External apps in Testing are limited to 100 test users and authorizations for non-basic scopes expire after seven days; production publication and verification requirements depend on the requested scopes and branding. See the Google OAuth production checklist in the work log below.
 
 ### Remaining audit work
@@ -531,3 +532,20 @@ No live provider authorization is performed by CI. The historical 404 cause rema
 - Twitch Device Code Grant and public-client refresh behavior: https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/
 - Browser popup and `noopener` return semantics: https://developer.mozilla.org/en-US/docs/Web/API/Window/open
 
+
+
+### Release OAuth identity isolation — 2026-11-21
+
+The final end-to-end release review found that one generic Actions Variable pair was used for both release candidates and stable tags. Since the currently registered provider applications are testing identities, that could have allowed a stable installer to ship the testing Client IDs.
+
+**Fix applied**
+- The tag-driven release workflow now selects the `*_TEST` variables for tags containing a hyphen (for example `v0.3.2-rc.1`) and the `*_PRODUCTION` variables for stable tags.
+- There is no fallback between profiles. If either public Client ID for the selected profile is empty or malformed, validation fails before Windows runtime packaging starts.
+- The selected values are passed as job outputs to the Windows payload build and its assembled-payload contract tests. The raw client IDs are not printed in workflow logs.
+- Pull-request Windows payload validation uses only the test Client ID pair. Local `.env` runtime variable names remain unchanged.
+
+Required repository Actions Variables:
+- Test: `CLIPPY_TWITCH_CLIENT_ID_TEST`, `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST`
+- Production: `CLIPPY_TWITCH_CLIENT_ID_PRODUCTION`, `CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION`
+
+**Validation status:** the release workflow and PR/Windows workflow changes require fresh CI and Windows validation on the updated commit. No Actions Variable values have been configured through code. A stable release cannot proceed until the production pair is explicitly saved in repository settings.
