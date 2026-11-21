@@ -77,6 +77,8 @@ async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str
         if response.status_code >= 400:
             raise TwitchOAuthError("Twitch could not start authorization. Please try again.")
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise TwitchOAuthError("Twitch returned an invalid authorization response.")
     except (httpx.HTTPError, ValueError):
         raise TwitchOAuthError("Could not reach Twitch. Check your connection and try again.") from None
     finally:
@@ -173,6 +175,8 @@ async def poll_twitch_flow(
                     },
                 )
                 payload = response.json()
+                if not isinstance(payload, dict):
+                    return _finish(flow_id, "error", "Twitch returned an invalid authorization response.")
             except (httpx.HTTPError, ValueError):
                 return {"status": "pending", "message": "Can't reach Twitch right now. Retrying shortly."}
 
@@ -205,6 +209,8 @@ async def poll_twitch_flow(
                 )
                 validation.raise_for_status()
                 identity = validation.json()
+                if not isinstance(identity, dict) or not isinstance(identity.get("scopes"), list):
+                    raise TwitchOAuthError("Twitch returned invalid token validation details.")
                 scopes = set(identity.get("scopes") or [])
                 if identity.get("client_id") != client_id or not set(TWITCH_SCOPES).issubset(scopes):
                     raise TwitchOAuthError("Twitch authorization did not grant the required chat permission.")
