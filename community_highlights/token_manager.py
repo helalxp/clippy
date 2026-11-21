@@ -8,6 +8,7 @@ import time
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
+from .google_oauth import google_token_info_matches_client
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
@@ -153,8 +154,8 @@ async def _ensure_access_token_locked(
             info.raise_for_status()
             token_info = info.json()
             scopes = set((token_info.get("scope") or "").split())
-            if token_info.get("aud") and token_info["aud"] != client_id:
-                raise ProviderTokenError("Google returned a token for a different application.")
+            if not google_token_info_matches_client(token_info, client_id):
+                raise ProviderTokenError("Google returned a token for an unexpected OAuth client.")
             if YOUTUBE_SCOPE not in scopes:
                 raise ProviderTokenError("The refreshed Google token is missing YouTube read access.")
             updated = {
