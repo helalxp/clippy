@@ -26,8 +26,7 @@ pub fn configured_data_directory(install_root: &Path) -> Result<PathBuf, String>
         let default = install_root.join("data");
         if default.exists() {
             reject_link(&default)?;
-            return default
-                .canonicalize()
+            return dunce::canonicalize(&default)
                 .map_err(|error| format!("Cannot resolve Clippy data directory: {error}"));
         }
         return Ok(default);
@@ -51,7 +50,7 @@ pub fn configured_data_directory(install_root: &Path) -> Result<PathBuf, String>
             path.display()
         ));
     }
-    path.canonicalize()
+    dunce::canonicalize(&path)
         .map_err(|error| format!("Cannot resolve configured Clippy data directory: {error}"))
 }
 
@@ -60,8 +59,9 @@ pub fn write_config(install_root: &Path, data_directory: &Path) -> Result<(), St
         return Err("The new Clippy data directory must be an existing absolute folder.".into());
     }
     reject_link(data_directory)?;
-    let canonical = data_directory
-        .canonicalize()
+    // PowerShell's FileSystem provider does not reliably accept Win32 verbatim
+    // paths (\\?\C:\...). Persist a normal drive/UNC path instead.
+    let canonical = dunce::canonicalize(data_directory)
         .map_err(|error| format!("Cannot resolve the new Clippy data directory: {error}"))?;
     fs::create_dir_all(install_root)
         .map_err(|error| format!("Cannot create Clippy installation directory: {error}"))?;
@@ -564,6 +564,49 @@ mod tests {
             configured_data_directory(&root).unwrap(),
             destination.canonicalize().unwrap()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn writes_a_data_path_that_windows_powershell_can_join() {
+        use std::process::Command;
+
+        let root = temp_root();
+        let destination = root.join("external-data");
+        fs::create_dir_all(&destination).unwrap();
+
+        // Force the same canonical-path serialization used by the data-move
+        // flow, then verify the exact persisted value with Windows PowerShell.
+        write_config(&root, &destination.canonicalize().unwrap()).unwrap();
+        let raw = fs::read_to_string(config_path(&root)).unwrap();
+        let saved: StorageLocationConfig = serde_json::from_str(&raw).unwrap();
+        assert!(
+            !saved.data_directory.starts_with(r"\\?\\"),
+            "storage-location.json must not contain a verbatim Win32 prefix: {}",
+            saved.data_directory
+        );
+
+        let output = Command::new("powershell.exe")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Join-Path -Path $env:CLIPPY_TEST_DATA_ROOT -ChildPath 'output'",
+            ])
+            .env("CLIPPY_TEST_DATA_ROOT", &saved.data_directory)
+            .output()
+            .expect("Windows PowerShell must be available on Windows");
+        assert!(
+            output.status.success(),
+            "PowerShell Join-Path rejected the persisted data directory: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let joined = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let expected = destination.join("output").to_string_lossy().to_string();
+        assert_eq!(joined.to_ascii_lowercase(), expected.to_ascii_lowercase());
+
         fs::remove_dir_all(root).unwrap();
     }
 }
