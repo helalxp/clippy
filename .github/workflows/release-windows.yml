@@ -204,6 +204,9 @@ jobs:
       # the exact ZIP embedded in the installer, not against source files alone.
       - name: Run PowerShell runtime and assembled-payload contract tests
         shell: pwsh
+        env:
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
