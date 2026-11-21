@@ -286,6 +286,27 @@ async def get_highlight_candidate(candidate_id: str):
     return candidate[0]
 
 
+@router.delete("/api/community-highlights/candidates/{candidate_id}")
+async def delete_highlight_candidate(candidate_id: str):
+    try:
+        deleted = capture_sessions.delete_candidate(candidate_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except OSError:
+        raise HTTPException(
+            status_code=409,
+            detail="The highlight file could not be deleted. Close any app using it and try again.",
+        ) from None
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="The highlight file failed its storage safety check.",
+        ) from None
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Highlight candidate not found.")
+    return {"deleted": True}
+
+
 @router.get("/api/community-highlights/candidates/{candidate_id}/file")
 async def download_highlight_candidate(candidate_id: str):
     candidate = capture_sessions.get_candidate(candidate_id)
