@@ -229,42 +229,51 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
         return
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
-            response = await client.post(
-                GOOGLE_TOKEN_URL,
-                data={
-                    "client_id": flow["client_id"],
-                    "code": code,
-                    "code_verifier": flow["verifier"],
-                    "grant_type": "authorization_code",
-                    "redirect_uri": flow["redirect_uri"],
-                },
-            )
-            response.raise_for_status()
-            tokens = response.json()
-            access_token = tokens.get("access_token")
-            if not isinstance(access_token, str) or not access_token:
-                raise GoogleOAuthError("Google did not return an access token.")
-
-            info_response = await client.get(
-                GOOGLE_TOKEN_INFO_URL,
-                params={"access_token": access_token},
-            )
-            info_response.raise_for_status()
-            token_info = info_response.json()
-
-        scopes = set((token_info.get("scope") or "").split())
-        if not google_token_info_matches_client(token_info, flow["client_id"]):
-            raise GoogleOAuthError("Google returned a token for an unexpected OAuth client.")
-        if GOOGLE_SCOPE not in scopes:
-            raise GoogleOAuthError("Google did not grant the required read-only YouTube permission.")
-
+        # Serialize the full authorization-code exchange with Disconnect. If
+        # this exchange wins the lock, its new refresh token is stored before
+        # disconnect revokes it. If Disconnect wins, it removes this flow and
+        # the callback exits before contacting Google's token endpoint.
         async with provider_credential_lock("youtube"):
+            if provider_is_disconnecting("youtube"):
+                return
             async with _GOOGLE_LOCK:
                 current = _GOOGLE_FLOWS.get(flow_id)
                 if current is not flow or current.get("status") != "pending":
                     return
-                if provider_is_disconnecting("youtube"):
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
+                response = await client.post(
+                    GOOGLE_TOKEN_URL,
+                    data={
+                        "client_id": flow["client_id"],
+                        "code": code,
+                        "code_verifier": flow["verifier"],
+                        "grant_type": "authorization_code",
+                        "redirect_uri": flow["redirect_uri"],
+                    },
+                )
+                response.raise_for_status()
+                tokens = response.json()
+                access_token = tokens.get("access_token")
+                if not isinstance(access_token, str) or not access_token:
+                    raise GoogleOAuthError("Google did not return an access token.")
+
+                info_response = await client.get(
+                    GOOGLE_TOKEN_INFO_URL,
+                    params={"access_token": access_token},
+                )
+                info_response.raise_for_status()
+                token_info = info_response.json()
+
+            scopes = set((token_info.get("scope") or "").split())
+            if not google_token_info_matches_client(token_info, flow["client_id"]):
+                raise GoogleOAuthError("Google returned a token for an unexpected OAuth client.")
+            if GOOGLE_SCOPE not in scopes:
+                raise GoogleOAuthError("Google did not grant the required read-only YouTube permission.")
+
+            async with _GOOGLE_LOCK:
+                current = _GOOGLE_FLOWS.get(flow_id)
+                if current is not flow or current.get("status") != "pending":
                     return
                 store = flow["store_factory"]()
                 previous = store.load("youtube") or {}
