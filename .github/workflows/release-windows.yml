@@ -12,7 +12,6 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     outputs:
-      oauth_profile: ${{ steps.oauth.outputs.profile }}
       twitch_client_id: ${{ steps.oauth.outputs.twitch_client_id }}
       google_client_id: ${{ steps.oauth.outputs.google_client_id }}
     steps:
@@ -28,48 +27,37 @@ jobs:
           PyJWT email-validator python-multipart
       - name: Run backend tests
         run: pytest tests/ -v
-      - name: Select and require release OAuth identity
+      - name: Validate shared Community Highlights OAuth client IDs
         id: oauth
         env:
-          CLIPPY_TWITCH_CLIENT_ID_TEST: ${{ vars.CLIPPY_TWITCH_CLIENT_ID_TEST }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST }}
-          CLIPPY_TWITCH_CLIENT_ID_PRODUCTION: ${{ vars.CLIPPY_TWITCH_CLIENT_ID_PRODUCTION }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION }}
+          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
         run: |
           set -euo pipefail
 
-          # Prerelease tags (for example v0.3.2-rc.1) use dedicated test
-          # registrations. Stable tags use production registrations. There is
-          # intentionally no fallback between profiles.
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            profile="test"
-            twitch="$CLIPPY_TWITCH_CLIENT_ID_TEST"
-            google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST"
-            prefix="CLIPPY_*_CLIENT_ID_TEST"
-          else
-            profile="production"
-            twitch="$CLIPPY_TWITCH_CLIENT_ID_PRODUCTION"
-            google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION"
-            prefix="CLIPPY_*_CLIENT_ID_PRODUCTION"
+          # Google is required for the current YouTube test path. Twitch remains
+          # optional until its application registration is ready; an empty ID
+          # disables Twitch sign-in in the packaged application.
+          google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID"
+          twitch="$CLIPPY_TWITCH_CLIENT_ID"
+
+          if [ -z "$google" ]; then
+            echo "::error::Missing Google OAuth Client ID. Configure CLIPPY_GOOGLE_OAUTH_CLIENT_ID before tagging this release."
+            exit 1
           fi
 
-          for entry in "Twitch:$twitch" "Google:$google"; do
+          for entry in "Google:$google" "Twitch:$twitch"; do
             name="${entry%%:*}"
             value="${entry#*:}"
-            if [ -z "$value" ]; then
-              echo "::error::Missing $name OAuth Client ID for the $profile release profile. Configure $prefix before tagging this release."
-              exit 1
-            fi
-            if [ "${#value}" -gt 512 ] || [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              echo "::error::$name OAuth Client ID for the $profile release profile has an invalid value."
+            if [ -n "$value" ] && { [ "${#value}" -gt 512 ] || [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ ]]; }; then
+              echo "::error::$name OAuth Client ID has an invalid value."
               exit 1
             fi
           done
 
-          echo "profile=$profile" >> "$GITHUB_OUTPUT"
           echo "twitch_client_id=$twitch" >> "$GITHUB_OUTPUT"
           echo "google_client_id=$google" >> "$GITHUB_OUTPUT"
-          echo "Community Highlights OAuth profile selected: $profile"
+          echo "Community Highlights OAuth configuration validated (Twitch configured: $([ -n "$twitch" ] && echo yes || echo no))."
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
