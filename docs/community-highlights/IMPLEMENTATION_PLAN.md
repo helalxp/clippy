@@ -22,8 +22,10 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 - [ ] For Google production readiness, confirm the app audience/publishing status, test-user restrictions, consent-screen branding, verified homepage/privacy-policy/terms links on a domain controlled by the Clippy brand, requested-scope classification, and any required brand/scope verification. Google documents that External apps in Testing are limited to 100 test users and authorizations for non-basic scopes expire after seven days; production publication and verification requirements depend on the requested scopes and branding. See the Google OAuth production checklist in the work log below.
 
 ### Remaining audit work
-- [ ] Diagnose the reported Community Highlights `404 not found` responses using the exact failing request path and response body. The router is registered in the app and its package is included; the current source audit cannot identify which request returned 404. Add FastAPI route-level HTTP tests for connection status, OAuth start/status/cancel, and desktop-token authorization. Add targeted, secret-safe diagnostics because Uvicorn access logging is currently disabled in the supervised backend.
-- [ ] Fix approved-candidate queue exhaustion. The in-memory queue is capped at 20, but approved candidates are not pruned and there is no explicit delete operation. Add user-controlled deletion that removes candidate metadata and media together; never silently delete approved work.
+- [ ] Identify the historical Community Highlights `404 not found` on the user's installed RC. The original failing request trace was not available, so the precise cause is not yet established.
+- [x] Add HTTP-level tests against the actual FastAPI app for connection status, Twitch/Google OAuth start/status/cancel, desktop-session-token enforcement, known-flow 404s, and unknown-route 404s.
+- [x] Add targeted backend diagnostics for failed Community Highlights requests. Logs record method, matched route template (or redacted unmatched path), and status only; they omit request bodies, query strings, opaque flow/candidate IDs, and authorization headers.
+- [x] Fix approved-candidate queue exhaustion with an explicit candidate DELETE API and dashboard control. Delete removes the candidate's local media before its metadata, refuses in-progress workers, validates the generated path remains under the capture root, and preserves metadata if Windows refuses to unlink a locked file. No candidate status is silently pruned when the queue reaches its cap.
 - [ ] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Mark interrupted captures explicitly on startup. Keep provider tokens in Windows Credential Manager, not SQLite.
 - [ ] Complete provider/capture lifecycle verification: mocked provider lifecycle/reconnect tests are incomplete; run authorized Twitch/YouTube chat and Streamlink/FFmpeg capture checks on Windows; verify audio/video continuity, timestamps, disconnect handling, and graceful shutdown. Chat reconnect exists, but capture-worker recovery is not yet proven or implemented as a bounded reconnect path.
 - [ ] Validate trigger-to-media timeline drift against real captured segments. Current wall-time alignment estimates segment intervals from filesystem modification time and FFmpeg duration; it is not frame-accurate proof.
@@ -481,3 +483,17 @@ Before a public production release:
 5. Keep client secrets out of the desktop app, packaged OAuth JSON, GitHub Actions Variables, frontend, and logs. The desktop OAuth clients are public clients; the current implementation uses PKCE for Google and Device Code Grant for Twitch.
 
 Google's current policy documentation says External apps in Testing are limited to 100 test users and authorizations for scopes beyond the basic profile/email subset expire after seven days. A production app is subject to applicable branding and scope verification before general distribution. The exact verification path depends on the final audience and scope classification. References: Google Cloud Help, "Manage App Audience", "Manage OAuth App Branding", and "Verification requirements".
+
+
+### Focused repair batch 2 — API 404 observability and candidate queue deletion — 2026-11-21
+
+**Changes made**
+- Added FastAPI HTTP-level tests against the real application object rather than testing only the connection-status helper. The tests exercise the exact connection endpoint, both providers' OAuth start/status/cancel routes, desktop-session-token enforcement, a known flow returning 404, and an unmatched route returning 404.
+- Added a narrowly scoped backend warning for failed /api/community-highlights requests. It records HTTP method, matched route template (or an unmatched path with opaque IDs redacted), and response status. It deliberately excludes query strings, request bodies, headers, flow IDs, candidate IDs, and tokens.
+- Added DELETE /api/community-highlights/candidates/{candidate_id} and a Delete action in the candidate list. Deletion is explicit and confirmed in the UI.
+- Candidate deletion refuses to run while its extraction worker is active. It re-derives and checks the expected file path under the configured capture root before unlinking; if the file is locked or cannot be removed, candidate metadata remains so the user can retry.
+- Removed automatic pruning of terminal candidate metadata. At the 20-item limit, users must explicitly delete an item; approved candidates are never silently discarded.
+
+**Validation status:** focused backend and frontend tests plus one Windows validation pass are required for this batch. No live provider authorization is performed by CI. The historical 404 cause remains unconfirmed until a failed request from the installed RC can be matched to the new safe backend diagnostic (or shown not to reach the backend at all).
+
+**Scope boundary:** this batch does not implement restart persistence, capture reconnect, timeline calibration, trigger-window merging, AI analysis, preview/trim, renderer handoff, or M5 hardening.
