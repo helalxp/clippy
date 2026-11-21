@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
-from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
+from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting, provider_operation_generation
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -85,6 +85,7 @@ async def start_google_flow(
         raise GoogleOAuthError("Google sign-in is not configured in this Clippy build.")
     if provider_is_disconnecting("youtube"):
         raise GoogleOAuthError("Google is being disconnected. Try again shortly.")
+    start_generation = provider_operation_generation("youtube")
     store_factory()
 
     flow_id = secrets.token_urlsafe(32)
@@ -155,10 +156,13 @@ async def start_google_flow(
     flow["redirect_uri"] = redirect_uri
 
     async with provider_credential_lock("youtube"):
-        if provider_is_disconnecting("youtube"):
+        if (
+            provider_is_disconnecting("youtube")
+            or provider_operation_generation("youtube") != start_generation
+        ):
             server.close()
             await server.wait_closed()
-            raise GoogleOAuthError("Google is being disconnected. Try again shortly.")
+            raise GoogleOAuthError("Google sign-in was superseded by a disconnect.")
         async with _GOOGLE_LOCK:
             now = time.monotonic()
             for key, current in list(_GOOGLE_FLOWS.items()):
