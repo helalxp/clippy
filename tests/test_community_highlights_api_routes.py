@@ -23,7 +23,7 @@ def _client(monkeypatch):
     monkeypatch.setattr(community_api, "google_authorization_available", lambda: True)
     # Do not enter TestClient as a context manager: these route tests must not
     # start the application's long-running lifespan workers.
-    return TestClient(backend_app.app, raise_server_exceptions=False)
+    return TestClient(backend_app.app, raise_server_exceptions=True)
 
 
 def _headers():
