@@ -2625,6 +2625,9 @@ def _log_community_highlights_failure(request: Request, response) -> None:
         safe_path = re.sub(r"/[A-Za-z0-9_-]{20,}(?=/|$)", "/<id>", request.url.path)
     else:
         safe_path = route_path
+    # Unmatched paths are attacker-controlled input. Strip line breaks and cap
+    # their length before writing them to the local log.
+    safe_path = safe_path.replace("\\r", "").replace("\\n", "")[:256]
     logging.getLogger("clippy.community_highlights").warning(
         "Community Highlights API request failed: method=%s route=%s status=%s",
         request.method,
