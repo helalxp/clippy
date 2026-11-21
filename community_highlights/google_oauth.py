@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
+from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -82,6 +83,8 @@ async def start_google_flow(
     client_id = (client_id or google_client_id()).strip()
     if not client_id:
         raise GoogleOAuthError("Google sign-in is not configured in this Clippy build.")
+    if provider_is_disconnecting("youtube"):
+        raise GoogleOAuthError("Google is being disconnected. Try again shortly.")
     store_factory()
 
     flow_id = secrets.token_urlsafe(32)
@@ -151,19 +154,24 @@ async def start_google_flow(
     flow["server"] = server
     flow["redirect_uri"] = redirect_uri
 
-    async with _GOOGLE_LOCK:
-        now = time.monotonic()
-        for key, current in list(_GOOGLE_FLOWS.items()):
-            if current["expires_at"] <= now or current["status"] != "pending":
-                old_server = current.get("server")
-                if old_server:
-                    old_server.close()
-                _GOOGLE_FLOWS.pop(key, None)
-        if len(_GOOGLE_FLOWS) >= 4:
+    async with provider_credential_lock("youtube"):
+        if provider_is_disconnecting("youtube"):
             server.close()
             await server.wait_closed()
-            raise GoogleOAuthError("Too many Google sign-in attempts are active.")
-        _GOOGLE_FLOWS[flow_id] = flow
+            raise GoogleOAuthError("Google is being disconnected. Try again shortly.")
+        async with _GOOGLE_LOCK:
+            now = time.monotonic()
+            for key, current in list(_GOOGLE_FLOWS.items()):
+                if current["expires_at"] <= now or current["status"] != "pending":
+                    old_server = current.get("server")
+                    if old_server:
+                        old_server.close()
+                    _GOOGLE_FLOWS.pop(key, None)
+            if len(_GOOGLE_FLOWS) >= 4:
+                server.close()
+                await server.wait_closed()
+                raise GoogleOAuthError("Too many Google sign-in attempts are active.")
+            _GOOGLE_FLOWS[flow_id] = flow
 
     expiry_task = asyncio.create_task(_expire_google_flow(flow_id))
     _GOOGLE_EXPIRY_TASKS.add(expiry_task)
@@ -251,19 +259,26 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
         if GOOGLE_SCOPE not in scopes:
             raise GoogleOAuthError("Google did not grant the required read-only YouTube permission.")
 
-        store = flow["store_factory"]()
-        previous = store.load("youtube") or {}
-        refresh_token = tokens.get("refresh_token") or previous.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise GoogleOAuthError("Google did not provide offline access. Please sign in again.")
-        store.save("youtube", {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "expires_at": int(time.time()) + int(tokens.get("expires_in", 3600)),
-            "scopes": sorted(scopes),
-            "client_id": flow["client_id"],
-        })
-        flow.update(status="connected", message="YouTube is connected.")
+        async with provider_credential_lock("youtube"):
+            async with _GOOGLE_LOCK:
+                current = _GOOGLE_FLOWS.get(flow_id)
+                if current is not flow or current.get("status") != "pending":
+                    return
+                if provider_is_disconnecting("youtube"):
+                    return
+                store = flow["store_factory"]()
+                previous = store.load("youtube") or {}
+                refresh_token = tokens.get("refresh_token") or previous.get("refresh_token")
+                if not isinstance(refresh_token, str) or not refresh_token:
+                    raise GoogleOAuthError("Google did not provide offline access. Please sign in again.")
+                store.save("youtube", {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_at": int(time.time()) + int(tokens.get("expires_in", 3600)),
+                    "scopes": sorted(scopes),
+                    "client_id": flow["client_id"],
+                })
+                flow.update(status="connected", message="YouTube is connected.")
     except (httpx.HTTPError, ValueError, CredentialStoreError, GoogleOAuthError):
         flow.update(
             status="error",
@@ -281,6 +296,24 @@ async def google_flow_status(flow_id: str) -> dict[str, str]:
         flow.update(status="expired", message="Google sign-in expired. Please try again.")
         _close_listener(flow)
     return {"status": flow["status"], "message": flow["message"]}
+
+
+async def cancel_all_google_flows() -> int:
+    """Invalidate pending Google callbacks before local disconnect."""
+    async with _GOOGLE_LOCK:
+        flows = list(_GOOGLE_FLOWS.values())
+        _GOOGLE_FLOWS.clear()
+        servers = []
+        for flow in flows:
+            flow.update(status="cancelled", message="Google sign-in was cancelled.")
+            server = flow.get("server")
+            if server:
+                server.close()
+                servers.append(server)
+            flow["verifier"] = ""
+        for server in servers:
+            await server.wait_closed()
+        return len(flows)
 
 
 async def cancel_google_flow(flow_id: str) -> bool:
