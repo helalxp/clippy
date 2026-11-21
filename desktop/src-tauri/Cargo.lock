@@ -387,6 +387,7 @@ dependencies = [
 name = "clippy-desktop"
 version = "0.3.2-rc.1"
 dependencies = [
+ "dunce",
  "serde",
  "serde_json",
  "sha2",
