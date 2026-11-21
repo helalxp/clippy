@@ -9,6 +9,7 @@ import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
 from .google_oauth import google_token_info_matches_client
+from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
@@ -180,12 +181,6 @@ async def _ensure_access_token_locked(
 
 
 
-_REFRESH_LOCKS = {
-    "twitch": asyncio.Lock(),
-    "youtube": asyncio.Lock(),
-}
-
-
 async def ensure_access_token(
     provider: str,
     *,
@@ -193,11 +188,13 @@ async def ensure_access_token(
     client: httpx.AsyncClient | None = None,
     force_refresh: bool = False,
 ) -> str:
-    if provider not in _REFRESH_LOCKS:
+    if provider not in {"twitch", "youtube"}:
         raise ProviderTokenError("Unsupported chat provider.")
-    # Twitch refresh tokens are single-use. Serialize refresh/validation per
-    # provider so two simultaneous chat sessions cannot consume the same token.
-    async with _REFRESH_LOCKS[provider]:
+    # Use the same per-provider lock as Disconnect. This ensures a token refresh
+    # cannot persist a newly rotated credential after local disconnect removes it.
+    async with provider_credential_lock(provider):
+        if provider_is_disconnecting(provider):
+            raise ProviderTokenError(f"{provider.title()} is being disconnected. Try again shortly.")
         return await _ensure_access_token_locked(
             provider,
             store_factory=store_factory,
