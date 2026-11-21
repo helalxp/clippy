@@ -85,9 +85,12 @@ try {
     # runner's real LOCALAPPDATA or creating data under the app installation.
     $dataRoot = Join-Path $smokeRoot "external-clippy-data"
     New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+    # Simulate the legacy Win32 verbatim path produced by Rust canonicalize().
+    # The packaged setup must normalize it before the first Join-Path call.
+    $legacyExtendedDataRoot = '\\?\' + [IO.Path]::GetFullPath($dataRoot)
     $storageLocation = @{
         schema_version = 1
-        data_directory = [IO.Path]::GetFullPath($dataRoot)
+        data_directory = $legacyExtendedDataRoot
     } | ConvertTo-Json -Compress
     [IO.File]::WriteAllText(
         (Join-Path $root "storage-location.json"),
@@ -100,6 +103,7 @@ try {
         "runtime-archive.ps1",
         "runtime-manifest-state.ps1",
         "runtime-health.ps1",
+        "storage-path.ps1",
         "runtime-ffmpeg.ps1",
         "runtime-contract.json",
         "app.py",
