@@ -1,6 +1,6 @@
 import asyncio
 import functools
-import os
+import httpx
 
 from community_highlights.revocation import (
     GOOGLE_REVOKE_URL,
@@ -76,7 +76,7 @@ async def test_provider_revoke_refusal_and_network_failure_are_not_reported_as_s
     assert await revoke_google_credentials(bundle, client=FakeClient(status_code=400)) is False
     assert await revoke_google_credentials(
         bundle,
-        client=FakeClient(error=OSError("network detail")),
+        client=FakeClient(error=httpx.ConnectError("network detail")),
     ) is False
 
 
