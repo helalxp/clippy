@@ -97,6 +97,10 @@ jobs:
         working-directory: dashboard
         run: npm ci
 
+      - name: Run dashboard unit tests
+        working-directory: dashboard
+        run: npm test
+
       - name: Build desktop dashboard
         shell: pwsh
         run: ./dashboard/build-desktop.ps1
