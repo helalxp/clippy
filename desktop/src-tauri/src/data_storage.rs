@@ -604,7 +604,11 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let joined = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let expected = destination.join("output").to_string_lossy().to_string();
+        let expected = dunce::canonicalize(&destination)
+            .unwrap()
+            .join("output")
+            .to_string_lossy()
+            .to_string();
         assert_eq!(joined.to_ascii_lowercase(), expected.to_ascii_lowercase());
 
         fs::remove_dir_all(root).unwrap();
