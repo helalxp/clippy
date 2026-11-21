@@ -27,4 +27,15 @@ Describe "Clippy PowerShell storage path normalization" {
         { ConvertTo-ClippyPowerShellPath -Path '\\?\Volume{00000000-0000-0000-0000-000000000000}\clippy-data' } |
             Should -Throw "*Unsupported extended Clippy data path*"
     }
+
+    It "does not strip the extended prefix from paths beyond the safe PowerShell limit" {
+        $longPath = '\\?\C:\' + ('x' * 260)
+        { ConvertTo-ClippyPowerShellPath -Path $longPath } |
+            Should -Throw "*requires extended-length Windows path support*"
+    }
+
+    It "does not strip the extended prefix from reserved device-name paths" {
+        { ConvertTo-ClippyPowerShellPath -Path '\\?\C:\CON\clippy-data' } |
+            Should -Throw "*reserved Windows device name*"
+    }
 }
