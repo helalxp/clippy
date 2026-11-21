@@ -146,8 +146,9 @@ async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
                 revocation_status = "revoked" if confirmed else "not_confirmed"
                 if provider == "youtube":
                     message = (
-                        "Google confirmed token revocation. Google may invalidate other OAuth clients "
-                        "registered in the same Cloud project."
+                        "Google confirmed token revocation. This removes OAuth scopes granted to the "
+                        "same Google Cloud project and invalidates tokens for every OAuth client "
+                        "registered in that project."
                         if confirmed else
                         "Clippy removed its saved Google credentials, but Google did not confirm revocation. "
                         "Review third-party access in your Google Account."
