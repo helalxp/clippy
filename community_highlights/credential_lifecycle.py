@@ -20,6 +20,7 @@ class _LoopState:
             "youtube": asyncio.Lock(),
         }
         self.disconnecting: set[str] = set()
+        self.generation = {"twitch": 0, "youtube": 0}
 
 
 _registry_lock = threading.RLock()
@@ -57,6 +58,7 @@ async def provider_disconnect_lock(provider: str) -> AsyncIterator[None]:
     if lock is None:
         raise ValueError("Unsupported Community Highlights provider.")
     async with lock:
+        state.generation[provider] += 1
         state.disconnecting.add(provider)
         try:
             yield
@@ -67,3 +69,16 @@ async def provider_disconnect_lock(provider: str) -> AsyncIterator[None]:
 def provider_is_disconnecting(provider: str) -> bool:
     """Return whether the current event loop is inside provider disconnect."""
     return provider in _state().disconnecting
+
+
+def provider_operation_generation(provider: str) -> int:
+    """Return the disconnect generation for optimistic admission of OAuth starts.
+
+    A start that began before a disconnect may finish its provider HTTP setup
+    afterward. Comparing its captured generation prevents it from registering
+    a fresh pending flow after Disconnect has already cancelled all flows.
+    """
+    state = _state()
+    if provider not in state.generation:
+        raise ValueError("Unsupported Community Highlights provider.")
+    return state.generation[provider]
