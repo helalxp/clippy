@@ -11,6 +11,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    outputs:
+      oauth_profile: ${{ steps.oauth.outputs.profile }}
+      twitch_client_id: ${{ steps.oauth.outputs.twitch_client_id }}
+      google_client_id: ${{ steps.oauth.outputs.google_client_id }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -24,23 +28,48 @@ jobs:
           PyJWT email-validator python-multipart
       - name: Run backend tests
         run: pytest tests/ -v
-      - name: Require Community Highlights public OAuth client IDs
+      - name: Select and require release OAuth identity
+        id: oauth
         env:
-          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_TWITCH_CLIENT_ID_TEST: ${{ vars.CLIPPY_TWITCH_CLIENT_ID_TEST }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST }}
+          CLIPPY_TWITCH_CLIENT_ID_PRODUCTION: ${{ vars.CLIPPY_TWITCH_CLIENT_ID_PRODUCTION }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION }}
         run: |
-          for name in CLIPPY_TWITCH_CLIENT_ID CLIPPY_GOOGLE_OAUTH_CLIENT_ID; do
-            value="${!name}"
+          set -euo pipefail
+
+          # Prerelease tags (for example v0.3.2-rc.1) use dedicated test
+          # registrations. Stable tags use production registrations. There is
+          # intentionally no fallback between profiles.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            profile="test"
+            twitch="$CLIPPY_TWITCH_CLIENT_ID_TEST"
+            google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID_TEST"
+            prefix="CLIPPY_*_CLIENT_ID_TEST"
+          else
+            profile="production"
+            twitch="$CLIPPY_TWITCH_CLIENT_ID_PRODUCTION"
+            google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID_PRODUCTION"
+            prefix="CLIPPY_*_CLIENT_ID_PRODUCTION"
+          fi
+
+          for entry in "Twitch:$twitch" "Google:$google"; do
+            name="${entry%%:*}"
+            value="${entry#*:}"
             if [ -z "$value" ]; then
-              echo "::error::Missing repository Actions Variable $name. Configure the public OAuth client ID before creating a release."
+              echo "::error::Missing $name OAuth Client ID for the $profile release profile. Configure $prefix before tagging this release."
               exit 1
             fi
             if [ "${#value}" -gt 512 ] || [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              echo "::error::Repository Actions Variable $name has an invalid value."
+              echo "::error::$name OAuth Client ID for the $profile release profile has an invalid value."
               exit 1
             fi
           done
-          echo "Community Highlights public OAuth client IDs are configured."
+
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "twitch_client_id=$twitch" >> "$GITHUB_OUTPUT"
+          echo "google_client_id=$google" >> "$GITHUB_OUTPUT"
+          echo "Community Highlights OAuth profile selected: $profile"
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -196,8 +225,8 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
         run: ./desktop/build.ps1 -CreateUpdaterArtifacts
 
       # The payload contract tests must run after prepare-payload.ps1 has built
@@ -205,8 +234,8 @@ jobs:
       - name: Run PowerShell runtime and assembled-payload contract tests
         shell: pwsh
         env:
-          CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
