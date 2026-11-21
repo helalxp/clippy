@@ -46,7 +46,9 @@ def google_token_info_matches_client(token_info: Any, client_id: str) -> bool:
     return (
         isinstance(audience, str)
         and bool(audience)
+        and audience.isascii()
         and isinstance(authorized_party, str)
+        and authorized_party.isascii()
         and secrets.compare_digest(authorized_party, client_id)
     )
 
