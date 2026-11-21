@@ -273,3 +273,80 @@ async def test_new_provider_oauth_flows_are_rejected_during_disconnect(monkeypat
                 client_id="google-client",
                 store_factory=lambda: MemoryStore(),
             )
+
+
+@run_async
+async def test_twitch_device_request_started_before_disconnect_cannot_register_a_late_flow(monkeypatch):
+    monkeypatch.setenv("CLIPPY_TWITCH_CLIENT_ID", "twitch-client")
+    monkeypatch.setattr(twitch_oauth, "WindowsCredentialStore", lambda: MemoryStore())
+    request_started = asyncio.Event()
+    release_response = asyncio.Event()
+
+    class DeviceClient:
+        async def post(self, _url, data):
+            request_started.set()
+            await release_response.wait()
+            return Response({
+                "device_code": "one-time-device-code",
+                "expires_in": 1800,
+                "interval": 5,
+                "verification_uri": "https://www.twitch.tv/activate?device-code=USER",
+            })
+
+    start = asyncio.create_task(twitch_oauth.start_twitch_flow(client=DeviceClient()))
+    await request_started.wait()
+
+    async with provider_disconnect_lock("twitch"):
+        assert await twitch_oauth.cancel_all_twitch_flows() == 0
+    release_response.set()
+
+    with pytest.raises(twitch_oauth.TwitchOAuthError, match="superseded by a disconnect"):
+        await start
+    assert twitch_oauth._flows == {}
+
+
+@run_async
+async def test_google_listener_started_before_disconnect_cannot_register_a_late_flow(monkeypatch):
+    listener_starting = asyncio.Event()
+    release_listener = asyncio.Event()
+
+    class FakeSocket:
+        def getsockname(self):
+            return ("127.0.0.1", 45678)
+
+    class FakeServer:
+        sockets = [FakeSocket()]
+
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            return None
+
+    server = FakeServer()
+
+    async def fake_start_server(*_args, **_kwargs):
+        listener_starting.set()
+        await release_listener.wait()
+        return server
+
+    monkeypatch.setattr(google_oauth.asyncio, "start_server", fake_start_server)
+    start = asyncio.create_task(
+        google_oauth.start_google_flow(
+            client_id="google-client",
+            store_factory=lambda: MemoryStore(),
+        )
+    )
+    await listener_starting.wait()
+
+    async with provider_disconnect_lock("youtube"):
+        assert await google_oauth.cancel_all_google_flows() == 0
+    release_listener.set()
+
+    with pytest.raises(google_oauth.GoogleOAuthError, match="superseded by a disconnect"):
+        await start
+    assert server.closed is True
+    assert google_oauth._GOOGLE_FLOWS == {}
