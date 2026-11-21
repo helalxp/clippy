@@ -562,7 +562,7 @@ mod tests {
         write_config(&root, &destination).unwrap();
         assert_eq!(
             configured_data_directory(&root).unwrap(),
-            destination.canonicalize().unwrap()
+            dunce::canonicalize(&destination).unwrap()
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -582,7 +582,7 @@ mod tests {
         let raw = fs::read_to_string(config_path(&root)).unwrap();
         let saved: StorageLocationConfig = serde_json::from_str(&raw).unwrap();
         assert!(
-            !saved.data_directory.starts_with(r"\\?\\"),
+            !saved.data_directory.starts_with(r"\\?\"),
             "storage-location.json must not contain a verbatim Win32 prefix: {}",
             saved.data_directory
         );
