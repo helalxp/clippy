@@ -232,3 +232,17 @@ async def test_poll_flow_rejects_non_object_token_validation_response():
 
     assert result["status"] == "error"
     assert store.saved == {}
+
+@run_async
+async def test_missing_twitch_client_id_disables_only_twitch_authorization(monkeypatch):
+    from community_highlights import google_oauth
+
+    monkeypatch.delenv("CLIPPY_TWITCH_CLIENT_ID", raising=False)
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setattr(google_oauth, "WindowsCredentialStore", lambda: FakeStore())
+
+    assert twitch_oauth.twitch_authorization_available() is False
+    assert google_oauth.google_authorization_available() is True
+
+    with pytest.raises(twitch_oauth.TwitchOAuthError, match="Twitch sign-in is not configured"):
+        await twitch_oauth.start_twitch_flow(FakeClient([]))
