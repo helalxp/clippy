@@ -26,11 +26,13 @@ def _headers():
     return {"X-Clippy-Token": "test-desktop-session-token"}
 
 
-def test_connections_route_is_registered_and_requires_desktop_session(monkeypatch):
+def test_connections_route_is_registered_and_requires_desktop_session(monkeypatch, caplog):
     client = _client(monkeypatch)
 
-    denied = client.get("/api/community-highlights/connections")
+    with caplog.at_level(logging.WARNING, logger="clippy.community_highlights"):
+        denied = client.get("/api/community-highlights/connections")
     assert denied.status_code == 401
+    assert "route=/api/community-highlights/connections" in caplog.text
 
     response = client.get("/api/community-highlights/connections", headers=_headers())
     assert response.status_code == 200
