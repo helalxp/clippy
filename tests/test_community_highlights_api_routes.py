@@ -128,3 +128,36 @@ def test_unknown_community_highlights_route_returns_404_and_logs_redacted_path(m
     assert "/<id>" in caplog.text
     assert unknown_id not in caplog.text
     assert "never-log" not in caplog.text
+
+
+def test_candidate_delete_route_reports_success_and_missing_candidate(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(community_api.capture_sessions, "delete_candidate", lambda _candidate_id: True)
+    response = client.delete(
+        "/api/community-highlights/candidates/candidate-123",
+        headers=_headers(),
+    )
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+
+    monkeypatch.setattr(community_api.capture_sessions, "delete_candidate", lambda _candidate_id: False)
+    missing = client.delete(
+        "/api/community-highlights/candidates/missing",
+        headers=_headers(),
+    )
+    assert missing.status_code == 404
+
+
+def test_candidate_delete_route_reports_conflict_when_media_cannot_be_removed(monkeypatch):
+    client = _client(monkeypatch)
+
+    def locked(_candidate_id):
+        raise PermissionError("private filesystem detail")
+
+    monkeypatch.setattr(community_api.capture_sessions, "delete_candidate", locked)
+    response = client.delete(
+        "/api/community-highlights/candidates/candidate-locked",
+        headers=_headers(),
+    )
+    assert response.status_code == 409
+    assert "private filesystem detail" not in response.text
