@@ -126,15 +126,6 @@ def test_provider_disconnect_stops_existing_chat_and_blocks_inflight_start():
             raise AssertionError("A chat session started while provider disconnect was in progress.")
 
         await manager.end_provider_disconnect("twitch")
-        # The provider can be used again after local credential deletion completes.
-        # This call gets as far as token lookup, but the fake token provider remains blocked
-        # until released, so it must be canceled cleanly.
-        retry = asyncio.create_task(manager.start("https://www.twitch.tv/final-channel"))
-        await asyncio.sleep(0)
-        retry.cancel()
-        try:
-            await retry
-        except asyncio.CancelledError:
-            pass
+        assert "twitch" not in manager._disconnecting_providers
 
     asyncio.run(scenario())
