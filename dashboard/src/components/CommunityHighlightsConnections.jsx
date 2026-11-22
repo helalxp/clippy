@@ -46,6 +46,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
   const [flow, setFlow] = useState(null);
   const [flowMessage, setFlowMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [busyProvider, setBusyProvider] = useState('');
   const pollTimer = useRef(null);
   const activeFlow = useRef(null);
 
@@ -116,12 +117,14 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
       activeFlow.current = null;
       setFlow(null);
       setBusy(false);
+      setBusyProvider('');
       if (result.status === 'connected') await refreshConnections();
       else setError(result.message || 'Provider sign-in did not complete.');
     } catch (requestError) {
       activeFlow.current = null;
       setFlow(null);
       setBusy(false);
+      setBusyProvider('');
       setError(requestError?.detail || 'Could not check provider authorization status.');
     }
   };
@@ -131,6 +134,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     setError('');
     setNotice('');
     setBusy(true);
+    setBusyProvider(provider);
     setFlowMessage(`Starting secure ${provider === 'twitch' ? 'Twitch' : 'Google'} sign-in…`);
     try {
       // This runs synchronously in the click handler, before the async API call,
@@ -154,6 +158,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
         } catch (_) { /* server-side expiry also clears abandoned flows */ }
       }
       setBusy(false);
+      setBusyProvider('');
       setFlow(null);
       setError(requestError?.detail || requestError?.message || 'Could not start provider sign-in.');
     }
@@ -175,6 +180,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     activeFlow.current = null;
     setFlow(null);
     setBusy(false);
+    setBusyProvider('');
     setFlowMessage('');
     if (flowId) {
       try {
@@ -190,6 +196,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     setError('');
     setNotice('');
     setBusy(true);
+    setBusyProvider(provider);
     try {
       const result = await apiJson(`/api/community-highlights/connections/${provider}`, { method: 'DELETE' });
       await refreshConnections();
@@ -200,6 +207,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
       setError(requestError?.detail || `Could not disconnect ${provider}.`);
     } finally {
       setBusy(false);
+      setBusyProvider('');
     }
   };
 
@@ -256,12 +264,12 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
                 <button type="button" disabled={connectionsLoading || connections === null || !authorizationAvailable || busy}
                   onClick={() => connectProvider(provider.id)}
                   title={connections === null
-                    ? 'Checking saved provider connection status.'
+                    ? 'Could not check saved provider connection status. Use Retry below.'
                     : !authorizationAvailable
                       ? `${provider.name} sign-in is not configured or secure storage is unavailable.`
                       : undefined}
                   className="mt-4 w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                  {busy ? <Loader2 size={15} className="animate-spin" /> : null}
+                  {busy && busyProvider === provider.id ? <Loader2 size={15} className="animate-spin" /> : null}
                   {provider.action}
                 </button>
               )}
@@ -270,7 +278,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
                   : connectionsLoading
                     ? 'Checking saved connection status…'
                     : connections === null
-                      ? 'Could not check saved connections. Reopen this page to retry.'
+                      ? 'Could not check saved connections. Use Retry below.'
                       : state?.status === 'storage_unavailable'
                     ? 'Windows Credential Manager is available only in the packaged Windows app.'
                     : state?.status === 'credential_error'
