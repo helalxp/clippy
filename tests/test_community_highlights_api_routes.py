@@ -98,6 +98,48 @@ def test_google_authorization_start_status_cancel_routes(monkeypatch):
     assert stopped.json() == {"cancelled": True}
 
 
+def test_start_chat_session_returns_actionable_validation_error_without_logging_stream_url(monkeypatch, caplog):
+    stream_url = "https://www.youtube.com/@private_creator"
+
+    async def reject_stream(_stream_url):
+        raise ValueError("Use a YouTube live or video URL, not a channel or playlist URL.")
+
+    monkeypatch.setattr(community_api.chat_sessions, "start", reject_stream)
+    client = _client(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="clippy.community_highlights"):
+        response = client.post(
+            "/api/community-highlights/sessions",
+            headers=_headers(),
+            json={"stream_url": stream_url},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Use a YouTube live or video URL, not a channel or playlist URL."
+    assert "route=/api/community-highlights/sessions" in caplog.text
+    assert stream_url not in caplog.text
+    assert stream_url not in response.text
+
+
+def test_google_authorization_flow_invalidated_by_backend_restart_is_reported_as_expired(monkeypatch):
+    from community_highlights import google_oauth
+
+    # OAuth state and its loopback listener are intentionally process-local.
+    # A backend restart clears them; the next poll must report expiry, not
+    # leave the frontend stuck in a pending authorization state.
+    google_oauth._GOOGLE_FLOWS.clear()
+    flow_id = "g" * 40
+    client = _client(monkeypatch)
+
+    response = client.get(
+        f"/api/community-highlights/youtube/authorize/{flow_id}",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "This sign-in attempt has expired. Start again."
+
+
 def test_not_found_diagnostics_use_route_template_and_never_log_flow_ids_or_query(monkeypatch, caplog):
     flow_id = "private-flow-id-" + ("x" * 32)
 
