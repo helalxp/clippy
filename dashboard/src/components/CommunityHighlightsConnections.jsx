@@ -40,6 +40,7 @@ async function openAuthorizationUrl(url, pendingWindow = null) {
 
 export default function CommunityHighlightsConnections({ compact = false, onConnectionsChange }) {
   const [connections, setConnections] = useState(null);
+  const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [flow, setFlow] = useState(null);
@@ -49,11 +50,20 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
   const activeFlow = useRef(null);
 
   const refreshConnections = async () => {
-    const data = await apiJson('/api/community-highlights/connections');
-    const providers = data?.providers || {};
-    setConnections(providers);
-    onConnectionsChange?.(providers);
-    return providers;
+    setConnectionsLoading(true);
+    try {
+      const data = await apiJson('/api/community-highlights/connections');
+      const providers = data?.providers || {};
+      setConnections(providers);
+      onConnectionsChange?.(providers);
+      return providers;
+    } catch (requestError) {
+      setConnections(null);
+      onConnectionsChange?.(null);
+      throw requestError;
+    } finally {
+      setConnectionsLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -63,12 +73,14 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
         if (active) {
           const providers = data?.providers || {};
           setConnections(providers);
+          setConnectionsLoading(false);
           onConnectionsChange?.(providers);
         }
       })
       .catch((requestError) => {
         if (active) {
           setConnections(null);
+          setConnectionsLoading(false);
           onConnectionsChange?.(null);
           setError(requestError?.detail || 'Could not load provider connection status.');
         }
@@ -213,7 +225,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
                   <span className="font-medium text-ink">{provider.name}</span>
                 </div>
                 <span className={connected ? 'badge-ok shrink-0' : 'readout shrink-0'}>
-                  {connections === null ? 'Checking…' : connected ? 'Connected' : state?.status === 'storage_unavailable' ? 'Unavailable' : 'Not connected'}
+                  {connectionsLoading ? 'Checking…' : connections === null ? 'Status unavailable' : connected ? 'Connected' : state?.status === 'storage_unavailable' ? 'Unavailable' : 'Not connected'}
                 </span>
               </div>
               <p className="text-xs text-muted leading-relaxed flex-1">{provider.description}</p>
@@ -232,7 +244,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
                     className="w-full rounded-input border border-rule px-4 py-2 text-xs text-muted hover:text-ink">Cancel sign-in</button>
                 </div>
               ) : (
-                <button type="button" disabled={connections === null || !authorizationAvailable || busy}
+                <button type="button" disabled={connectionsLoading || connections === null || !authorizationAvailable || busy}
                   onClick={() => connectProvider(provider.id)}
                   title={connections === null
                     ? 'Checking saved provider connection status.'
@@ -246,9 +258,11 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
               )}
               <p className="mt-2 text-[11px] text-muted/80">
                 {flow?.provider === provider.id ? flowMessage
-                  : connections === null
+                  : connectionsLoading
                     ? 'Checking saved connection status…'
-                    : state?.status === 'storage_unavailable'
+                    : connections === null
+                      ? 'Could not check saved connections. Reopen this page to retry.'
+                      : state?.status === 'storage_unavailable'
                     ? 'Windows Credential Manager is available only in the packaged Windows app.'
                     : state?.status === 'credential_error'
                       ? 'Saved credentials need attention. Disconnect and sign in again.'
