@@ -372,7 +372,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
   // Community Highlights actions are gated by the connected provider matching
   // the entered stream URL, not by the separate Clippy cloud-account session.
-  const [communityProviderConnections, setCommunityProviderConnections] = useState(null);
+  const [communityProviderConnections, setCommunityProviderConnections] = useState(undefined);
   // Mobile only: the full nav lives in a drawer behind the header's menu button.
   const [navOpen, setNavOpen] = useState(false);
   // Reopened-project state (paid mode): per-clip {index, server_file, active_layers}
