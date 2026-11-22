@@ -249,7 +249,10 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
               {connected ? (
                 <button type="button" disabled={busy} onClick={() => disconnectProvider(provider.id)}
                   className="mt-4 w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 disabled:opacity-50 flex items-center justify-center gap-2">
-                  <Unplug size={15} /> Disconnect {provider.name}
+                  {busy && busyProvider === provider.id
+                    ? <Loader2 size={15} className="animate-spin" />
+                    : <Unplug size={15} />}
+                  {busy && busyProvider === provider.id ? `Disconnecting ${provider.name}…` : `Disconnect ${provider.name}`}
                 </button>
               ) : flow?.provider === provider.id ? (
                 <div className="mt-4 space-y-2">
