@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseCommunityHighlightsStreamUrl } from "./communityHighlights.js";
+import {
+  isCommunityHighlightsProviderConnected,
+  parseCommunityHighlightsStreamUrl,
+} from "./communityHighlights.js";
 
 test("parses Twitch channel URLs and normalizes provider identity", () => {
   assert.deepEqual(
@@ -43,4 +46,25 @@ test("rejects unsupported or malformed stream URLs", () => {
   ]) {
     assert.equal(parseCommunityHighlightsStreamUrl(url), null, url);
   }
+});
+
+test("requires the provider matching the entered stream URL to be connected", () => {
+  const twitch = parseCommunityHighlightsStreamUrl("https://www.twitch.tv/my_channel");
+  const youtube = parseCommunityHighlightsStreamUrl("https://youtu.be/abcdefghijk");
+
+  assert.equal(isCommunityHighlightsProviderConnected(twitch, null), false);
+  assert.equal(isCommunityHighlightsProviderConnected(twitch, undefined), false);
+  assert.equal(isCommunityHighlightsProviderConnected(null, { twitch: { connected: true } }), false);
+  assert.equal(
+    isCommunityHighlightsProviderConnected(twitch, { youtube: { connected: true } }),
+    false,
+  );
+  assert.equal(
+    isCommunityHighlightsProviderConnected(twitch, { twitch: { connected: true } }),
+    true,
+  );
+  assert.equal(
+    isCommunityHighlightsProviderConnected(youtube, { youtube: { connected: true } }),
+    true,
+  );
 });
