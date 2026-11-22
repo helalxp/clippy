@@ -78,6 +78,9 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
 
   useEffect(() => {
     let active = true;
+    // Clear any status retained by the parent while this tab was unmounted.
+    // The monitor must wait for a fresh backend check before enabling starts.
+    onConnectionsChange?.(undefined);
     apiJson('/api/community-highlights/connections')
       .then((data) => {
         if (active) {
