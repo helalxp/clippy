@@ -43,3 +43,7 @@ export function parseCommunityHighlightsStreamUrl(value) {
 
   return null;
 }
+export function isCommunityHighlightsProviderConnected(streamReference, providers) {
+  if (!streamReference || !providers || typeof providers !== "object") return false;
+  return providers[streamReference.provider]?.connected === true;
+}
