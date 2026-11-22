@@ -38,7 +38,7 @@ async function openAuthorizationUrl(url, pendingWindow = null) {
   navigateAuthorizationWindow(opened, url);
 }
 
-export default function CommunityHighlightsConnections({ compact = false }) {
+export default function CommunityHighlightsConnections({ compact = false, onConnectionsChange }) {
   const [connections, setConnections] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -50,21 +50,34 @@ export default function CommunityHighlightsConnections({ compact = false }) {
 
   const refreshConnections = async () => {
     const data = await apiJson('/api/community-highlights/connections');
-    setConnections(data?.providers || {});
+    const providers = data?.providers || {};
+    setConnections(providers);
+    onConnectionsChange?.(providers);
+    return providers;
   };
 
   useEffect(() => {
     let active = true;
     apiJson('/api/community-highlights/connections')
-      .then((data) => { if (active) setConnections(data?.providers || {}); })
+      .then((data) => {
+        if (active) {
+          const providers = data?.providers || {};
+          setConnections(providers);
+          onConnectionsChange?.(providers);
+        }
+      })
       .catch((requestError) => {
-        if (active) setError(requestError?.detail || 'Could not load provider connection status.');
+        if (active) {
+          setConnections(null);
+          onConnectionsChange?.(null);
+          setError(requestError?.detail || 'Could not load provider connection status.');
+        }
       });
     return () => {
       active = false;
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
-  }, []);
+  }, [onConnectionsChange]);
 
   const stopPolling = () => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -170,7 +183,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
   };
 
   return (
-    <section className={compact ? 'card p-4 sm:p-6 mb-6' : 'card p-5 sm:p-7'}>
+    <section id={compact ? undefined : 'community-highlights-connections'} className={compact ? 'card p-4 sm:p-6 mb-6' : 'card p-5 sm:p-7'}>
       <div className="flex items-start gap-3 mb-5">
         <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center shrink-0 text-brass">
           <Activity size={19} />
@@ -200,7 +213,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
                   <span className="font-medium text-ink">{provider.name}</span>
                 </div>
                 <span className={connected ? 'badge-ok shrink-0' : 'readout shrink-0'}>
-                  {connected ? 'Connected' : state?.status === 'storage_unavailable' ? 'Unavailable' : 'Not connected'}
+                  {connections === null ? 'Checking…' : connected ? 'Connected' : state?.status === 'storage_unavailable' ? 'Unavailable' : 'Not connected'}
                 </span>
               </div>
               <p className="text-xs text-muted leading-relaxed flex-1">{provider.description}</p>
@@ -219,9 +232,13 @@ export default function CommunityHighlightsConnections({ compact = false }) {
                     className="w-full rounded-input border border-rule px-4 py-2 text-xs text-muted hover:text-ink">Cancel sign-in</button>
                 </div>
               ) : (
-                <button type="button" disabled={!authorizationAvailable || busy}
+                <button type="button" disabled={connections === null || !authorizationAvailable || busy}
                   onClick={() => connectProvider(provider.id)}
-                  title={!authorizationAvailable ? `${provider.name} sign-in is not configured or secure storage is unavailable.` : undefined}
+                  title={connections === null
+                    ? 'Checking saved provider connection status.'
+                    : !authorizationAvailable
+                      ? `${provider.name} sign-in is not configured or secure storage is unavailable.`
+                      : undefined}
                   className="mt-4 w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                   {busy ? <Loader2 size={15} className="animate-spin" /> : null}
                   {provider.action}
@@ -229,7 +246,9 @@ export default function CommunityHighlightsConnections({ compact = false }) {
               )}
               <p className="mt-2 text-[11px] text-muted/80">
                 {flow?.provider === provider.id ? flowMessage
-                  : state?.status === 'storage_unavailable'
+                  : connections === null
+                    ? 'Checking saved connection status…'
+                    : state?.status === 'storage_unavailable'
                     ? 'Windows Credential Manager is available only in the packaged Windows app.'
                     : state?.status === 'credential_error'
                       ? 'Saved credentials need attention. Disconnect and sign in again.'
