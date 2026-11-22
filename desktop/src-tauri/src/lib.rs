@@ -321,27 +321,9 @@ fn open_system_url(url: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn open_system_url(url: &str) -> Result<(), String> {
-    Command::new("open")
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open the link in your default browser: {error}"))
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn open_system_url(url: &str) -> Result<(), String> {
-    Command::new("xdg-open")
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open the link in your default browser: {error}"))
-}
-
-#[cfg(not(any(windows, unix)))]
+#[cfg(not(windows))]
 fn open_system_url(_url: &str) -> Result<(), String> {
-    Err("Opening external links is not supported on this platform.".to_string())
+    Err("Opening external links is supported only by the Windows desktop shell.".to_string())
 }
 
 #[tauri::command]
