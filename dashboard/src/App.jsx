@@ -1693,7 +1693,7 @@ function App() {
                     <h2 className="font-medium">How highlights work</h2>
                   </div>
                   <ol className="space-y-2 text-sm text-muted leading-relaxed list-decimal pl-5">
-                    <li>Connect the Twitch or Google account that owns the stream.</li>
+                    <li>Connect the Twitch or Google account that has access to the stream’s live chat.</li>
                     <li>Paste that stream’s Twitch channel or YouTube live/video URL. Start chat monitoring and rolling recording for the same stream.</li>
                     <li>Choose trigger phrases and chat-activity thresholds. Matching reactions create candidates while the corresponding buffer is recording.</li>
                     <li>Review each completed candidate, then approve, reject, delete, or download its MPEG-TS file.</li>
