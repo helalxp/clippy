@@ -263,11 +263,13 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
               ) : (
                 <button type="button" disabled={connectionsLoading || connections === null || !authorizationAvailable || busy}
                   onClick={() => connectProvider(provider.id)}
-                  title={connections === null
-                    ? 'Could not check saved provider connection status. Use Retry below.'
-                    : !authorizationAvailable
-                      ? `${provider.name} sign-in is not configured or secure storage is unavailable.`
-                      : undefined}
+                  title={connectionsLoading
+                    ? 'Checking saved provider connection status.'
+                    : connections === null
+                      ? 'Could not check saved provider connection status. Use Retry below.'
+                      : !authorizationAvailable
+                        ? `${provider.name} sign-in is not configured or secure storage is unavailable.`
+                        : undefined}
                   className="mt-4 w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                   {busy && busyProvider === provider.id ? <Loader2 size={15} className="animate-spin" /> : null}
                   {provider.action}
