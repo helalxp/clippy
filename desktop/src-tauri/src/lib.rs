@@ -255,9 +255,11 @@ fn move_data_directory_blocking(
 }
 
 
-#[tauri::command]
-fn open_external_url(url: String) -> Result<(), String> {
-    let url = url.trim();
+fn validate_and_open_external_url(
+    raw_url: &str,
+    open: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let url = raw_url.trim();
     if url.len() > 2048 || url.chars().any(|ch| ch.is_control()) {
         return Err("The external link is invalid.".to_string());
     }
@@ -265,12 +267,135 @@ fn open_external_url(url: String) -> Result<(), String> {
         return Err("Only HTTP, HTTPS, and mail links can be opened externally.".to_string());
     }
 
-    // Pass the URL as a process argument, never through cmd.exe or a shell.
-    Command::new("explorer.exe")
+    open(url)
+}
+
+#[cfg(windows)]
+fn open_system_url(url: &str) -> Result<(), String> {
+    use std::ffi::{c_void, OsStr};
+    use std::os::windows::ffi::OsStrExt;
+
+    const SW_SHOWNORMAL: i32 = 1;
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteW(
+            window: *mut c_void,
+            operation: *const u16,
+            file: *const u16,
+            parameters: *const u16,
+            directory: *const u16,
+            show_command: i32,
+        ) -> *mut c_void;
+    }
+
+    let operation: Vec<u16> = OsStr::new("open")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let target: Vec<u16> = OsStr::new(url)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // ShellExecuteW delegates URL handling to Windows' registered protocol
+    // handler, which opens the user's default browser for HTTP(S) links.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if (result as isize) > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "Windows could not open the external link (ShellExecuteW error {}).",
+            result as isize
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_system_url(url: &str) -> Result<(), String> {
+    Command::new("open")
         .arg(url)
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("Could not open the link in your default browser: {error}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_system_url(url: &str) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Could not open the link in your default browser: {error}"))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn open_system_url(_url: &str) -> Result<(), String> {
+    Err("Opening external links is not supported on this platform.".to_string())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    validate_and_open_external_url(&url, open_system_url)
+}
+
+#[cfg(test)]
+mod external_url_tests {
+    use super::validate_and_open_external_url;
+
+    #[test]
+    fn opens_validated_https_url_through_system_handler() {
+        let expected = "https://accounts.google.com/o/oauth2/v2/auth?client_id=test";
+        let mut opened = None;
+
+        validate_and_open_external_url(
+            &format!("  {expected}  "),
+            |url| {
+                opened = Some(url.to_string());
+                Ok(())
+            },
+        )
+        .expect("valid HTTPS URL should be handed to the system handler");
+
+        assert_eq!(opened.as_deref(), Some(expected));
+    }
+
+    #[test]
+    fn rejects_unsupported_or_malformed_urls_before_opening() {
+        for url in [
+            "file:///C:/Users/example/Documents",
+            "javascript:alert(1)",
+            "https://accounts.google.com/\nauth",
+        ] {
+            let mut called = false;
+            let result = validate_and_open_external_url(url, |_| {
+                called = true;
+                Ok(())
+            });
+
+            assert!(result.is_err(), "unexpectedly accepted {url:?}");
+            assert!(!called, "system handler was called for {url:?}");
+        }
+    }
+
+    #[test]
+    fn propagates_system_handler_failures() {
+        let result = validate_and_open_external_url("https://example.com", |_| {
+            Err("system handler unavailable".to_string())
+        });
+
+        assert_eq!(result.unwrap_err(), "system handler unavailable");
+    }
 }
 
 #[derive(serde::Serialize)]
