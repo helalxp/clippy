@@ -48,6 +48,28 @@ def test_capture_session_uses_unique_directory_and_settings_snapshot(tmp_path):
     assert Path(made[0].config.output_dir).parent == tmp_path
 
 
+def test_repeated_capture_start_for_same_stream_reuses_the_active_session(tmp_path):
+    made = []
+
+    def factory(url, config):
+        capture = FakeCapture(url, config)
+        made.append(capture)
+        return capture
+
+    manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path)
+    first = manager.start("https://www.twitch.tv/example")
+    second = manager.start(
+        "https://m.twitch.tv/EXAMPLE",
+        CaptureSettings(quality="720p"),
+    )
+
+    assert second["session_id"] == first["session_id"]
+    assert second["quality"] == "best"
+    assert len(made) == 1
+    assert len(manager.list()) == 1
+    assert asyncio.run(manager.stop(first["session_id"])) is True
+
+
 def test_capture_session_rejects_unsupported_url(tmp_path):
     manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
     with pytest.raises(ValueError):

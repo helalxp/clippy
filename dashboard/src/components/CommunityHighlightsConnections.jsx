@@ -38,33 +38,71 @@ async function openAuthorizationUrl(url, pendingWindow = null) {
   navigateAuthorizationWindow(opened, url);
 }
 
-export default function CommunityHighlightsConnections({ compact = false }) {
+export default function CommunityHighlightsConnections({ compact = false, onConnectionsChange }) {
   const [connections, setConnections] = useState(null);
+  const [connectionsLoading, setConnectionsLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [flow, setFlow] = useState(null);
   const [flowMessage, setFlowMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [busyProvider, setBusyProvider] = useState('');
   const pollTimer = useRef(null);
   const activeFlow = useRef(null);
 
   const refreshConnections = async () => {
-    const data = await apiJson('/api/community-highlights/connections');
-    setConnections(data?.providers || {});
+    setConnectionsLoading(true);
+    try {
+      const data = await apiJson('/api/community-highlights/connections');
+      const providers = data?.providers || {};
+      setConnections(providers);
+      onConnectionsChange?.(providers);
+      return providers;
+    } catch (requestError) {
+      setConnections(null);
+      onConnectionsChange?.(null);
+      throw requestError;
+    } finally {
+      setConnectionsLoading(false);
+    }
+  };
+
+  const retryConnections = async () => {
+    setError('');
+    try {
+      await refreshConnections();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not load provider connection status.');
+    }
   };
 
   useEffect(() => {
     let active = true;
+    // Clear any status retained by the parent while this tab was unmounted.
+    // The monitor must wait for a fresh backend check before enabling starts.
+    onConnectionsChange?.(undefined);
     apiJson('/api/community-highlights/connections')
-      .then((data) => { if (active) setConnections(data?.providers || {}); })
+      .then((data) => {
+        if (active) {
+          const providers = data?.providers || {};
+          setConnections(providers);
+          setConnectionsLoading(false);
+          onConnectionsChange?.(providers);
+        }
+      })
       .catch((requestError) => {
-        if (active) setError(requestError?.detail || 'Could not load provider connection status.');
+        if (active) {
+          setConnections(null);
+          setConnectionsLoading(false);
+          onConnectionsChange?.(null);
+          setError(requestError?.detail || 'Could not load provider connection status.');
+        }
       });
     return () => {
       active = false;
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
-  }, []);
+  }, [onConnectionsChange]);
 
   const stopPolling = () => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -82,12 +120,14 @@ export default function CommunityHighlightsConnections({ compact = false }) {
       activeFlow.current = null;
       setFlow(null);
       setBusy(false);
+      setBusyProvider('');
       if (result.status === 'connected') await refreshConnections();
       else setError(result.message || 'Provider sign-in did not complete.');
     } catch (requestError) {
       activeFlow.current = null;
       setFlow(null);
       setBusy(false);
+      setBusyProvider('');
       setError(requestError?.detail || 'Could not check provider authorization status.');
     }
   };
@@ -97,6 +137,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
     setError('');
     setNotice('');
     setBusy(true);
+    setBusyProvider(provider);
     setFlowMessage(`Starting secure ${provider === 'twitch' ? 'Twitch' : 'Google'} sign-in…`);
     try {
       // This runs synchronously in the click handler, before the async API call,
@@ -120,6 +161,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
         } catch (_) { /* server-side expiry also clears abandoned flows */ }
       }
       setBusy(false);
+      setBusyProvider('');
       setFlow(null);
       setError(requestError?.detail || requestError?.message || 'Could not start provider sign-in.');
     }
@@ -141,6 +183,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
     activeFlow.current = null;
     setFlow(null);
     setBusy(false);
+    setBusyProvider('');
     setFlowMessage('');
     if (flowId) {
       try {
@@ -156,6 +199,7 @@ export default function CommunityHighlightsConnections({ compact = false }) {
     setError('');
     setNotice('');
     setBusy(true);
+    setBusyProvider(provider);
     try {
       const result = await apiJson(`/api/community-highlights/connections/${provider}`, { method: 'DELETE' });
       await refreshConnections();
@@ -166,11 +210,12 @@ export default function CommunityHighlightsConnections({ compact = false }) {
       setError(requestError?.detail || `Could not disconnect ${provider}.`);
     } finally {
       setBusy(false);
+      setBusyProvider('');
     }
   };
 
   return (
-    <section className={compact ? 'card p-4 sm:p-6 mb-6' : 'card p-5 sm:p-7'}>
+    <section id={compact ? undefined : 'community-highlights-connections'} className={compact ? 'card p-4 sm:p-6 mb-6' : 'card p-5 sm:p-7'}>
       <div className="flex items-start gap-3 mb-5">
         <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center shrink-0 text-brass">
           <Activity size={19} />
@@ -200,14 +245,17 @@ export default function CommunityHighlightsConnections({ compact = false }) {
                   <span className="font-medium text-ink">{provider.name}</span>
                 </div>
                 <span className={connected ? 'badge-ok shrink-0' : 'readout shrink-0'}>
-                  {connected ? 'Connected' : state?.status === 'storage_unavailable' ? 'Unavailable' : 'Not connected'}
+                  {connectionsLoading ? 'Checking…' : connections === null ? 'Status unavailable' : connected ? 'Connected' : state?.status === 'storage_unavailable' ? 'Unavailable' : 'Not connected'}
                 </span>
               </div>
               <p className="text-xs text-muted leading-relaxed flex-1">{provider.description}</p>
               {connected ? (
                 <button type="button" disabled={busy} onClick={() => disconnectProvider(provider.id)}
                   className="mt-4 w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 disabled:opacity-50 flex items-center justify-center gap-2">
-                  <Unplug size={15} /> Disconnect {provider.name}
+                  {busy && busyProvider === provider.id
+                    ? <Loader2 size={15} className="animate-spin" />
+                    : <Unplug size={15} />}
+                  {busy && busyProvider === provider.id ? `Disconnecting ${provider.name}…` : `Disconnect ${provider.name}`}
                 </button>
               ) : flow?.provider === provider.id ? (
                 <div className="mt-4 space-y-2">
@@ -219,17 +267,27 @@ export default function CommunityHighlightsConnections({ compact = false }) {
                     className="w-full rounded-input border border-rule px-4 py-2 text-xs text-muted hover:text-ink">Cancel sign-in</button>
                 </div>
               ) : (
-                <button type="button" disabled={!authorizationAvailable || busy}
+                <button type="button" disabled={connectionsLoading || connections === null || !authorizationAvailable || busy}
                   onClick={() => connectProvider(provider.id)}
-                  title={!authorizationAvailable ? `${provider.name} sign-in is not configured or secure storage is unavailable.` : undefined}
+                  title={connectionsLoading
+                    ? 'Checking saved provider connection status.'
+                    : connections === null
+                      ? 'Could not check saved provider connection status. Use Retry below.'
+                      : !authorizationAvailable
+                        ? `${provider.name} sign-in is not configured or secure storage is unavailable.`
+                        : undefined}
                   className="mt-4 w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                  {busy ? <Loader2 size={15} className="animate-spin" /> : null}
+                  {busy && busyProvider === provider.id ? <Loader2 size={15} className="animate-spin" /> : null}
                   {provider.action}
                 </button>
               )}
               <p className="mt-2 text-[11px] text-muted/80">
                 {flow?.provider === provider.id ? flowMessage
-                  : state?.status === 'storage_unavailable'
+                  : connectionsLoading
+                    ? 'Checking saved connection status…'
+                    : connections === null
+                      ? 'Could not check saved connections. Use Retry below.'
+                      : state?.status === 'storage_unavailable'
                     ? 'Windows Credential Manager is available only in the packaged Windows app.'
                     : state?.status === 'credential_error'
                       ? 'Saved credentials need attention. Disconnect and sign in again.'
@@ -247,7 +305,13 @@ export default function CommunityHighlightsConnections({ compact = false }) {
       {error && (
         <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
-          <span>{error}</span>
+          <span className="flex-1">{error}</span>
+          {connections === null && (
+            <button type="button" onClick={retryConnections} disabled={connectionsLoading}
+              className="shrink-0 underline underline-offset-2 disabled:opacity-50">
+              {connectionsLoading ? 'Checking…' : 'Retry'}
+            </button>
+          )}
         </div>
       )}
       {notice && (

@@ -134,21 +134,36 @@ class CaptureSessionManager:
     ) -> dict[str, Any]:
         reference = parse_stream_url(stream_url)
         settings = settings or CaptureSettings()
-        session_id = secrets.token_urlsafe(18)
-        output_dir = (self._output_root / session_id).resolve()
-        config = settings.snapshot(output_dir)
-        capture = self._capture_factory(stream_url, config)
-        session = CaptureSession(
-            session_id=session_id,
-            provider=reference.provider,
-            stream_id=reference.stream_id,
-            config=config,
-            capture=capture,
-        )
         with self._lock:
             self._prune_finished_locked()
+            # A repeated start for the same provider stream is idempotent. This
+            # prevents double-clicks/retries from spawning duplicate FFmpeg
+            # workers for one live stream.
+            existing = next(
+                (
+                    session for session in self._sessions.values()
+                    if session.provider == reference.provider
+                    and session.stream_id == reference.stream_id
+                    and session.status not in {"stopped", "ended", "error"}
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing.snapshot()
             if len(self._sessions) >= self._max_sessions:
                 raise ValueError(f"Clippy can record up to {self._max_sessions} live streams at a time.")
+
+            session_id = secrets.token_urlsafe(18)
+            output_dir = (self._output_root / session_id).resolve()
+            config = settings.snapshot(output_dir)
+            capture = self._capture_factory(stream_url, config)
+            session = CaptureSession(
+                session_id=session_id,
+                provider=reference.provider,
+                stream_id=reference.stream_id,
+                config=config,
+                capture=capture,
+            )
             self._sessions[session_id] = session
             worker = threading.Thread(
                 target=self._run,
@@ -162,7 +177,7 @@ class CaptureSessionManager:
             except Exception:
                 self._sessions.pop(session_id, None)
                 raise
-        return session.snapshot()
+            return session.snapshot()
 
     def _run(self, session: CaptureSession) -> None:
         try:
