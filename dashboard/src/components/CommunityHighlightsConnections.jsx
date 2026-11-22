@@ -66,6 +66,15 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     }
   };
 
+  const retryConnections = async () => {
+    setError('');
+    try {
+      await refreshConnections();
+    } catch (requestError) {
+      setError(requestError?.detail || 'Could not load provider connection status.');
+    }
+  };
+
   useEffect(() => {
     let active = true;
     apiJson('/api/community-highlights/connections')
@@ -280,7 +289,13 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
       {error && (
         <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
           <AlertCircle size={14} className="shrink-0 mt-0.5" />
-          <span>{error}</span>
+          <span className="flex-1">{error}</span>
+          {connections === null && (
+            <button type="button" onClick={retryConnections} disabled={connectionsLoading}
+              className="shrink-0 underline underline-offset-2 disabled:opacity-50">
+              {connectionsLoading ? 'Checking…' : 'Retry'}
+            </button>
+          )}
         </div>
       )}
       {notice && (
