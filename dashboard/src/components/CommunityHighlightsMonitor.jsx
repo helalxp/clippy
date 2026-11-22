@@ -323,7 +323,14 @@ export default function CommunityHighlightsMonitor({ connections }) {
           {matchingCaptureSession ? 'Buffer already recording' : startingAction === 'capture' ? 'Starting…' : 'Record rolling buffer'}
         </button>
       </div>
-      <p role="status" className="text-[11px] text-muted mt-2 leading-relaxed">{connectionGuidance}</p>
+      <p
+        role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected)) ? 'alert' : 'status'}
+        className={`mt-3 text-xs leading-relaxed ${streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected))
+          ? 'rounded-input border border-rule bg-paper2 px-3 py-2 text-warn'
+          : 'text-muted'}`}
+      >
+        {connectionGuidance}
+      </p>
       <p className="text-[11px] text-muted mt-2">Capture settings apply to new rolling buffers. Keep the buffer longer than your combined pre/post-trigger window.</p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           {[
