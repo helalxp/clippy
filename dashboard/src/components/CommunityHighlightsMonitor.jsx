@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
-import { parseCommunityHighlightsStreamUrl } from '../lib/communityHighlights';
+import {
+  isCommunityHighlightsProviderConnected,
+  parseCommunityHighlightsStreamUrl,
+} from '../lib/communityHighlights';
 
 const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error']);
 
@@ -30,7 +33,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
   const streamReference = parseCommunityHighlightsStreamUrl(streamUrl);
   const providerConnection = streamReference ? connections?.[streamReference.provider] : null;
   const providerName = streamReference?.provider === 'twitch' ? 'Twitch' : 'YouTube';
-  const providerConnected = providerConnection?.connected === true;
+  const providerConnected = isCommunityHighlightsProviderConnected(streamReference, connections);
   const matchingChatSession = streamReference && sessions.find((session) => (
     session.provider === streamReference.provider
     && session.stream_id === streamReference.streamId
