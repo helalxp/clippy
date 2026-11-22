@@ -3,6 +3,8 @@ import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } 
 import { apiFetch, apiJson } from '../lib/api';
 import { parseCommunityHighlightsStreamUrl } from '../lib/communityHighlights';
 
+const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error']);
+
 const statusLabel = (status) => ({
   connecting: 'Connecting',
   connected: 'Monitoring chat',
@@ -56,7 +58,13 @@ export default function CommunityHighlightsMonitor({ connections }) {
                 ? `Clippy could not read the saved ${providerName} credentials. Reconnect that account in the card above.`
                 : providerConnection?.authorization_available === false
                   ? `${providerName} sign-in is not configured for this installation. Check its OAuth app registration.`
-                  : `Connect your ${providerName} account in the card above before starting this stream.`;
+                  : `Connect your ${streamReference.provider === 'youtube' ? 'Google account for YouTube' : 'Twitch account'} in the card above before starting this stream.`;
+
+  const hasActiveWork = (
+    sessions.some((session) => !TERMINAL_SESSION_STATES.has(session.status))
+    || captures.some((capture) => !TERMINAL_SESSION_STATES.has(capture.status))
+    || candidates.some((candidate) => candidate.status === 'capturing')
+  );
 
   const refreshSessions = async () => {
     const [chatResult, captureResult, candidateResult] = await Promise.all([
@@ -70,6 +78,10 @@ export default function CommunityHighlightsMonitor({ connections }) {
   };
 
   useEffect(() => {
+    // No readable provider status means the protected feature API cannot be
+    // used. Avoid hammering it every three seconds in an unavailable state.
+    if (!connections) return undefined;
+
     let active = true;
     const refresh = async () => {
       try {
@@ -87,16 +99,23 @@ export default function CommunityHighlightsMonitor({ connections }) {
         if (active) setError(requestError?.detail || 'Could not load Community Highlights status.');
       }
     };
+
     refresh();
+    const interval = hasActiveWork ? setInterval(refresh, 3000) : null;
+    return () => {
+      active = false;
+      if (interval) clearInterval(interval);
+    };
+  }, [connections, hasActiveWork]);
+
+  useEffect(() => {
+    if (!connections) return undefined;
+    let active = true;
     apiJson('/api/community-highlights/triggers/settings')
       .then((settings) => { if (active) setTriggerSettings(settings); })
       .catch((requestError) => { if (active) setError(requestError?.detail || 'Could not load trigger settings.'); });
-    const interval = setInterval(refresh, 3000);
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
-  }, []);
+    return () => { active = false; };
+  }, [connections]);
 
   const startMonitoring = async () => {
     if (!streamReference || !providerConnected || connections == null) {
