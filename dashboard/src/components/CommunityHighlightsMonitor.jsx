@@ -453,7 +453,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
                   <p className="text-xs text-muted mt-1">{capture.stream_id} · {capture.segment_seconds}s segments · {capture.retention_seconds}s buffer</p>
                   {capture.error && <p className="text-xs text-warn mt-1">{capture.error}</p>}
                 </div>
-                <div className="flex gap-2 shrink-0">
+                <div className="flex flex-wrap justify-end gap-2 max-w-full">
                   <button type="button" onClick={() => triggerNow(capture.session_id)}
                     disabled={capture.status !== 'recording' || !!sessionActionBusy}
                     className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
@@ -508,7 +508,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
         ) : (
           <div className="space-y-2">
             {candidates.map((candidate) => (
-              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3 flex items-center justify-between gap-3">
+              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
@@ -541,6 +541,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
                   <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
                     disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing'}
                     title="Delete candidate and local file"
+                    aria-label="Delete candidate"
                     className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40">
                     <Trash2 size={13} />
                   </button>
