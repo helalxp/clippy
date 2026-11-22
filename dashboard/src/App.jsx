@@ -370,6 +370,9 @@ function App() {
   });
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
+  // Community Highlights actions are gated by the connected provider matching
+  // the entered stream URL, not by the separate Clippy cloud-account session.
+  const [communityProviderConnections, setCommunityProviderConnections] = useState(null);
   // Mobile only: the full nav lives in a drawer behind the header's menu button.
   const [navOpen, setNavOpen] = useState(false);
   // Reopened-project state (paid mode): per-clip {index, server_file, active_layers}
@@ -1679,22 +1682,23 @@ function App() {
                   <p className="eyebrow flex items-center gap-2"><MessageCircle size={12} /> 12 · COMMUNITY HIGHLIGHTS</p>
                   <h1 className="font-display lowercase text-3xl md:text-4xl text-ink">Community Highlights</h1>
                   <p className="text-sm sm:text-base text-muted leading-relaxed max-w-2xl">
-                    Turn the moments your live chat reacts to into clips. Connect your streaming account, then monitor a live chat. Recording and highlight capture are still in development.
+                    Turn live-chat reactions into downloadable highlight clips. Connect the Twitch or Google account for the stream, then start chat monitoring and rolling recording together. Highlights can be reviewed and downloaded as .ts files; trimming and MP4 export are not available yet.
                   </p>
                 </div>
-                <CommunityHighlightsConnections />
-                <CommunityHighlightsMonitor />
+                <CommunityHighlightsConnections onConnectionsChange={setCommunityProviderConnections} />
+                <CommunityHighlightsMonitor connections={communityProviderConnections} />
                 <div className="rounded-card border border-rule bg-paper2 p-5 sm:p-6">
                   <div className="flex items-center gap-2 mb-2 text-ink2">
                     <Activity size={16} className="text-brass" />
-                    <h2 className="font-medium">How it will work</h2>
+                    <h2 className="font-medium">How highlights work</h2>
                   </div>
                   <ol className="space-y-2 text-sm text-muted leading-relaxed list-decimal pl-5">
-                    <li>Paste a Twitch or YouTube live stream link.</li>
-                    <li>Choose the chat reactions and phrases that should trigger a highlight.</li>
-                    <li>Clippy keeps a rolling footage buffer and captures the moments around each trigger.</li>
-                    <li>Review, trim, and approve the highlights, or enable automatic processing.</li>
+                    <li>Connect the Twitch or Google account that owns the stream.</li>
+                    <li>Paste that stream’s Twitch channel or YouTube live/video URL. Start chat monitoring and rolling recording for the same stream.</li>
+                    <li>Choose trigger phrases and chat-activity thresholds. Matching reactions create candidates while the corresponding buffer is recording.</li>
+                    <li>Review each completed candidate, then approve, reject, delete, or download its MPEG-TS file.</li>
                   </ol>
+                  <p className="text-xs text-muted mt-3">Fine trimming and MP4 export are not available yet.</p>
                 </div>
               </div>
             </div>
