@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
+import { parseCommunityHighlightsStreamUrl } from '../lib/communityHighlights';
 
 const statusLabel = (status) => ({
   connecting: 'Connecting',
@@ -11,7 +12,7 @@ const statusLabel = (status) => ({
   stopped: 'Stopped',
 }[status] || status || 'Unknown');
 
-export default function CommunityHighlightsMonitor() {
+export default function CommunityHighlightsMonitor({ connections }) {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
@@ -20,8 +21,42 @@ export default function CommunityHighlightsMonitor() {
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [startingAction, setStartingAction] = useState('');
+  const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
+
+  const streamReference = parseCommunityHighlightsStreamUrl(streamUrl);
+  const providerConnection = streamReference ? connections?.[streamReference.provider] : null;
+  const providerName = streamReference?.provider === 'twitch' ? 'Twitch' : 'YouTube';
+  const providerConnected = providerConnection?.connected === true;
+  const matchingChatSession = streamReference && sessions.find((session) => (
+    session.provider === streamReference.provider
+    && session.stream_id === streamReference.streamId
+    && !['stopped', 'ended', 'error'].includes(session.status)
+  ));
+  const matchingCaptureSession = streamReference && captures.find((capture) => (
+    capture.provider === streamReference.provider
+    && capture.stream_id === streamReference.streamId
+    && !['stopped', 'ended', 'error'].includes(capture.status)
+  ));
+  const busy = startingAction !== '';
+  const connectionGuidance = !streamUrl.trim()
+    ? 'Paste a Twitch channel or YouTube live/video URL. The matching provider account must be connected before you can start.'
+    : !streamReference
+      ? 'That link is not a supported Twitch channel or YouTube live/video URL.'
+      : connections === undefined
+        ? 'Checking saved streaming-account connections…'
+        : connections === null
+          ? 'Clippy could not verify the provider connection. Check the account-card error above; starting stays disabled until the status can be checked.'
+          : providerConnected
+            ? `${providerName} is connected. Start chat monitoring and rolling recording for this same stream.`
+            : providerConnection?.status === 'storage_unavailable'
+              ? 'Clippy cannot access Windows Credential Manager. Use the packaged Windows desktop app to connect a streaming account.'
+              : providerConnection?.status === 'credential_error'
+                ? `Clippy could not read the saved ${providerName} credentials. Reconnect that account in the card above.`
+                : providerConnection?.authorization_available === false
+                  ? `${providerName} sign-in is not configured for this installation. Check its OAuth app registration.`
+                  : `Connect your ${providerName} account in the card above before starting this stream.`;
 
   const refreshSessions = async () => {
     const [chatResult, captureResult, candidateResult] = await Promise.all([
@@ -64,8 +99,17 @@ export default function CommunityHighlightsMonitor() {
   }, []);
 
   const startMonitoring = async () => {
+    if (!streamReference || !providerConnected || connections == null) {
+      setError(connectionGuidance);
+      return;
+    }
+    if (matchingChatSession) {
+      setError(`Chat monitoring is already active for this ${providerName} stream.`);
+      return;
+    }
+
     setError('');
-    setBusy(true);
+    setStartingAction('chat');
     try {
       await apiJson('/api/community-highlights/sessions', {
         method: 'POST',
@@ -76,13 +120,22 @@ export default function CommunityHighlightsMonitor() {
     } catch (requestError) {
       setError(requestError?.detail || 'Could not start chat monitoring.');
     } finally {
-      setBusy(false);
+      setStartingAction('');
     }
   };
 
   const startCapture = async () => {
+    if (!streamReference || !providerConnected || connections == null) {
+      setError(connectionGuidance);
+      return;
+    }
+    if (matchingCaptureSession) {
+      setError(`A rolling buffer is already running for this ${providerName} stream.`);
+      return;
+    }
+
     setError('');
-    setBusy(true);
+    setStartingAction('capture');
     try {
       await apiJson('/api/community-highlights/captures', {
         method: 'POST',
@@ -93,11 +146,13 @@ export default function CommunityHighlightsMonitor() {
     } catch (requestError) {
       setError(requestError?.detail || 'Could not start rolling capture.');
     } finally {
-      setBusy(false);
+      setStartingAction('');
     }
   };
 
   const stopCapture = async (sessionId) => {
+    if (sessionActionBusy) return;
+    setSessionActionBusy(`capture-stop:${sessionId}`);
     setError('');
     try {
       await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}`, {
@@ -106,6 +161,8 @@ export default function CommunityHighlightsMonitor() {
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not stop rolling capture.');
+    } finally {
+      setSessionActionBusy('');
     }
   };
 
@@ -189,6 +246,8 @@ export default function CommunityHighlightsMonitor() {
   };
 
   const triggerNow = async (sessionId) => {
+    if (sessionActionBusy) return;
+    setSessionActionBusy(`capture-trigger:${sessionId}`);
     setError('');
     try {
       await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}/trigger`, {
@@ -199,10 +258,14 @@ export default function CommunityHighlightsMonitor() {
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not create a highlight candidate.');
+    } finally {
+      setSessionActionBusy('');
     }
   };
 
   const stopMonitoring = async (sessionId) => {
+    if (sessionActionBusy) return;
+    setSessionActionBusy(`chat-stop:${sessionId}`);
     setError('');
     try {
       await apiJson(`/api/community-highlights/sessions/${encodeURIComponent(sessionId)}`, {
@@ -211,6 +274,8 @@ export default function CommunityHighlightsMonitor() {
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not stop chat monitoring.');
+    } finally {
+      setSessionActionBusy('');
     }
   };
 
@@ -239,23 +304,26 @@ export default function CommunityHighlightsMonitor() {
         />
         <button
           type="button"
-          disabled={!streamUrl.trim() || busy}
+          disabled={!streamReference || !providerConnected || busy || !!matchingChatSession}
           onClick={startMonitoring}
-          className="rounded-input bg-brass text-white px-5 py-2.5 text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          title={!providerConnected ? connectionGuidance : matchingChatSession ? 'Chat monitoring is already active for this stream.' : undefined}
+          className="rounded-input bg-brass text-white px-5 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
-          {busy ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
-          Monitor chat
+          {startingAction === 'chat' ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
+          {matchingChatSession ? 'Chat already active' : startingAction === 'chat' ? 'Starting…' : 'Monitor chat'}
         </button>
         <button
           type="button"
-          disabled={!streamUrl.trim() || busy}
+          disabled={!streamReference || !providerConnected || busy || !!matchingCaptureSession}
           onClick={startCapture}
-          className="rounded-input border border-rule text-ink px-5 py-2.5 text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          title={!providerConnected ? connectionGuidance : matchingCaptureSession ? 'A rolling buffer is already running for this stream.' : undefined}
+          className="rounded-input border border-rule text-ink px-5 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
-          {busy ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />}
-          Record rolling buffer
+          {startingAction === 'capture' ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />}
+          {matchingCaptureSession ? 'Buffer already recording' : startingAction === 'capture' ? 'Starting…' : 'Record rolling buffer'}
         </button>
       </div>
+      <p role="status" className="text-[11px] text-muted mt-2 leading-relaxed">{connectionGuidance}</p>
       <p className="text-[11px] text-muted mt-2">Capture settings apply to new rolling buffers. Keep the buffer longer than your combined pre/post-trigger window.</p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           {[
@@ -264,7 +332,7 @@ export default function CommunityHighlightsMonitor() {
             ['max_buffer_size_mb', 'Buffer cap (MB)', 16, 8192],
           ].map(([key, label, min, max]) => (
             <label key={key} className="text-xs text-muted">
-              <span className="block mb-1">{label}</span>
+              <span className="block mb-1">{key === 'segment_seconds' ? 'Segment length (s)' : key === 'retention_seconds' ? 'Buffer retention (s)' : label}</span>
               <input type="number" min={min} max={max} value={captureSettings[key]}
                 onChange={(event) => setCaptureSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
                 className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
@@ -272,10 +340,19 @@ export default function CommunityHighlightsMonitor() {
           ))}
           <label className="text-xs text-muted">
             <span className="block mb-1">Stream quality</span>
-            <input value={captureSettings.quality}
+            <select value={captureSettings.quality}
               onChange={(event) => setCaptureSettings((current) => ({ ...current, quality: event.target.value }))}
-              placeholder="best / 720p"
-              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink">
+              <option value="best">Best available</option>
+              <option value="1080p60">1080p60</option>
+              <option value="1080p">1080p</option>
+              <option value="720p60">720p60</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+              <option value="360p">360p</option>
+              <option value="worst">Lowest available</option>
+              <option value="audio_only">Audio only</option>
+            </select>
           </label>
         </div>
 
@@ -291,7 +368,7 @@ export default function CommunityHighlightsMonitor() {
           <div className="rounded-card border border-dashed border-rule p-5 text-center">
             <MessageCircle size={20} className="mx-auto text-muted mb-2" />
             <p className="text-sm text-ink2">No chats are being monitored.</p>
-            <p className="text-xs text-muted mt-1">Connect Twitch or Google above, then paste a live stream link.</p>
+            <p className="text-xs text-muted mt-1">Connect the account for your stream above, then paste its Twitch channel or YouTube live/video URL.</p>
           </div>
         ) : sessions.map((session) => (
           <div key={session.session_id} className="rounded-card border border-rule bg-paper2 p-4">
@@ -305,7 +382,8 @@ export default function CommunityHighlightsMonitor() {
                 {session.error && <p className="text-xs text-warn mt-2">{session.error}</p>}
               </div>
               <button type="button" onClick={() => stopMonitoring(session.session_id)}
-                className="shrink-0 rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink flex items-center gap-1.5">
+                disabled={!!sessionActionBusy}
+                className="shrink-0 rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
                 <Square size={12} /> Stop
               </button>
             </div>
@@ -331,7 +409,7 @@ export default function CommunityHighlightsMonitor() {
         ))}
       </div>
       <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-1">Rolling footage buffers</h3>
+        <h3 className="text-sm font-medium text-ink mb-1">Rolling recording buffers</h3>
         <p className="text-xs text-muted mb-3 leading-relaxed">
           Streamlink and FFmpeg keep a bounded local buffer. When chat monitoring is active for the same stream, configured phrase or chat-volume triggers protect the pre-trigger footage and collect the post-trigger window.
         </p>
@@ -351,12 +429,12 @@ export default function CommunityHighlightsMonitor() {
                 </div>
                 <div className="flex gap-2 shrink-0">
                   <button type="button" onClick={() => triggerNow(capture.session_id)}
-                    disabled={capture.status !== 'recording'}
+                    disabled={capture.status !== 'recording' || !!sessionActionBusy}
                     className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
                     Clip now
                   </button>
                   <button type="button" onClick={() => stopCapture(capture.session_id)}
-                    disabled={['stopped', 'ended', 'error'].includes(capture.status)}
+                    disabled={['stopped', 'ended', 'error'].includes(capture.status) || !!sessionActionBusy}
                     className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
                     <Square size={12} /> Stop
                   </button>
@@ -367,7 +445,7 @@ export default function CommunityHighlightsMonitor() {
         )}
       </div>
       <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-2">Chat trigger rules</h3>
+        <h3 className="text-sm font-medium text-ink mb-2">Highlight trigger rules</h3>
         <p className="text-xs text-muted mb-3">A matching phrase or a burst of chat activity creates a candidate, but only when the same stream has an active rolling capture.</p>
         <label className="block text-xs text-muted mb-1">Trigger phrases, comma-separated</label>
         <input
@@ -398,7 +476,7 @@ export default function CommunityHighlightsMonitor() {
         </button>
       </div>
       <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-3">Highlight candidates</h3>
+        <h3 className="text-sm font-medium text-ink mb-3">Review highlights</h3>
         {candidates.length === 0 ? (
           <p className="text-xs text-muted">No candidates yet. Chat reactions will appear here when both monitoring and recording are active for the same stream.</p>
         ) : (
@@ -447,7 +525,7 @@ export default function CommunityHighlightsMonitor() {
         )}
       </div>
       <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Candidates are assembled as lossless MPEG-TS files. Fine trimming, approval/rejection workflow, and MP4 delivery are the next stage.
+        Completed highlights are saved as MPEG-TS (.ts) files. You can approve, reject, delete, or download them here. Fine trimming and MP4 export are not available yet.
       </p>
     </section>
   );
