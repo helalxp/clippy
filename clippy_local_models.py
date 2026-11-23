@@ -163,7 +163,7 @@ def whisper_model_path_lock(model_path: str | Path):
         try:
             # msvcrt locks a byte range, so make sure byte zero exists first.
             if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"\\0")
+                os.write(descriptor, b"\0")
 
             if os.name == "nt":
                 import msvcrt
