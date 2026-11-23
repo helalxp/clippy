@@ -91,6 +91,70 @@ def test_catalog_selection_is_saved_but_not_reported_as_installed(tmp_path, monk
     assert models.whisper_model_argument() == "medium"
 
 
+def test_desktop_catalog_selection_requires_managed_download(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("CLIPPY_DESKTOP_MODE", "1")
+
+    selected = models.save_whisper_selection(model_size="base")
+
+    assert selected["status"] == "selected_not_downloaded"
+    with pytest.raises(FileNotFoundError, match="Download & use model"):
+        models.whisper_model_argument()
+
+
+def test_non_desktop_catalog_selection_keeps_hub_first_use_behavior(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.delenv("CLIPPY_DESKTOP_MODE", raising=False)
+
+    models.save_whisper_selection(model_size="base")
+
+    assert models.whisper_model_argument() == "base"
+
+
+def test_whisper_model_path_lock_serializes_threads(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    model_path = tmp_path / "models" / "whisper" / "base"
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    errors = []
+
+    def hold_lock():
+        try:
+            with models.whisper_model_path_lock(model_path):
+                first_entered.set()
+                if not release_first.wait(5):
+                    raise TimeoutError("test did not release first model lock")
+        except Exception as exc:
+            errors.append(exc)
+
+    def wait_for_lock():
+        try:
+            with models.whisper_model_path_lock(model_path):
+                second_entered.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=hold_lock)
+    second = threading.Thread(target=wait_for_lock)
+    first.start()
+    assert first_entered.wait(2)
+    second.start()
+    assert not second_entered.wait(0.15)
+    release_first.set()
+    assert second_entered.wait(2)
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+
+
 def test_catalog_selection_reports_installed_weights(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
