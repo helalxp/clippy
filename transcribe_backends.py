@@ -173,8 +173,13 @@ def _get_whisper_model():
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
-            _whisper_key = key
+            # The desktop downloader activates catalog models by renaming
+            # directories. Coordinate the native file open with that brief
+            # activation window across the API process and job subprocesses.
+            from clippy_local_models import whisper_model_path_lock
+            with whisper_model_path_lock(key[0]):
+                _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+                _whisper_key = key
     return _whisper_model, cfg["device"]
 
 
