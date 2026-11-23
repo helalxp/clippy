@@ -38,6 +38,13 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
+    It "repairs an older managed Python runtime without the HTTP-only bgutil patch" {
+        $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
+        $setupSource | Should -Match "getpot_bgutil_script"
+        $setupSource | Should -Match "BgUtilHTTPPTP"
+        $setupSource | Should -Match "bgutil HTTP provider must require an explicit managed base URL"
+    }
+
     It "requires the packaged bgutil HTTP server and Express dependency during setup" {
         $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
         $setupSource | Should -Match 'bgutil-provider\\server\\build\\main\.js'
