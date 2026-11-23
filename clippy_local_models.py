@@ -124,13 +124,19 @@ def validate_whisper_model_path(value: str) -> Path:
             "This folder is not a complete faster-whisper model. Missing: "
             + ", ".join(missing)
         )
-    empty = [name for name in (*required, *vocabulary_files)
+    empty = [name for name in required
              if (candidate / name).is_file() and (candidate / name).stat().st_size == 0]
     if empty:
         raise ValueError(
             "This faster-whisper model contains empty required files: "
             + ", ".join(empty)
         )
+    usable_vocabulary = [
+        name for name in vocabulary_files
+        if (candidate / name).is_file() and (candidate / name).stat().st_size > 0
+    ]
+    if not usable_vocabulary:
+        raise ValueError("This faster-whisper model contains no non-empty vocabulary file.")
     return candidate
 
 
