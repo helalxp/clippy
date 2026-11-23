@@ -52,6 +52,12 @@ Describe "Assembled Clippy application payload contract" {
         $bootstrapSource | Should -Match 'must require an explicit managed base URL'
     }
 
+    It "pins the upstream bgutil server source commit" {
+        $prepareSource = Get-Content (Join-Path $PSScriptRoot "../prepare-payload.ps1") -Raw
+        $prepareSource | Should -Match '\$bgutilCommit = "7511309af023b09788dc8f2efc96cc3671291e6c"'
+        $prepareSource | Should -Match 'git -C \$bgutilSource rev-parse HEAD'
+    }
+
     It "requires the packaged bgutil HTTP server and Express dependency during setup" {
         $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
         $setupSource | Should -Match 'bgutil-provider\\server\\build\\main\.js'
