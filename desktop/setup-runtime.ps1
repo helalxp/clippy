@@ -344,7 +344,7 @@ $ScratchCandidates = @([IO.Path]::GetTempPath()) + @([IO.DriveInfo]::GetDrives()
     Where-Object { $_.IsReady -and $_.DriveType -eq [IO.DriveType]::Fixed } |
     Sort-Object AvailableFreeSpace -Descending | ForEach-Object { $_.RootDirectory.FullName })
 foreach ($componentPath in @($PythonDir, $NodeDir, $FfmpegDir, $BrowserDir)) { Restore-ClippyComponent $componentPath }
-foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "runtime-manifest-state.ps1", "VERSION", "bgutil-provider\server\build\generate_once.js")) {
+foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "runtime-manifest-state.ps1", "VERSION", "bgutil-provider\server\build\main.js", "bgutil-provider\server\node_modules\express\package.json")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
     }
