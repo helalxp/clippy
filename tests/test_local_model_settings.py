@@ -383,6 +383,65 @@ def test_existing_model_is_replaced_only_after_verified_staged_download(
     assert not list(destination.parent.glob(".small.staging-*"))
 
 
+def test_whisper_model_path_lock_serializes_processes(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    models_root = tmp_path / "models"
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
+    model_path = models_root / "whisper" / "base"
+    child_code = """
+import sys
+from clippy_local_models import whisper_model_path_lock
+with whisper_model_path_lock(sys.argv[1]):
+    print('LOCK_ACQUIRED', flush=True)
+"""
+
+    with models.whisper_model_path_lock(model_path):
+        process = subprocess.Popen(
+            [sys.executable, "-c", child_code, str(model_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "CLIPPY_MODELS_DIR": str(models_root)},
+        )
+        # A child that can acquire immediately has bypassed the OS-level lock.
+        import time
+        time.sleep(0.2)
+        assert process.poll() is None
+
+    stdout, stderr = process.communicate(timeout=5)
+    assert process.returncode == 0, stderr
+    assert "LOCK_ACQUIRED" in stdout
+
+
+def test_directory_validation_failure_restores_previous_model(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    (destination / "model.bin").write_bytes(b"previous-complete-model")
+    staging = make_model(destination.parent / ".small.staging-invalid")
+    (staging / "model.bin").write_bytes(b"new-model")
+    real_validate = models.validate_whisper_model_path
+
+    def reject_activated_directory(value):
+        if Path(value).resolve() == destination.resolve():
+            raise ValueError("simulated final directory validation failure")
+        return real_validate(value)
+
+    monkeypatch.setattr(models, "validate_whisper_model_path", reject_activated_directory)
+
+    with pytest.raises(ValueError, match="simulated final directory validation failure"):
+        models._promote_staged_whisper_model(staging, destination)
+
+    assert (destination / "model.bin").read_bytes() == b"previous-complete-model"
+    assert not list(destination.parent.glob(".small.failed-*"))
+    assert not list(destination.parent.glob(".small.previous-*"))
+
+
 def test_failed_directory_promotion_restores_previous_model(
     tmp_path, monkeypatch
 ):
