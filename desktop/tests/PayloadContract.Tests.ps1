@@ -55,7 +55,7 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
-    It "packages a loopback-only bgutil HTTP server instead of the per-request script entry point" {
+    It "binds the packaged bgutil HTTP server to loopback only" {
         $entry = Get-PayloadZipEntry "bgutil-provider/server/build/main.js"
         $entry | Should -Not -BeNullOrEmpty
         $stream = $entry.Open()
@@ -69,7 +69,6 @@ Describe "Assembled Clippy application payload contract" {
         $serverSource | Should -Match '127\.0\.0\.1'
         $serverSource | Should -Not -Match '0\.0\.0\.0'
         $serverSource | Should -Not -Match 'host:\s*"::"'
-        Get-PayloadZipEntry "bgutil-provider/server/build/generate_once.js" | Should -Not -BeNullOrEmpty -Because "the pinned server package may retain the unused one-shot script file"
         Get-PayloadZipEntry "bgutil-provider/server/node_modules/express/package.json" | Should -Not -BeNullOrEmpty
     }
 
