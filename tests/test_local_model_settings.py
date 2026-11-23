@@ -290,6 +290,7 @@ def test_failed_native_model_load_preserves_previous_model_and_selection(
     monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
     destination = make_model(tmp_path / "models" / "whisper" / "small")
+    models.save_whisper_selection(model_size="small")
     original_model = (destination / "model.bin").read_bytes()
     events = {}
 
@@ -308,6 +309,54 @@ def test_failed_native_model_load_preserves_previous_model_and_selection(
     assert (destination / "model.bin").read_bytes() == original_model
     assert not list(destination.parent.glob(".small.staging-*"))
     assert models.get_whisper_selection()["model_path"] == str(destination.resolve())
+
+
+def test_existing_model_is_replaced_only_after_verified_staged_download(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    (destination / "model.bin").write_bytes(b"previous-complete-model")
+    download_revision = models.queue_whisper_download("download-replace", "small")
+    _install_fake_snapshot_download(monkeypatch)
+
+    models.start_whisper_download("download-replace", "small", download_revision)
+
+    task = models.list_download_tasks()["download-replace"]
+    assert task["status"] == "complete"
+    assert (destination / "model.bin").read_bytes() == b"model"
+    assert not list(destination.parent.glob(".small.previous-*"))
+    assert not list(destination.parent.glob(".small.staging-*"))
+
+
+def test_failed_directory_promotion_restores_previous_model(
+    tmp_path, monkeypatch
+):
+    import os
+
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    (destination / "model.bin").write_bytes(b"previous-complete-model")
+    staging = make_model(destination.parent / ".small.staging-test")
+    (staging / "model.bin").write_bytes(b"new-model")
+    real_replace = os.replace
+    replace_calls = {"count": 0}
+
+    def fail_second_rename(source, target):
+        replace_calls["count"] += 1
+        if replace_calls["count"] == 2:
+            raise OSError("simulated activation rename failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(models.os, "replace", fail_second_rename)
+
+    with pytest.raises(OSError, match="simulated activation rename failure"):
+        models._promote_staged_whisper_model(staging, destination)
+
+    assert replace_calls["count"] == 3  # move old aside, fail new, restore old
+    assert (destination / "model.bin").read_bytes() == b"previous-complete-model"
+    assert staging.is_dir()
+    assert not list(destination.parent.glob(".small.previous-*"))
 
 
 def test_interrupted_download_never_leaves_a_partial_final_model(
