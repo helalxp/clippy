@@ -144,6 +144,30 @@ def test_whisper_model_path_lock_serializes_threads(tmp_path, monkeypatch):
     assert errors == []
 
 
+def test_catalog_selection_recovers_previous_model_after_interrupted_promotion(
+    tmp_path, monkeypatch
+):
+    settings = tmp_path / "settings.json"
+    models_root = tmp_path / "models"
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
+    backup = make_model(
+        models_root / "whisper" / ".small.previous-interrupted"
+    )
+    settings.write_text(
+        json.dumps({"whisper": {"model_size": "small", "model_path": None}}),
+        encoding="utf-8",
+    )
+
+    selection = models.get_whisper_selection()
+
+    destination = models_root / "whisper" / "small"
+    assert selection["installed"] is True
+    assert selection["model_path"] == str(destination.resolve())
+    assert (destination / "model.bin").read_bytes() == b"model"
+    assert not backup.exists()
+
+
 def test_catalog_selection_reports_installed_weights(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
