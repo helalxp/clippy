@@ -6,6 +6,7 @@ Node packages as a side effect of selecting a model.
 """
 from __future__ import annotations
 
+import errno
 import gc
 import json
 import os
@@ -14,6 +15,7 @@ import threading
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ WHISPER_MODELS = {
 
 _settings_lock = threading.RLock()
 _download_lock = threading.Lock()
+_model_path_thread_lock = threading.RLock()
 _download_tasks: dict[str, dict[str, Any]] = {}
 
 
@@ -133,6 +136,70 @@ def _catalog_model_dir(model_size: str) -> Path:
     return models_root() / "whisper" / model_size
 
 
+@contextmanager
+def whisper_model_path_lock(model_path: str | Path):
+    """Serialize managed-model opens and directory activation across processes.
+
+    A catalog refresh uses two directory renames on Windows because a populated
+    directory cannot be atomically replaced there. Holding this lock while a
+    transcription loads the model prevents it from observing the brief gap
+    between moving the previous directory aside and installing the verified
+    replacement. Custom model folders outside Clippy's managed model root and
+    Hugging Face model identifiers do not need this lock.
+    """
+    managed_root = (models_root() / "whisper").resolve()
+    try:
+        resolved_path = Path(str(model_path)).expanduser().resolve()
+        resolved_path.relative_to(managed_root)
+    except (OSError, RuntimeError, ValueError):
+        yield
+        return
+
+    with _model_path_thread_lock:
+        managed_root.mkdir(parents=True, exist_ok=True)
+        lock_path = managed_root / ".activation.lock"
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(str(lock_path), flags, 0o600)
+        try:
+            # msvcrt locks a byte range, so make sure byte zero exists first.
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\\0")
+
+            if os.name == "nt":
+                import msvcrt
+
+                # LK_LOCK has a built-in ten-second limit. Model loading can
+                # legitimately take longer, so retry a non-blocking lock until
+                # the current loader/activation releases it.
+                while True:
+                    try:
+                        os.lseek(descriptor, 0, os.SEEK_SET)
+                        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError as exc:
+                        if (
+                            exc.errno not in (errno.EACCES, errno.EDEADLK)
+                            and getattr(exc, "winerror", None) not in (33, 36)
+                        ):
+                            raise
+                        time.sleep(0.05)
+                try:
+                    yield
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
 def inspect_whisper_model() -> dict[str, Any]:
     """Describe the persisted selection and on-disk readiness without loading weights."""
     saved = _read_settings().get("whisper", {})
@@ -161,7 +228,8 @@ def inspect_whisper_model() -> dict[str, Any]:
     candidate = Path(str(custom_path)).expanduser() if source == "local" else _catalog_model_dir(size)
 
     try:
-        resolved = validate_whisper_model_path(str(candidate))
+        with whisper_model_path_lock(candidate):
+            resolved = validate_whisper_model_path(str(candidate))
         installed = True
         validation_error = None
         resolved_path = str(resolved)
@@ -342,39 +410,54 @@ def verify_whisper_model_load() -> dict[str, Any]:
         )
     # Verification and production transcription must load the same resolved source.
     model_path = whisper_model_argument(selection)
-    return _verify_whisper_model_directory(model_path, selection["model_size"])
+    with whisper_model_path_lock(model_path):
+        return _verify_whisper_model_directory(model_path, selection["model_size"])
 
 
 def _promote_staged_whisper_model(staging: Path, destination: Path) -> Path:
-    """Promote a fully verified model on the same volume, restoring old files on failure."""
-    backup = None
-    if destination.exists():
-        backup = destination.with_name(
-            f".{destination.name}.previous-{uuid.uuid4().hex}"
-        )
-        # Keep the previous model intact until the new directory is ready.
-        os.replace(destination, backup)
+    """Promote a verified model without exposing the Windows directory-rename gap."""
+    with whisper_model_path_lock(destination):
+        backup = None
+        if destination.exists():
+            backup = destination.with_name(
+                f".{destination.name}.previous-{uuid.uuid4().hex}"
+            )
+            # Keep the previous model intact until the new directory is ready.
+            os.replace(destination, backup)
 
-    try:
-        # staging and destination are siblings, so this is a same-volume rename.
-        os.replace(staging, destination)
-    except Exception as promotion_error:
-        if backup is not None and backup.exists() and not destination.exists():
+        failed = None
+        try:
+            # staging and destination are siblings, so this is a same-volume rename.
+            os.replace(staging, destination)
+            # Keep the previous model until the activated directory itself has
+            # passed the same structural validation as the staging directory.
+            validated = validate_whisper_model_path(str(destination))
+        except Exception as promotion_error:
             try:
-                os.replace(backup, destination)
+                if destination.exists():
+                    failed = destination.with_name(
+                        f".{destination.name}.failed-{uuid.uuid4().hex}"
+                    )
+                    os.replace(destination, failed)
+                if backup is not None and backup.exists():
+                    os.replace(backup, destination)
             except OSError as restore_error:
                 raise RuntimeError(
                     "The new Whisper model could not be activated and the previous "
                     f"model could not be restored automatically. Previous files remain at "
-                    f"{backup}. Activation error: {promotion_error}; restore error: {restore_error}"
+                    f"{backup}. Failed files, if present, remain at {failed}. "
+                    f"Activation error: {promotion_error}; restore error: {restore_error}"
                 ) from promotion_error
-        raise
 
-    if backup is not None and backup.exists():
-        # Cleanup failure must not turn a successful activation into a failed
-        # download or remove the newly activated model.
-        shutil.rmtree(backup, ignore_errors=True)
-    return validate_whisper_model_path(str(destination))
+            if failed is not None and failed.exists():
+                shutil.rmtree(failed, ignore_errors=True)
+            raise
+
+        if backup is not None and backup.exists():
+            # Cleanup failure must not turn a successful activation into a failed
+            # download or remove the newly activated model.
+            shutil.rmtree(backup, ignore_errors=True)
+        return validated
 
 
 def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
@@ -391,8 +474,18 @@ def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
             "and choose another model or update its folder path."
         )
 
-    # An undownloaded catalog choice keeps faster-whisper's normal first-use
-    # Hub/cache behavior.
+    # Self-hosted deployments retain faster-whisper's normal first-use
+    # Hub/cache behavior. The desktop app manages weights explicitly through
+    # staged downloads; do not let a job bypass that lifecycle by downloading
+    # directly into the Hugging Face cache.
+    desktop_mode = os.environ.get("CLIPPY_DESKTOP_MODE", "").strip().lower() in {
+        "1", "true", "yes"
+    }
+    if desktop_mode:
+        raise FileNotFoundError(
+            f"Whisper {selection.get('model_size') or 'small'} is selected but is not downloaded. "
+            "Open Settings > Local runtime & AI models and choose Download & use model."
+        )
     return selection.get("model_size") or "small"
 
 
