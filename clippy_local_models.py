@@ -211,10 +211,13 @@ def _restore_interrupted_whisper_promotion(destination: Path) -> bool:
 
     # If the destination is missing or structurally invalid, restore the newest
     # valid backup. A failed destination is retained for diagnosis, not deleted.
-    backups.sort(
-        key=lambda path: path.stat().st_mtime if path.exists() else 0,
-        reverse=True,
-    )
+    def backup_modified_at(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    backups.sort(key=backup_modified_at, reverse=True)
     for backup in backups:
         try:
             validate_whisper_model_path(str(backup))
