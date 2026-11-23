@@ -243,10 +243,8 @@ def _restore_interrupted_whisper_promotion(destination: Path) -> bool:
                 f"Could not restore the previous Whisper model from {backup}: {restore_error}"
             ) from restore_error
 
-        if failed_destination is not None:
-            # Keep the failed directory out of the active path, but don't
-            # delete it automatically; it can help diagnose disk corruption.
-            pass
+        # Keep failed_destination out of the active path, but retain it
+        # for diagnosis rather than deleting potentially useful evidence.
         return True
     return False
 
