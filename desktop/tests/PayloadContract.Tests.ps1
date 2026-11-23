@@ -38,6 +38,13 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
+    It "requires the packaged bgutil HTTP server and Express dependency during setup" {
+        $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
+        $setupSource | Should -Match 'bgutil-provider\\server\\build\\main\.js'
+        $setupSource | Should -Match 'bgutil-provider\\server\\node_modules\\express\\package\.json'
+        $setupSource | Should -Not -Match 'bgutil-provider\\server\\build\\generate_once\.js'
+    }
+
     It "contains every native-shell and first-run service entry point" {
         foreach ($entry in @(
             "app.py",
