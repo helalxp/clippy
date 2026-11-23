@@ -173,7 +173,12 @@ def _get_whisper_model(config=None):
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            # Coordinate native file opening with the managed downloader's
+            # directory promotion. Release immediately after loading so normal
+            # concurrent transcriptions retain their existing behavior.
+            from clippy_local_models import whisper_model_path_lock
+            with whisper_model_path_lock(key[0]):
+                _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
             _whisper_key = key
     return _whisper_model, cfg["device"]
 
@@ -189,25 +194,17 @@ def _run_whisper_once(media_path, **params):
     # being dropped underneath it.
     with gate:
         cfg = get_whisper_config()
-        if _whisper_force_cpu:
-            cfg["device"] = "cpu"
-            cfg["compute_type"] = "int8"
-        # Keep the managed model path stable from native model construction
-        # through lazy segment decoding. The downloader takes this same
-        # cross-process lock while it promotes a fully verified directory.
-        from clippy_local_models import whisper_model_path_lock
-        with whisper_model_path_lock(cfg["model_size"]):
-            model, _device = _get_whisper_model(cfg)
-            segments, info = model.transcribe(media_path, **params)
-            progress = _TranscribeProgress(getattr(info, "duration", 0))
-            materialized = []
-            for segment in segments:
-                materialized.append(segment)
-                progress.update(segment.end)
-            # VAD trims trailing silence, so the last segment can end short of
-            # the media duration — force the 100% line.
-            progress.update(progress.total)
-            return materialized, info
+        model, _device = _get_whisper_model(cfg)
+        segments, info = model.transcribe(media_path, **params)
+        progress = _TranscribeProgress(getattr(info, "duration", 0))
+        materialized = []
+        for segment in segments:
+            materialized.append(segment)
+            progress.update(segment.end)
+        # VAD trims trailing silence, so the last segment can end short of the
+        # media duration — force the 100% line.
+        progress.update(progress.total)
+        return materialized, info
 
 
 def run_whisper_transcription(media_path, **params):
