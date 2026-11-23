@@ -31,7 +31,15 @@ after interruption and must not delete user data or model files.
 Expected managed components include the embedded Python runtime and required
 Python packages, Node runtime and renderer packages, FFmpeg/FFprobe, the
 Remotion browser runtime, and compatible GPU runtime libraries when needed.
-The Windows implementation stages the application payload, persistent Remotion browser version/hash metadata, and pinned bgutil YouTube PO-token provider into the managed install layout. It extracts the app payload to `%LOCALAPPDATA%\\Clippy\\app\\current` on first launch.
+The Windows implementation stages the application payload, persistent Remotion
+browser version/hash metadata, and pinned bgutil YouTube PO-token provider into
+the managed install layout. The desktop runtime uses bgutil's persistent HTTP
+provider, supervised as a child process and bound exclusively to
+`127.0.0.1`. Its Python plugin package includes the HTTP provider but excludes
+the one-shot script provider, whose upstream discovery check can time out while
+spawning Node. The payload build fails if the pinned server's listener cannot
+be safely patched and verified as loopback-only. It extracts the app payload to
+`%LOCALAPPDATA%\\Clippy\\app\\current` on first launch.
 Python 3.12.10 and the complete pinned Python dependency set are built on
 Windows CI into separate CPU and NVIDIA/CUDA 12.8 runtime packages. Each package
 has a versioned manifest containing the complete archive size/hash and the

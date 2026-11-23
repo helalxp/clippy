@@ -38,6 +38,33 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
+    It "repairs an older managed Python runtime without the HTTP-only bgutil patch" {
+        $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
+        $setupSource | Should -Match "getpot_bgutil_script"
+        $setupSource | Should -Match "BgUtilHTTPPTP"
+        $setupSource | Should -Match "bgutil HTTP provider must require an explicit managed base URL"
+    }
+
+    It "makes the desktop runtime status reject the legacy bgutil Python provider" {
+        $bootstrapSource = Get-Content (Join-Path $PSScriptRoot "../src-tauri/src/bootstrap.rs") -Raw
+        $bootstrapSource | Should -Match 'getpot_bgutil_script'
+        $bootstrapSource | Should -Match 'BgUtilHTTPPTP'
+        $bootstrapSource | Should -Match 'must require an explicit managed base URL'
+    }
+
+    It "pins the upstream bgutil server source commit" {
+        $prepareSource = Get-Content (Join-Path $PSScriptRoot "../prepare-payload.ps1") -Raw
+        $prepareSource | Should -Match '\$bgutilCommit = "7511309af023b09788dc8f2efc96cc3671291e6c"'
+        $prepareSource | Should -Match 'git -C \$bgutilSource rev-parse HEAD'
+    }
+
+    It "requires the packaged bgutil HTTP server and Express dependency during setup" {
+        $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
+        $setupSource | Should -Match 'bgutil-provider\\server\\build\\main\.js'
+        $setupSource | Should -Match 'bgutil-provider\\server\\node_modules\\express\\package\.json'
+        $setupSource | Should -Not -Match 'bgutil-provider\\server\\build\\generate_once\.js'
+    }
+
     It "contains every native-shell and first-run service entry point" {
         foreach ($entry in @(
             "app.py",
@@ -47,10 +74,29 @@ Describe "Assembled Clippy application payload contract" {
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
             "remotion/src/index.ts",
-            "bgutil-provider/server/build/generate_once.js"
+            "bgutil-provider/server/build/main.js",
+            "bgutil-provider/server/package.json",
+            "bgutil-provider/server/node_modules/express/package.json"
         )) {
             Get-PayloadZipEntry $entry | Should -Not -BeNullOrEmpty -Because "the installed desktop shell requires $entry"
         }
+    }
+
+    It "binds the packaged bgutil HTTP server to loopback only" {
+        $entry = Get-PayloadZipEntry "bgutil-provider/server/build/main.js"
+        $entry | Should -Not -BeNullOrEmpty
+        $stream = $entry.Open()
+        try {
+            $reader = [IO.StreamReader]::new($stream)
+            try { $serverSource = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        } finally {
+            $stream.Dispose()
+        }
+
+        $serverSource | Should -Match '127\.0\.0\.1'
+        $serverSource | Should -Not -Match '0\.0\.0\.0'
+        $serverSource | Should -Not -Match 'host:\s*"::"'
+        Get-PayloadZipEntry "bgutil-provider/server/node_modules/express/package.json" | Should -Not -BeNullOrEmpty
     }
 
     It "contains the current setup contract and helpers, not a stale build" {

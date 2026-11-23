@@ -311,7 +311,11 @@ impl Bootstrap {
                 return Err("Persistent browser hash mismatch".into());
             }
             let python = self.config.runtime_root.join("python/python.exe");
-            let script = "import sys,pathlib,app,torch,faster_whisper,ctranslate2; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(), 'Backend import escaped installed payload'";
+            // Detect outdated managed Python archives before the UI decides
+            // whether setup/repair is needed. The PowerShell setup script has
+            // the same checks and will install the runtime produced by this app
+            // release when an older HTTP/script plugin layout is found.
+            let script = r#"import sys,pathlib,app,torch,faster_whisper,ctranslate2,importlib.util; from yt_dlp_plugins.extractor.getpot_bgutil_http import BgUtilHTTPPTP; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(), 'Backend import escaped installed payload'; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None, 'Legacy timeout-prone bgutil script provider is still installed'; assert not BgUtilHTTPPTP(None, None, {}).is_available(), 'bgutil HTTP provider must require an explicit managed base URL'; assert BgUtilHTTPPTP(None, None, {'base_url': ['http://127.0.0.1:4416']}).is_available(), 'bgutil HTTP provider must accept an explicit base URL'"#;
             checked_output(
                 self.command(&python)
                     .current_dir(&app)

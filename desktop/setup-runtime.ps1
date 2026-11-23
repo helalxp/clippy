@@ -344,7 +344,7 @@ $ScratchCandidates = @([IO.Path]::GetTempPath()) + @([IO.DriveInfo]::GetDrives()
     Where-Object { $_.IsReady -and $_.DriveType -eq [IO.DriveType]::Fixed } |
     Sort-Object AvailableFreeSpace -Descending | ForEach-Object { $_.RootDirectory.FullName })
 foreach ($componentPath in @($PythonDir, $NodeDir, $FfmpegDir, $BrowserDir)) { Restore-ClippyComponent $componentPath }
-foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "runtime-manifest-state.ps1", "VERSION", "bgutil-provider\server\build\generate_once.js")) {
+foreach ($Required in @("app.py", "requirements.txt", "setup-runtime.ps1", "runtime-archive.ps1", "runtime-manifest-state.ps1", "VERSION", "bgutil-provider\server\build\main.js", "bgutil-provider\server\node_modules\express\package.json")) {
     if (-not (Test-Path (Join-Path $App $Required))) {
         throw "Application payload is incomplete. Missing $Required in $App"
     }
@@ -420,7 +420,11 @@ if (Test-Path $ManifestPath) {
                 $env:CLIPPY_SETTINGS_PATH = Join-Path $Root "settings.json"
                 $env:CLIPPY_MODELS_DIR = Join-Path $DataRoot "models"
                 $env:REFERENCE_TEMPLATES_DIR = Join-Path $DataRoot 'reference_templates'
-                $PythonHealthScript = "import app, torch, faster_whisper"
+                # Verify the managed runtime has the current HTTP-only
+                # bgutil plugin behavior. The runtime manifest is based on
+                # dependency versions, so an app update can otherwise reuse a
+                # healthy but older Python archive without this installer patch.
+                $PythonHealthScript = "import app, torch, faster_whisper, importlib.util; from yt_dlp_plugins.extractor.getpot_bgutil_http import BgUtilHTTPPTP; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None, 'Legacy timeout-prone bgutil script provider is still installed'; assert not BgUtilHTTPPTP(None, None, {}).is_available(), 'bgutil HTTP provider must require an explicit managed base URL'; assert BgUtilHTTPPTP(None, None, {'base_url': ['http://127.0.0.1:4416']}).is_available(), 'bgutil HTTP provider must accept an explicit base URL'"
                 if ($TorchVariant -eq "cuda") {
                     $PythonHealthScript += "; import ctranslate2; assert torch.version.cuda and torch.version.cuda.startswith('12.8'); assert torch.cuda.is_available(); x=torch.ones((64,64),device='cuda'); y=x @ x; torch.cuda.synchronize(); assert float(y[0,0].item()) == 64.0; assert ctranslate2.get_cuda_device_count() > 0"
                 } else {

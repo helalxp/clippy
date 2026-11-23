@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     env,
     fs::{self, File, OpenOptions},
+    io::Write,
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -9,10 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Keep the backend, renderer, and every descendant in one Windows Job
-// Object. Windows closes the job handle when Clippy is force-terminated; the
-// KILL_ON_JOB_CLOSE limit then reaps uvicorn workers, ffmpeg, Chromium, and
-// other grandchildren even when Rust Drop cannot run.
+// Keep the backend, renderer, local PO-token server, and their descendants in
+// one Windows Job Object. Windows closes the job handle when Clippy is
+// force-terminated; KILL_ON_JOB_CLOSE then reaps every supervised process.
 #[cfg(windows)]
 pub(crate) struct ProcessJob {
     // Store the opaque HANDLE as an integer so Supervisor remains Send + Sync
@@ -219,6 +219,7 @@ fn generate_api_token() -> Result<String, String> {
 
 const BACKEND_HOST: &str = "127.0.0.1";
 const RENDERER_HOST: &str = "127.0.0.1";
+const BGUTIL_VERSION: &str = "1.3.2";
 
 fn allocate_loopback_port() -> Result<u16, String> {
     // Ask Windows for an available ephemeral port instead of assuming that
@@ -236,6 +237,7 @@ fn allocate_loopback_port() -> Result<u16, String> {
 pub struct Supervisor {
     backend: Option<Child>,
     renderer: Option<Child>,
+    bgutil: Option<Child>,
     paths: Option<RuntimePaths>,
     job: Option<ProcessJob>,
     backend_port: u16,
@@ -299,7 +301,7 @@ struct RuntimePaths {
     python: PathBuf,
     node: PathBuf,
     ffmpeg: PathBuf,
-    bgutil_script: PathBuf,
+    bgutil_server: PathBuf,
     browser_executable: PathBuf,
     data_root: PathBuf,
     output: PathBuf,
@@ -339,11 +341,7 @@ impl RuntimePaths {
         let python = runtime.join("python").join("python.exe");
         let node = runtime.join("node").join("node.exe");
         let ffmpeg = runtime.join("ffmpeg").join("bin");
-        let bgutil_script = app
-            .join("bgutil-provider")
-            .join("server")
-            .join("build")
-            .join("generate_once.js");
+        let bgutil_server = app.join("bgutil-provider").join("server");
         let browser_executable = root
             .join("browser")
             .join("headless-shell")
@@ -360,7 +358,7 @@ impl RuntimePaths {
             python,
             node,
             ffmpeg,
-            bgutil_script,
+            bgutil_server,
             browser_executable,
             data_root,
             output,
@@ -378,7 +376,14 @@ impl RuntimePaths {
             (&self.python, "Managed Python runtime"),
             (&self.node, "Managed Node.js runtime"),
             (&self.ffmpeg.join("ffmpeg.exe"), "Managed FFmpeg runtime"),
-            (&self.bgutil_script, "YouTube PO-token provider script"),
+            (
+                &self.bgutil_server.join("build").join("main.js"),
+                "YouTube PO-token HTTP server",
+            ),
+            (
+                &self.bgutil_server.join("node_modules").join("express").join("package.json"),
+                "YouTube PO-token HTTP server dependencies",
+            ),
             (&self.browser_executable, "Persistent Remotion browser"),
             (&self.root.join("app.py"), "Clippy backend payload (app.py)"),
             (
@@ -471,14 +476,23 @@ impl Drop for Supervisor {
         // next launch can inherit occupied ports and attach to stale services.
         stop_child(&mut self.renderer);
         stop_child(&mut self.backend);
+        stop_child(&mut self.bgutil);
     }
 }
 
 impl Supervisor {
     pub fn start(&mut self) -> Result<ServiceStatus, String> {
-        if self.backend.is_some() || self.renderer.is_some() {
+        if self.backend.is_some() || self.renderer.is_some() || self.bgutil.is_some() {
             let status = self.status()?;
-            if status.backend == "running" && status.renderer == "running" {
+            let bgutil_running = self
+                .bgutil
+                .as_mut()
+                .map(|process| process.try_wait().map(|status| status.is_none()).unwrap_or(false))
+                .unwrap_or(true);
+            if status.backend == "running"
+                && status.renderer == "running"
+                && bgutil_running
+            {
                 return Ok(status);
             }
             let _ = self.stop();
@@ -502,14 +516,84 @@ impl Supervisor {
         while renderer_port == backend_port {
             renderer_port = allocate_loopback_port()?;
         }
+        let mut bgutil_port = allocate_loopback_port()?;
+        while bgutil_port == backend_port || bgutil_port == renderer_port {
+            bgutil_port = allocate_loopback_port()?;
+        }
         let backend_port_arg = backend_port.to_string();
         let renderer_port_arg = renderer_port.to_string();
+        let bgutil_port_arg = bgutil_port.to_string();
         let api_token = generate_api_token()?;
         let oauth_clients = load_public_oauth_client_config(&paths.root)?;
 
         let backend_log = open_log(&paths.logs.join("backend.log"))?;
         let renderer_log = open_log(&paths.logs.join("renderer.log"))?;
         let renderer_stdout = renderer_log.try_clone().map_err(|e| e.to_string())?;
+        let mut bgutil_log = open_log(&paths.logs.join("bgutil-provider.log"))?;
+
+        // bgutil's upstream HTTP server creates the expensive YouTube session
+        // once and serves token requests over loopback. It is optional for the
+        // rest of Clippy: if it cannot start, keep the app usable and let
+        // yt-dlp continue without this optional provider.
+        let bgutil_server_entry = paths.bgutil_server.join("build").join("main.js");
+        let bgutil_process = match Command::new(&paths.node)
+            .arg(&bgutil_server_entry)
+            .arg("--port")
+            .arg(&bgutil_port_arg)
+            .current_dir(&paths.bgutil_server)
+            .env("NODE_ENV", "production")
+            .env("PATH", &child_path)
+            .env_remove("NODE_PATH")
+            .env_remove("NODE_OPTIONS")
+            .env_remove("NPM_CONFIG_PREFIX")
+            .env_remove("NPM_CONFIG_USERCONFIG")
+            .stdout(Stdio::from(bgutil_log.try_clone().map_err(|e| e.to_string())?))
+            .stderr(Stdio::from(bgutil_log.try_clone().map_err(|e| e.to_string())?))
+            .spawn()
+        {
+            Ok(mut process) => {
+                if let Err(error) = job.assign(&process) {
+                    let mut failed_process = Some(process);
+                    stop_child(&mut failed_process);
+                    let _ = writeln!(bgutil_log, "Could not supervise the bgutil provider: {error}");
+                    None
+                } else {
+                    match wait_for_bgutil_health(
+                        &mut process,
+                        bgutil_port,
+                        Duration::from_secs(20),
+                    ) {
+                        Ok(()) => {
+                            let _ = writeln!(
+                                bgutil_log,
+                                "Supervisor verified bgutil HTTP provider v{BGUTIL_VERSION} on 127.0.0.1:{bgutil_port}."
+                            );
+                            Some(process)
+                        }
+                        Err(error) => {
+                            let mut failed_process = Some(process);
+                            stop_child(&mut failed_process);
+                            let _ = writeln!(
+                                bgutil_log,
+                                "bgutil provider unavailable; continuing without PO-token provider: {error}"
+                            );
+                            None
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = writeln!(
+                    bgutil_log,
+                    "Could not start bgutil provider; continuing without PO-token provider: {error}"
+                );
+                None
+            }
+        };
+        let bgutil_base_url = bgutil_process
+            .as_ref()
+            .map(|_| format!("http://{BACKEND_HOST}:{bgutil_port}"));
+
         let mut backend = Command::new(&paths.python)
             .args([
                 "-m",
@@ -563,7 +647,11 @@ impl Supervisor {
                 "RENDER_SERVICE_URL",
                 format!("http://{RENDERER_HOST}:{renderer_port}"),
             )
-            .env("BGUTIL_SCRIPT_PATH", &paths.bgutil_script)
+            // Ignore ambient provider settings. Only Clippy's verified local
+            // HTTP service may be selected in the managed desktop runtime.
+            .env_remove("BGUTIL_SCRIPT_PATH")
+            .env_remove("BGUTIL_BASE_URL")
+            .env("BGUTIL_BASE_URL", bgutil_base_url.as_deref().unwrap_or(""))
             .env("REMOTION_BROWSER_EXECUTABLE", &paths.browser_executable)
             .env("HOST", BACKEND_HOST)
             .env("PORT", backend_port_arg.clone())
@@ -659,6 +747,7 @@ impl Supervisor {
 
         self.backend = Some(backend);
         self.renderer = Some(renderer);
+        self.bgutil = bgutil_process;
         self.paths = Some(paths);
         self.job = Some(job);
         self.backend_port = backend_port;
@@ -725,6 +814,7 @@ impl Supervisor {
     pub fn stop(&mut self) -> Result<ServiceStatus, String> {
         stop_child(&mut self.renderer);
         stop_child(&mut self.backend);
+        stop_child(&mut self.bgutil);
         self.job.take(); // Closing the job also terminates any surviving descendants.
         self.backend_port = 0;
         self.renderer_port = 0;
@@ -810,6 +900,40 @@ fn wait_for_health(
     }
     Err(format!(
         "health endpoint {path} on 127.0.0.1:{port} did not become ready before timeout"
+    ))
+}
+
+fn wait_for_bgutil_health(
+    child: &mut Child,
+    port: u16,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let url = format!("http://{BACKEND_HOST}:{port}/ping");
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!("server exited early with status {status}"));
+        }
+        if let Ok(response) = ureq::get(&url).timeout(Duration::from_secs(2)).call() {
+            let body = response
+                .into_string()
+                .map_err(|error| format!("could not read server health response: {error}"))?;
+            let payload: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|error| format!("server returned invalid health JSON: {error}"))?;
+            let version = payload.get("version").and_then(serde_json::Value::as_str);
+            if version != Some(BGUTIL_VERSION) {
+                return Err(format!(
+                    "server version mismatch: expected {BGUTIL_VERSION}, received {}",
+                    version.unwrap_or("unknown")
+                ));
+            }
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "bgutil HTTP health endpoint on 127.0.0.1:{port} did not become ready within {} seconds",
+        timeout.as_secs()
     ))
 }
 
@@ -902,7 +1026,7 @@ mod managed_path_tests {
             python: python_root.join("python.exe"),
             node: root.join("runtime").join("node").join("node.exe"),
             ffmpeg: root.join("runtime").join("ffmpeg").join("bin"),
-            bgutil_script: PathBuf::from("bgutil-provider/server/build/generate_once.js"),
+            bgutil_server: PathBuf::from("bgutil-provider/server"),
             browser_executable: PathBuf::from("browser/headless-shell/chrome-headless-shell.exe"),
             data_root: root.join("data"),
             output: root.join("data").join("output"),
