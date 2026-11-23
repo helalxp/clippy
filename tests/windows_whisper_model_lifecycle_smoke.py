@@ -29,18 +29,23 @@ def make_model(path: Path, marker: bytes) -> Path:
 
 def check_cross_process_lock(model_path: Path, root: Path) -> None:
     attempted = root / "child-attempted-lock"
+    blocked = root / "child-blocked-on-lock"
     acquired = root / "child-acquired-lock"
     child = r"""
 import sys
 from pathlib import Path
 import clippy_local_models as models
 
-attempted, acquired = Path(sys.argv[2]), Path(sys.argv[3])
+attempted, blocked, acquired = map(Path, sys.argv[2:5])
 original = models.acquire_file_lock
 
 def signal_and_lock(handle):
     attempted.write_text("attempted", encoding="utf-8")
-    return original(handle)
+    try:
+        return original(handle)
+    except OSError:
+        blocked.write_text("blocked", encoding="utf-8")
+        raise
 
 models.acquire_file_lock = signal_and_lock
 with models.whisper_model_path_lock(sys.argv[1]):
@@ -48,28 +53,34 @@ with models.whisper_model_path_lock(sys.argv[1]):
 """
     environment = os.environ.copy()
     environment["CLIPPY_MODELS_DIR"] = str(root / "models")
-    with __import__("clippy_local_models").whisper_model_path_lock(model_path):
-        process = subprocess.Popen(
-            [sys.executable, "-c", child, str(model_path), str(attempted), str(acquired)],
-            cwd=REPOSITORY_ROOT,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        deadline = time.monotonic() + 8
-        while not attempted.exists() and time.monotonic() < deadline:
-            if process.poll() is not None:
-                break
-            time.sleep(0.02)
-        assert attempted.exists(), "Child process did not reach the Windows file lock."
-        assert process.poll() is None, "Child process bypassed the held model lock."
-        assert not acquired.exists(), "Child acquired the lock while the parent held it."
+    process = None
+    try:
+        with __import__("clippy_local_models").whisper_model_path_lock(model_path):
+            process = subprocess.Popen(
+                [sys.executable, "-c", child, str(model_path), str(attempted), str(blocked), str(acquired)],
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 8
+            while not blocked.exists() and time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            assert attempted.exists(), "Child process did not reach the Windows file lock."
+            assert blocked.exists(), "The Windows file lock did not block the competing process."
+            assert process.poll() is None, "Child process exited despite the parent holding the model lock."
+            assert not acquired.exists(), "Child acquired the lock while the parent held it."
 
-    stdout, stderr = process.communicate(timeout=8)
-    assert process.returncode == 0, f"Child lock process failed: {stderr}\n{stdout}"
-    assert acquired.exists(), "Child did not acquire the lock after the parent released it."
-
+        stdout, stderr = process.communicate(timeout=8)
+        assert process.returncode == 0, f"Child lock process failed: {stderr}\\n{stdout}"
+        assert acquired.exists(), "Child did not acquire the lock after the parent released it."
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 def check_directory_promotion(root: Path) -> None:
     import clippy_local_models as models
