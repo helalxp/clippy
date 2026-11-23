@@ -47,10 +47,30 @@ Describe "Assembled Clippy application payload contract" {
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
             "remotion/src/index.ts",
-            "bgutil-provider/server/build/generate_once.js"
+            "bgutil-provider/server/build/main.js",
+            "bgutil-provider/server/package.json",
+            "bgutil-provider/server/node_modules/express/package.json"
         )) {
             Get-PayloadZipEntry $entry | Should -Not -BeNullOrEmpty -Because "the installed desktop shell requires $entry"
         }
+    }
+
+    It "packages a loopback-only bgutil HTTP server instead of the per-request script entry point" {
+        $entry = Get-PayloadZipEntry "bgutil-provider/server/build/main.js"
+        $entry | Should -Not -BeNullOrEmpty
+        $stream = $entry.Open()
+        try {
+            $reader = [IO.StreamReader]::new($stream)
+            try { $serverSource = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        } finally {
+            $stream.Dispose()
+        }
+
+        $serverSource | Should -Match '127\.0\.0\.1'
+        $serverSource | Should -Not -Match '0\.0\.0\.0'
+        $serverSource | Should -Not -Match 'host:\s*"::"'
+        Get-PayloadZipEntry "bgutil-provider/server/build/generate_once.js" | Should -Not -BeNullOrEmpty -Because "the pinned server package may retain the unused one-shot script file"
+        Get-PayloadZipEntry "bgutil-provider/server/node_modules/express/package.json" | Should -Not -BeNullOrEmpty
     }
 
     It "contains the current setup contract and helpers, not a stale build" {
