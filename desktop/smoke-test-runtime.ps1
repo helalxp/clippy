@@ -114,7 +114,9 @@ try {
         "render-service\dist\server.js",
         "render-service\node_modules\@remotion\renderer\package.json",
         "remotion\src\index.ts",
-        "bgutil-provider\server\build\generate_once.js"
+        "bgutil-provider\server\build\main.js",
+        "bgutil-provider\server\package.json",
+        "bgutil-provider\server\node_modules\express\package.json"
     )) {
         Assert-File (Join-Path $appDirectory $required) "extracted payload file $required"
     }
@@ -241,7 +243,7 @@ Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
     $env:HF_HOME = Join-Path $dataRoot 'models\huggingface'
     $env:TORCH_HOME = Join-Path $dataRoot 'models\torch'
     $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
-    & $pythonExe -c "import sys,pathlib,app,torch,fastapi,faster_whisper; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(); assert torch.version.cuda is None; print('Packaged backend imports and CPU runtime OK:', torch.__version__)" $appDirectory
+    & $pythonExe -c "import sys,pathlib,app,torch,fastapi,faster_whisper,importlib.util; import yt_dlp_plugins.extractor.getpot_bgutil; import yt_dlp_plugins.extractor.getpot_bgutil_http; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None; assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(); assert torch.version.cuda is None; print('Packaged backend, CPU runtime, and HTTP-only bgutil plugin OK:', torch.__version__)" $appDirectory
     if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
     if (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'output') -PathType Container)) {
         throw "The relocated output directory was not created under the configured data root."
@@ -265,6 +267,65 @@ Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
     $env:TORCH_HOME = Join-Path $dataRoot 'models\torch'
     $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
     $env:PATH = (Split-Path $nodeExe -Parent) + ';' + (Split-Path $ffmpegExe -Parent) + ';' + "$env:SystemRoot\System32"
+
+    # Start the exact packaged bgutil HTTP provider on a free loopback port.
+    # The payload contract also rejects wildcard listeners, so this proves the
+    # runtime starts locally without exposing its unauthenticated API to the LAN.
+    $bgutilServerDirectory = Join-Path $appDirectory 'bgutil-provider\server'
+    $bgutilServerEntry = Join-Path $bgutilServerDirectory 'build\main.js'
+    $portReservation = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $portReservation.Start()
+    $bgutilPort = [int]$portReservation.LocalEndpoint.Port
+    $portReservation.Stop()
+    $bgutilStdout = Join-Path $smokeRoot 'bgutil-provider.stdout.log'
+    $bgutilStderr = Join-Path $smokeRoot 'bgutil-provider.stderr.log'
+    $bgutilProcess = $null
+    try {
+        $bgutilArguments = '"' + $bgutilServerEntry + '" --port ' + $bgutilPort
+        $bgutilProcess = Start-Process -FilePath $nodeExe -ArgumentList $bgutilArguments -WorkingDirectory $bgutilServerDirectory -PassThru -NoNewWindow -RedirectStandardOutput $bgutilStdout -RedirectStandardError $bgutilStderr
+        $bgutilReady = $false
+        $bgutilDeadline = [DateTime]::UtcNow.AddSeconds(90)
+        while ([DateTime]::UtcNow -lt $bgutilDeadline) {
+            if ($bgutilProcess.HasExited) {
+                $providerLogs = @()
+                foreach ($logPath in @($bgutilStdout, $bgutilStderr)) {
+                    if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+                        $providerLogs += Get-Content -LiteralPath $logPath -Tail 40
+                    }
+                }
+                throw ("Packaged bgutil HTTP provider exited with code $($bgutilProcess.ExitCode)." + [Environment]::NewLine + ($providerLogs -join [Environment]::NewLine))
+            }
+            $pingResponse = $null
+            try {
+                $pingResponse = Invoke-WebRequest -Uri "http://127.0.0.1:$bgutilPort/ping" -UseBasicParsing -TimeoutSec 2
+            } catch {
+                Start-Sleep -Milliseconds 300
+                continue
+            }
+            $ping = $pingResponse.Content | ConvertFrom-Json
+            if ([string]$ping.version -ne '1.3.2') {
+                throw "Packaged bgutil provider reported unexpected version '$($ping.version)'."
+            }
+            $bgutilReady = $true
+            break
+        }
+        if (-not $bgutilReady) {
+            $providerLogs = @()
+            foreach ($logPath in @($bgutilStdout, $bgutilStderr)) {
+                if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+                    $providerLogs += Get-Content -LiteralPath $logPath -Tail 40
+                }
+            }
+            throw ("Packaged bgutil HTTP provider did not become healthy within 90 seconds." + [Environment]::NewLine + ($providerLogs -join [Environment]::NewLine))
+        }
+        Write-Host "Packaged bgutil HTTP provider started on 127.0.0.1 and reported version 1.3.2."
+    } finally {
+        if ($bgutilProcess -and -not $bgutilProcess.HasExited) {
+            Stop-Process -Id $bgutilProcess.Id -Force -ErrorAction SilentlyContinue
+            $bgutilProcess.WaitForExit()
+        }
+    }
+
     $fixture = Join-Path $smokeRoot 'fixture.mp4'
     & $ffmpegExe -hide_banner -loglevel error -f lavfi -i 'color=c=blue:s=180x320:r=12:d=1' -an -c:v libx264 -pix_fmt yuv420p $fixture
     if ($LASTEXITCODE -ne 0) { throw 'Could not create render smoke fixture.' }
