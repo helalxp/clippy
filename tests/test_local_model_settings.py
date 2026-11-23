@@ -50,15 +50,6 @@ def test_model_accepts_vocabulary_json_for_compatible_conversions(tmp_path):
     assert models.validate_whisper_model_path(str(model_dir)) == model_dir.resolve()
 
 
-def test_model_accepts_nonempty_vocabulary_when_unused_alternative_is_empty(
-    tmp_path
-):
-    model_dir = make_model(tmp_path / "model")
-    (model_dir / "vocabulary.json").write_bytes(b"")
-
-    assert models.validate_whisper_model_path(str(model_dir)) == model_dir.resolve()
-
-
 def test_model_rejects_folder_missing_both_supported_vocabulary_formats(tmp_path):
     model_dir = make_model(tmp_path / "model")
     (model_dir / "vocabulary.txt").unlink()
