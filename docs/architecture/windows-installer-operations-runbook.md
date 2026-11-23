@@ -96,8 +96,11 @@ check can expire during Node cold start.
 HTTP bgutil plugin modules but excludes `getpot_bgutil_script.py`. The native
 supervisor starts the pinned bgutil HTTP server as a supervised child, verifies
 its `/ping` response/version, and passes `BGUTIL_BASE_URL` only after the
-health check succeeds. If the optional server cannot start, Clippy still starts
-without the PO-token provider rather than blocking unrelated features.
+health check succeeds. The packaged HTTP plugin is also gated on an explicit
+`base_url` argument, so when Clippy starts in degraded mode it does not fall
+back to the upstream default port `4416` or talk to an unrelated local process.
+If the optional server cannot start, Clippy still starts without the PO-token
+provider rather than blocking unrelated features.
 
 **Security constraint:** upstream bgutil 1.3.2 listens on wildcard interfaces.
 The payload builder replaces that listener with an IPv4 `127.0.0.1` binding
