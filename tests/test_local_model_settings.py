@@ -394,6 +394,7 @@ def test_whisper_model_path_lock_serializes_processes(tmp_path, monkeypatch):
     child_code = """
 import sys
 from clippy_local_models import whisper_model_path_lock
+print('WAITING', flush=True)
 with whisper_model_path_lock(sys.argv[1]):
     print('LOCK_ACQUIRED', flush=True)
 """
@@ -406,7 +407,9 @@ with whisper_model_path_lock(sys.argv[1]):
             text=True,
             env={**os.environ, "CLIPPY_MODELS_DIR": str(models_root)},
         )
-        # A child that can acquire immediately has bypassed the OS-level lock.
+        # Wait until the child has reached the lock attempt. It must remain
+        # blocked until the parent releases the model-size-specific lock.
+        assert process.stdout.readline().strip() == "WAITING"
         import time
         time.sleep(0.2)
         assert process.poll() is None
