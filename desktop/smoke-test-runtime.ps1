@@ -297,7 +297,7 @@ Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
             }
             $pingResponse = $null
             try {
-                $pingResponse = Invoke-WebRequest -Uri "http://127.0.0.1:$bgutilPort/ping" -UseBasicParsing -TimeoutSec 2
+                $pingResponse = Invoke-WebRequest -Uri "http://127.0.0.1:$bgutilPort/ping" -UseBasicParsing -Proxy $null -TimeoutSec 2
             } catch {
                 Start-Sleep -Milliseconds 300
                 continue
