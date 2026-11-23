@@ -183,6 +183,9 @@ jobs:
       - name: Check backend Python syntax
         run: python -m compileall -q .
 
+      - name: Smoke-test Windows Whisper model locking and promotion
+        run: python tests/windows_whisper_model_lifecycle_smoke.py
+
       - name: Check Tauri Rust application
         run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
 

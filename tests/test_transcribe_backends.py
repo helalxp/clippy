@@ -277,7 +277,7 @@ def test_whisper_model_is_fetched_inside_the_gate(monkeypatch):
     monkeypatch.setattr(tb, "_ASR_GATE", _Gate())
     monkeypatch.setattr(tb, "_whisper_device", lambda: "cuda")
     monkeypatch.setattr(tb, "_get_whisper_model",
-                        lambda: (order.append("model"), (_Model(), "cuda"))[1])
+                        lambda config=None: (order.append("model"), (_Model(), "cuda"))[1])
 
     tb._run_whisper_once("x.mp4")
 

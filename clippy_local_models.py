@@ -6,13 +6,19 @@ Node packages as a side effect of selecting a model.
 """
 from __future__ import annotations
 
+import gc
 import json
 import os
-import threading
+import shutil
 import tempfile
+import threading
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from platform_compat import acquire_file_lock, release_file_lock
 
 WHISPER_MODELS = {
     "tiny": {"repo_id": "Systran/faster-whisper-tiny", "label": "Tiny", "description": "Fastest, lowest memory use; lower accuracy."},
@@ -25,6 +31,8 @@ WHISPER_MODELS = {
 
 _settings_lock = threading.RLock()
 _download_lock = threading.Lock()
+_model_path_locks_guard = threading.Lock()
+_model_path_thread_locks: dict[str, threading.RLock] = {}
 _download_tasks: dict[str, dict[str, Any]] = {}
 
 
@@ -130,6 +138,119 @@ def _catalog_model_dir(model_size: str) -> Path:
     return models_root() / "whisper" / model_size
 
 
+@contextmanager
+def whisper_model_path_lock(model_path: str | Path):
+    """Serialize managed-model opens and directory activation across processes.
+
+    A catalog refresh uses two directory renames on Windows because a populated
+    directory cannot be atomically replaced there. Holding this lock while a
+    transcription loads the model prevents it from observing the brief gap
+    between moving the previous directory aside and installing the verified
+    replacement. The lock is per model size, so unrelated models can still
+    transcribe concurrently. Custom folders and Hub identifiers need no lock.
+    """
+    managed_root = (models_root() / "whisper").resolve()
+    try:
+        resolved_path = Path(str(model_path)).expanduser().resolve()
+        resolved_path.relative_to(managed_root)
+    except (OSError, RuntimeError, ValueError):
+        yield
+        return
+
+    relative_path = resolved_path.relative_to(managed_root)
+    if not relative_path.parts:
+        yield
+        return
+    lock_path = managed_root / f".{relative_path.parts[0]}.activation.lock"
+    lock_key = str(lock_path).casefold()
+    with _model_path_locks_guard:
+        thread_lock = _model_path_thread_locks.setdefault(lock_key, threading.RLock())
+
+    with thread_lock:
+        managed_root.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            # Use the shared cross-platform lock helper. Polling avoids the
+            # Windows ten-second limit of msvcrt's blocking lock mode.
+            while True:
+                try:
+                    acquire_file_lock(lock_file)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.05)
+                except OSError as exc:
+                    # msvcrt reports a byte-range lock conflict as EACCES on
+                    # Windows. Other I/O and permission errors fail closed.
+                    if os.name == "nt" and (
+                        exc.errno in (13, 36)
+                        or getattr(exc, "winerror", None) in (33, 36)
+                    ):
+                        time.sleep(0.05)
+                        continue
+                    raise
+            try:
+                yield
+            finally:
+                release_file_lock(lock_file)
+
+
+def _restore_interrupted_whisper_promotion(destination: Path) -> bool:
+    """Recover from a process stop during the two-rename model promotion."""
+    backups = list(destination.parent.glob(f".{destination.name}.previous-*"))
+    if destination.exists():
+        try:
+            validate_whisper_model_path(str(destination))
+        except (OSError, ValueError):
+            pass
+        else:
+            # Promotion reached a valid destination but stopped before deleting
+            # its old backup. The new model is already committed; reclaim the
+            # abandoned backup to avoid retaining a second full model forever.
+            for backup in backups:
+                shutil.rmtree(backup, ignore_errors=True)
+            return False
+
+    # If the destination is missing or structurally invalid, restore the newest
+    # valid backup. A failed destination is retained for diagnosis, not deleted.
+    def backup_modified_at(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    backups.sort(key=backup_modified_at, reverse=True)
+    for backup in backups:
+        try:
+            validate_whisper_model_path(str(backup))
+        except (OSError, ValueError):
+            continue
+
+        failed_destination = None
+        if destination.exists():
+            failed_destination = destination.with_name(
+                f".{destination.name}.failed-{uuid.uuid4().hex}"
+            )
+            os.replace(destination, failed_destination)
+        try:
+            os.replace(backup, destination)
+        except OSError as restore_error:
+            if failed_destination is not None and failed_destination.exists():
+                try:
+                    os.replace(failed_destination, destination)
+                except OSError as rollback_error:
+                    raise RuntimeError(
+                        f"Could not restore the previous Whisper model from {backup}. "
+                        f"The invalid destination remains at {failed_destination}; "
+                        f"restore error: {restore_error}; rollback error: {rollback_error}"
+                    ) from restore_error
+            raise RuntimeError(
+                f"Could not restore the previous Whisper model from {backup}: {restore_error}"
+            ) from restore_error
+
+        # Keep failed_destination out of the active path, but retain it
+        # for diagnosis rather than deleting potentially useful evidence.
+        return True
+    return False
+
 def inspect_whisper_model() -> dict[str, Any]:
     """Describe the persisted selection and on-disk readiness without loading weights."""
     saved = _read_settings().get("whisper", {})
@@ -158,7 +279,10 @@ def inspect_whisper_model() -> dict[str, Any]:
     candidate = Path(str(custom_path)).expanduser() if source == "local" else _catalog_model_dir(size)
 
     try:
-        resolved = validate_whisper_model_path(str(candidate))
+        with whisper_model_path_lock(candidate):
+            if source == "catalog":
+                _restore_interrupted_whisper_promotion(candidate)
+            resolved = validate_whisper_model_path(str(candidate))
         installed = True
         validation_error = None
         resolved_path = str(resolved)
@@ -245,25 +369,16 @@ def save_whisper_selection(*, model_size: str | None = None,
     return get_whisper_selection()
 
 
-def verify_whisper_model_load() -> dict[str, Any]:
-    """Load the selected model and execute a real, short CPU transcription pass."""
+def _verify_whisper_model_directory(model_path: str, model_size: str) -> dict[str, Any]:
+    """Load a candidate model directory and execute a real short CPU transcription."""
     import math
     import wave
     from array import array
 
-    selection = get_whisper_selection()
-    if not selection.get("installed"):
-        raise FileNotFoundError(
-            f"Whisper {selection.get('model_size', 'small')} is selected but its model files "
-            "are not installed. Download the model first."
-        )
-
     from faster_whisper import WhisperModel
 
-    # Verification and production transcription must load the same resolved source.
-    model_path = whisper_model_argument(selection)
-    # CPU int8 keeps this diagnostic independent of CUDA availability and does
-    # not modify the user's selected production device/compute preferences.
+    # CPU int8 makes integrity verification independent of CUDA availability
+    # and does not alter the user's selected production device/preferences.
     audio_path = None
     model = None
     load_started = time.perf_counter()
@@ -271,8 +386,8 @@ def verify_whisper_model_load() -> dict[str, Any]:
         with tempfile.NamedTemporaryFile(prefix="clippy-whisper-test-", suffix=".wav", delete=False) as audio_file:
             audio_path = Path(audio_file.name)
 
-        # A short deterministic tone exercises the packaged PyAV decoder and
-        # the actual CTranslate2 encoder/decoder without needing a user file.
+        # A deterministic tone exercises both the packaged PyAV decoder and
+        # the actual CTranslate2 encoder/decoder without requiring user media.
         sample_rate = 16_000
         duration_seconds = 2
         samples = array(
@@ -315,7 +430,7 @@ def verify_whisper_model_load() -> dict[str, Any]:
 
         return {
             "ok": True,
-            "model_size": selection["model_size"],
+            "model_size": model_size,
             "model_path": model_path,
             "load_seconds": round(load_seconds, 2),
             "inference_seconds": round(inference_seconds, 2),
@@ -328,11 +443,75 @@ def verify_whisper_model_load() -> dict[str, Any]:
     finally:
         if model is not None:
             del model
+            # CTranslate2 owns native file handles; collect before the caller
+            # attempts a same-volume directory rename on Windows.
+            gc.collect()
         if audio_path is not None:
             try:
                 audio_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def verify_whisper_model_load() -> dict[str, Any]:
+    """Load the selected model and execute a real, short CPU transcription pass."""
+    selection = get_whisper_selection()
+    if not selection.get("installed"):
+        raise FileNotFoundError(
+            f"Whisper {selection.get('model_size', 'small')} is selected but its model files "
+            "are not installed. Download the model first."
+        )
+    # Verification and production transcription must load the same resolved source.
+    model_path = whisper_model_argument(selection)
+    with whisper_model_path_lock(model_path):
+        return _verify_whisper_model_directory(model_path, selection["model_size"])
+
+
+def _promote_staged_whisper_model(staging: Path, destination: Path) -> Path:
+    """Promote a verified model without exposing the Windows directory-rename gap."""
+    with whisper_model_path_lock(destination):
+        _restore_interrupted_whisper_promotion(destination)
+        backup = None
+        if destination.exists():
+            backup = destination.with_name(
+                f".{destination.name}.previous-{uuid.uuid4().hex}"
+            )
+            # Keep the previous model intact until the new directory is ready.
+            os.replace(destination, backup)
+
+        failed = None
+        try:
+            # staging and destination are siblings, so this is a same-volume rename.
+            os.replace(staging, destination)
+            # Keep the previous model until the activated directory itself has
+            # passed the same structural validation as the staging directory.
+            validated = validate_whisper_model_path(str(destination))
+        except Exception as promotion_error:
+            try:
+                if destination.exists():
+                    failed = destination.with_name(
+                        f".{destination.name}.failed-{uuid.uuid4().hex}"
+                    )
+                    os.replace(destination, failed)
+                if backup is not None and backup.exists():
+                    os.replace(backup, destination)
+            except OSError as restore_error:
+                raise RuntimeError(
+                    "The new Whisper model could not be activated and the previous "
+                    f"model could not be restored automatically. Previous files remain at "
+                    f"{backup}. Failed files, if present, remain at {failed}. "
+                    f"Activation error: {promotion_error}; restore error: {restore_error}"
+                ) from promotion_error
+
+            if failed is not None and failed.exists():
+                shutil.rmtree(failed, ignore_errors=True)
+            raise
+
+        if backup is not None and backup.exists():
+            # Cleanup failure must not turn a successful activation into a failed
+            # download or remove the newly activated model.
+            shutil.rmtree(backup, ignore_errors=True)
+        return validated
 
 
 def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
@@ -349,8 +528,7 @@ def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
             "and choose another model or update its folder path."
         )
 
-    # An undownloaded catalog choice keeps faster-whisper's normal first-use
-    # Hub/cache behavior.
+    # An undownloaded catalog choice keeps faster-whisper's normal first-use Hub/cache behavior.
     return selection.get("model_size") or "small"
 
 
@@ -428,27 +606,46 @@ def start_whisper_download(
         model_size=model_size,
         message="Downloading model files…",
     )
+    staging = None
     try:
         from huggingface_hub import snapshot_download
 
         destination = models_root() / "whisper" / model_size
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # Never download into the path used by transcription workers. A job
+        # must see either the previous complete model or the new verified one,
+        # never a directory whose model.bin is still being written.
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{model_size}.staging-",
+                dir=str(destination.parent),
+            )
+        )
         snapshot_download(
             repo_id=WHISPER_MODELS[model_size]["repo_id"],
-            local_dir=str(destination),
+            local_dir=str(staging),
         )
 
         _update_download_task(
-            task_id, status="validating", message="Download complete. Checking model files…"
+            task_id,
+            status="validating",
+            message="Download complete. Checking files and testing the model…",
         )
-        model_dir = validate_whisper_model_path(str(destination))
+        validate_whisper_model_path(str(staging))
+        # Checking filenames and sizes is not enough: prove that the native
+        # CTranslate2 loader can open these exact staged weights and transcribe
+        # a short deterministic audio sample before they become selectable.
+        _verify_whisper_model_directory(str(staging), model_size)
+
+        model_dir = _promote_staged_whisper_model(staging, destination)
+        staging = None  # The staging directory was renamed into its final path.
         activated = _activate_download_if_selection_is_unchanged(
             model_size, model_dir, expected_selection_revision
         )
         message = (
-            "Model downloaded and selected."
+            "Model downloaded, load-tested, and selected."
             if activated
-            else "Model downloaded. Your newer selection was preserved."
+            else "Model downloaded and load-tested. Your newer selection was preserved."
         )
         _update_download_task(
             task_id,
@@ -465,3 +662,6 @@ def start_whisper_download(
             model_size=model_size,
             message=str(exc)[:500],
         )
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)

@@ -382,7 +382,7 @@ export default function LocalModelSettings() {
         </div>
         <p className="text-xs text-muted leading-relaxed">
           Enter the full path to a faster-whisper model folder, or directly to its model.bin file.
-          The folder must contain model.bin, config.json, tokenizer.json and vocabulary.json.
+          The folder must contain model.bin, config.json, tokenizer.json and either vocabulary.txt or vocabulary.json.
         </p>
         <input
           type="text"

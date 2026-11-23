@@ -158,14 +158,14 @@ _whisper_lock = threading.Lock()
 _whisper_force_cpu = False
 
 
-def _get_whisper_model():
+def _get_whisper_model(config=None):
     """Process-wide WhisperModel singleton, rebuilt if the env config changes.
 
     Keeping the model resident avoids a full reload per transcription (which
     on GPU would also mean re-allocating a couple of GB of VRAM per job).
     """
     global _whisper_model, _whisper_key
-    cfg = get_whisper_config()
+    cfg = dict(config or get_whisper_config())
     if _whisper_force_cpu:
         cfg["device"] = "cpu"
         cfg["compute_type"] = "int8"
@@ -173,7 +173,12 @@ def _get_whisper_model():
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            # Coordinate native file opening with the managed downloader's
+            # directory promotion. Release immediately after loading so normal
+            # concurrent transcriptions retain their existing behavior.
+            from clippy_local_models import whisper_model_path_lock
+            with whisper_model_path_lock(key[0]):
+                _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
             _whisper_key = key
     return _whisper_model, cfg["device"]
 
@@ -188,7 +193,8 @@ def _run_whisper_once(media_path, **params):
     # before unloading, so a transcription can never start on a model that is
     # being dropped underneath it.
     with gate:
-        model, _device = _get_whisper_model()
+        cfg = get_whisper_config()
+        model, _device = _get_whisper_model(cfg)
         segments, info = model.transcribe(media_path, **params)
         progress = _TranscribeProgress(getattr(info, "duration", 0))
         materialized = []

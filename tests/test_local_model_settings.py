@@ -6,7 +6,7 @@ import clippy_local_models as models
 
 
 def make_model(path, vocabulary_name="vocabulary.txt"):
-    path.mkdir(parents=True)
+    path.mkdir(parents=True, exist_ok=True)
     (path / "model.bin").write_bytes(b"model")
     (path / "config.json").write_text("{}", encoding="utf-8")
     (path / "tokenizer.json").write_text("{}", encoding="utf-8")
@@ -89,6 +89,109 @@ def test_catalog_selection_is_saved_but_not_reported_as_installed(tmp_path, monk
     assert selected["available"] is False
     assert selected["status"] == "selected_not_downloaded"
     assert models.whisper_model_argument() == "medium"
+
+
+def test_desktop_catalog_selection_keeps_first_use_hub_behavior(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("CLIPPY_DESKTOP_MODE", "1")
+
+    selected = models.save_whisper_selection(model_size="base")
+
+    assert selected["status"] == "selected_not_downloaded"
+    assert models.whisper_model_argument() == "base"
+
+
+def test_whisper_model_path_lock_serializes_threads(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    model_path = tmp_path / "models" / "whisper" / "base"
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    errors = []
+
+    def hold_lock():
+        try:
+            with models.whisper_model_path_lock(model_path):
+                first_entered.set()
+                if not release_first.wait(5):
+                    raise TimeoutError("test did not release first model lock")
+        except Exception as exc:
+            errors.append(exc)
+
+    def wait_for_lock():
+        try:
+            with models.whisper_model_path_lock(model_path):
+                second_entered.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=hold_lock)
+    second = threading.Thread(target=wait_for_lock)
+    first.start()
+    assert first_entered.wait(2)
+    second.start()
+    assert not second_entered.wait(0.15)
+    release_first.set()
+    assert second_entered.wait(2)
+    first.join(2)
+    second.join(2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+
+
+def test_catalog_selection_recovers_previous_model_after_interrupted_promotion(
+    tmp_path, monkeypatch
+):
+    settings = tmp_path / "settings.json"
+    models_root = tmp_path / "models"
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
+    backup = make_model(
+        models_root / "whisper" / ".small.previous-interrupted"
+    )
+    settings.write_text(
+        json.dumps({"whisper": {"model_size": "small", "model_path": None}}),
+        encoding="utf-8",
+    )
+
+    selection = models.get_whisper_selection()
+
+    destination = models_root / "whisper" / "small"
+    assert selection["installed"] is True
+    assert selection["model_path"] == str(destination.resolve())
+    assert (destination / "model.bin").read_bytes() == b"model"
+    assert not backup.exists()
+
+
+def test_catalog_selection_recovers_when_destination_is_invalid(
+    tmp_path, monkeypatch
+):
+    settings = tmp_path / "settings.json"
+    models_root = tmp_path / "models"
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
+    destination = models_root / "whisper" / "small"
+    destination.mkdir(parents=True)
+    (destination / "model.bin").write_bytes(b"partial")
+    backup = make_model(
+        destination.parent / ".small.previous-interrupted"
+    )
+    settings.write_text(
+        json.dumps({"whisper": {"model_size": "small", "model_path": None}}),
+        encoding="utf-8",
+    )
+
+    selection = models.get_whisper_selection()
+
+    assert selection["installed"] is True
+    assert (destination / "model.bin").read_bytes() == b"model"
+    assert not backup.exists()
+    assert list(destination.parent.glob(".small.failed-*"))
 
 
 def test_catalog_selection_reports_installed_weights(tmp_path, monkeypatch):
@@ -198,17 +301,41 @@ def test_saving_catalog_selection_preserves_other_whisper_preferences(
     assert selected["selection_revision"] == 1
 
 
-def _install_fake_snapshot_download(monkeypatch):
+def _install_fake_snapshot_download(
+    monkeypatch, *, model_load_error=None, events=None
+):
     import sys
     import types
 
     from pathlib import Path
 
     def snapshot_download(repo_id, local_dir):
+        if events is not None:
+            events["download_path"] = Path(local_dir)
         make_model(Path(local_dir))
+
+    class FakeWhisperModel:
+        def __init__(self, model_path, **kwargs):
+            if events is not None:
+                events["load_path"] = Path(model_path)
+                events["load_kwargs"] = kwargs
+            if model_load_error:
+                raise RuntimeError(model_load_error)
+
+        def transcribe(self, audio_path, **kwargs):
+            if events is not None:
+                events["inference"] = True
+            def generated_segments():
+                yield object()
+            return generated_segments(), types.SimpleNamespace(duration=2.0)
+
     monkeypatch.setitem(
         sys.modules, "huggingface_hub",
         types.SimpleNamespace(snapshot_download=snapshot_download),
+    )
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper",
+        types.SimpleNamespace(WhisperModel=FakeWhisperModel),
     )
 
 
@@ -233,6 +360,220 @@ def test_download_completion_does_not_overwrite_a_newer_user_selection(
     assert task["activated"] is False
     assert "newer selection was preserved" in task["message"]
     assert (tmp_path / "models" / "whisper" / "medium" / "model.bin").is_file()
+
+
+def test_download_keeps_candidate_staged_until_native_model_load_passes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    destination = tmp_path / "models" / "whisper" / "small"
+    events = {}
+
+    download_revision = models.queue_whisper_download("download-staged", "small")
+    _install_fake_snapshot_download(monkeypatch, events=events)
+
+    models.start_whisper_download("download-staged", "small", download_revision)
+
+    task = models.list_download_tasks()["download-staged"]
+    assert task["status"] == "complete"
+    assert events["download_path"] == events["load_path"]
+    assert events["download_path"].parent == destination.parent
+    assert events["download_path"].name.startswith(".small.staging-")
+    assert events["load_kwargs"]["local_files_only"] is True
+    assert events["inference"] is True
+    assert destination.is_dir()
+    assert (destination / "model.bin").is_file()
+    assert not list(destination.parent.glob(".small.staging-*"))
+
+
+def test_failed_native_model_load_preserves_previous_model_and_selection(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    models.save_whisper_selection(model_size="small")
+    original_model = (destination / "model.bin").read_bytes()
+    events = {}
+
+    download_revision = models.queue_whisper_download("download-load-fail", "small")
+    _install_fake_snapshot_download(
+        monkeypatch,
+        model_load_error="native CTranslate2 load failed",
+        events=events,
+    )
+
+    models.start_whisper_download("download-load-fail", "small", download_revision)
+
+    task = models.list_download_tasks()["download-load-fail"]
+    assert task["status"] == "failed"
+    assert "native CTranslate2 load failed" in task["message"]
+    assert (destination / "model.bin").read_bytes() == original_model
+    assert not list(destination.parent.glob(".small.staging-*"))
+    assert models.get_whisper_selection()["model_path"] == str(destination.resolve())
+
+
+def test_existing_model_is_replaced_only_after_verified_staged_download(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    (destination / "model.bin").write_bytes(b"previous-complete-model")
+    download_revision = models.queue_whisper_download("download-replace", "small")
+    _install_fake_snapshot_download(monkeypatch)
+
+    models.start_whisper_download("download-replace", "small", download_revision)
+
+    task = models.list_download_tasks()["download-replace"]
+    assert task["status"] == "complete"
+    assert (destination / "model.bin").read_bytes() == b"model"
+    assert not list(destination.parent.glob(".small.previous-*"))
+    assert not list(destination.parent.glob(".small.staging-*"))
+
+
+def test_whisper_model_path_lock_serializes_processes(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    import time
+
+    models_root = tmp_path / "models"
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
+    model_path = models_root / "whisper" / "base"
+    lock_attempt = tmp_path / "lock-attempted"
+    lock_blocked = tmp_path / "lock-blocked"
+    child_code = """
+import sys
+from pathlib import Path
+import clippy_local_models as models
+attempted, blocked = Path(sys.argv[2]), Path(sys.argv[3])
+original_lock = models.acquire_file_lock
+def notify_then_lock(handle):
+    attempted.write_text('attempted', encoding='utf-8')
+    try:
+        return original_lock(handle)
+    except OSError:
+        blocked.write_text('blocked', encoding='utf-8')
+        raise
+models.acquire_file_lock = notify_then_lock
+with models.whisper_model_path_lock(sys.argv[1]):
+    print('LOCK_ACQUIRED', flush=True)
+"""
+
+    process = None
+    try:
+        with models.whisper_model_path_lock(model_path):
+            process = subprocess.Popen(
+                [sys.executable, "-c", child_code, str(model_path), str(lock_attempt), str(lock_blocked)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={**os.environ, "CLIPPY_MODELS_DIR": str(models_root)},
+            )
+            deadline = time.monotonic() + 5
+            while not lock_blocked.exists() and time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            assert lock_attempt.exists(), "child never attempted the OS-level lock"
+            assert lock_blocked.exists(), "child did not receive a lock-contention response"
+            assert process.poll() is None, "child bypassed the held model lock"
+
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stderr
+        assert "LOCK_ACQUIRED" in stdout
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def test_directory_validation_failure_restores_previous_model(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    (destination / "model.bin").write_bytes(b"previous-complete-model")
+    staging = make_model(destination.parent / ".small.staging-invalid")
+    (staging / "model.bin").write_bytes(b"new-model")
+    real_validate = models.validate_whisper_model_path
+
+    def reject_activated_directory(value):
+        if Path(value).resolve() == destination.resolve():
+            raise ValueError("simulated final directory validation failure")
+        return real_validate(value)
+
+    monkeypatch.setattr(models, "validate_whisper_model_path", reject_activated_directory)
+
+    with pytest.raises(ValueError, match="simulated final directory validation failure"):
+        models._promote_staged_whisper_model(staging, destination)
+
+    assert (destination / "model.bin").read_bytes() == b"previous-complete-model"
+    assert not list(destination.parent.glob(".small.failed-*"))
+    assert not list(destination.parent.glob(".small.previous-*"))
+
+
+def test_failed_directory_promotion_restores_previous_model(
+    tmp_path, monkeypatch
+):
+    import os
+
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    (destination / "model.bin").write_bytes(b"previous-complete-model")
+    staging = make_model(destination.parent / ".small.staging-test")
+    (staging / "model.bin").write_bytes(b"new-model")
+    real_replace = os.replace
+    replace_calls = {"count": 0}
+
+    def fail_second_rename(source, target):
+        replace_calls["count"] += 1
+        if replace_calls["count"] == 2:
+            raise OSError("simulated activation rename failure")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(models.os, "replace", fail_second_rename)
+
+    with pytest.raises(OSError, match="simulated activation rename failure"):
+        models._promote_staged_whisper_model(staging, destination)
+
+    assert replace_calls["count"] == 3  # move old aside, fail new, restore old
+    assert (destination / "model.bin").read_bytes() == b"previous-complete-model"
+    assert staging.is_dir()
+    assert not list(destination.parent.glob(".small.previous-*"))
+
+
+def test_interrupted_download_never_leaves_a_partial_final_model(
+    tmp_path, monkeypatch
+):
+    import sys
+    import types
+    from pathlib import Path
+
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+
+    def interrupted_download(repo_id, local_dir):
+        staging = Path(local_dir)
+        (staging / "model.bin").write_bytes(b"partial")
+        raise RuntimeError("simulated interrupted download")
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=interrupted_download),
+    )
+    download_revision = models.queue_whisper_download("download-interrupted", "base")
+
+    models.start_whisper_download("download-interrupted", "base", download_revision)
+
+    destination = tmp_path / "models" / "whisper" / "base"
+    task = models.list_download_tasks()["download-interrupted"]
+    assert task["status"] == "failed"
+    assert "simulated interrupted download" in task["message"]
+    assert not destination.exists()
+    assert not list(destination.parent.glob(".base.staging-*"))
 
 
 def test_download_activates_model_when_selection_has_not_changed(
