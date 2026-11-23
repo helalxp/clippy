@@ -48,10 +48,30 @@ Write-Host "Installing pinned $Variant Python dependencies..."
 & python -m pip install --disable-pip-version-check --no-warn-script-location --prefer-binary --target $SitePackages --index-url "https://pypi.org/simple" --extra-index-url $TorchIndex -r (Join-Path $RepoRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Could not install pinned $Variant Python dependencies." }
 
+# The bgutil 1.3.2 wheel registers both HTTP and script PO-token providers.
+# Clippy runs its persistent, supervised local HTTP server, so remove only the
+# script provider module: its discovery check spawns Node with a fixed 15s
+# timeout and can abort yt-dlp initialization before HTTP mode is selected.
+$bgutilPluginRoot = Join-Path $SitePackages "yt_dlp_plugins\extractor"
+$bgutilSharedPlugin = Join-Path $bgutilPluginRoot "getpot_bgutil.py"
+$bgutilHttpPlugin = Join-Path $bgutilPluginRoot "getpot_bgutil_http.py"
+$bgutilScriptPlugin = Join-Path $bgutilPluginRoot "getpot_bgutil_script.py"
+foreach ($requiredPlugin in @($bgutilSharedPlugin, $bgutilHttpPlugin, $bgutilScriptPlugin)) {
+    if (-not (Test-Path -LiteralPath $requiredPlugin -PathType Leaf)) {
+        throw "The pinned bgutil provider wheel is missing an expected plugin module: $requiredPlugin"
+    }
+}
+Remove-Item -LiteralPath $bgutilScriptPlugin -Force
+$bgutilPyCache = Join-Path $bgutilPluginRoot "__pycache__"
+if (Test-Path -LiteralPath $bgutilPyCache -PathType Container) {
+    Get-ChildItem -LiteralPath $bgutilPyCache -Filter "getpot_bgutil_script.*.pyc" -File |
+        Remove-Item -Force
+}
+
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
 $VersionCheck = (& $StagedPython --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") { throw "Packaged Python failed version check: $VersionCheck" }
-$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av, streamlink, keyring; from keyring.backends.Windows import WinVaultKeyring; assert WinVaultKeyring; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; print('torch=' + torch.__version__); print('av=' + av.__version__); print('streamlink=' + getattr(streamlink, '__version__', 'installed')); print('keyring_windows_backend=' + WinVaultKeyring.__name__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
+$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av, streamlink, keyring, importlib.util; from keyring.backends.Windows import WinVaultKeyring; import yt_dlp_plugins.extractor.getpot_bgutil; import yt_dlp_plugins.extractor.getpot_bgutil_http; assert WinVaultKeyring; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_http') is not None; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None, 'The timeout-prone script provider must not be packaged in the managed desktop runtime'; print('bgutil HTTP-only provider OK'); print('torch=' + torch.__version__); print('av=' + av.__version__); print('streamlink=' + getattr(streamlink, '__version__', 'installed')); print('keyring_windows_backend=' + WinVaultKeyring.__name__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
 & $StagedPython -c $ImportCheck
 if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import or PyAV compatibility validation." }
 
