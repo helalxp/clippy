@@ -91,7 +91,7 @@ def test_catalog_selection_is_saved_but_not_reported_as_installed(tmp_path, monk
     assert models.whisper_model_argument() == "medium"
 
 
-def test_desktop_catalog_selection_requires_managed_download(tmp_path, monkeypatch):
+def test_desktop_catalog_selection_keeps_first_use_hub_behavior(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("CLIPPY_DESKTOP_MODE", "1")
@@ -99,17 +99,6 @@ def test_desktop_catalog_selection_requires_managed_download(tmp_path, monkeypat
     selected = models.save_whisper_selection(model_size="base")
 
     assert selected["status"] == "selected_not_downloaded"
-    with pytest.raises(FileNotFoundError, match="Download & use model"):
-        models.whisper_model_argument()
-
-
-def test_non_desktop_catalog_selection_keeps_hub_first_use_behavior(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
-    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
-    monkeypatch.delenv("CLIPPY_DESKTOP_MODE", raising=False)
-
-    models.save_whisper_selection(model_size="base")
-
     assert models.whisper_model_argument() == "base"
 
 
