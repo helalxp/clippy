@@ -437,44 +437,57 @@ def test_whisper_model_path_lock_serializes_processes(tmp_path, monkeypatch):
     import os
     import subprocess
     import sys
+    import time
 
     models_root = tmp_path / "models"
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
     model_path = models_root / "whisper" / "base"
     lock_attempt = tmp_path / "lock-attempted"
+    lock_blocked = tmp_path / "lock-blocked"
     child_code = """
 import sys
+from pathlib import Path
 import clippy_local_models as models
+attempted, blocked = Path(sys.argv[2]), Path(sys.argv[3])
 original_lock = models.acquire_file_lock
 def notify_then_lock(handle):
-    with open(sys.argv[2], 'w', encoding='utf-8') as signal_file:
-        signal_file.write('attempted')
-    return original_lock(handle)
+    attempted.write_text('attempted', encoding='utf-8')
+    try:
+        return original_lock(handle)
+    except OSError:
+        blocked.write_text('blocked', encoding='utf-8')
+        raise
 models.acquire_file_lock = notify_then_lock
 with models.whisper_model_path_lock(sys.argv[1]):
     print('LOCK_ACQUIRED', flush=True)
 """
 
-    with models.whisper_model_path_lock(model_path):
-        process = subprocess.Popen(
-            [sys.executable, "-c", child_code, str(model_path), str(lock_attempt)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env={**os.environ, "CLIPPY_MODELS_DIR": str(models_root)},
-        )
-        import time
-        deadline = time.monotonic() + 5
-        while not lock_attempt.exists() and time.monotonic() < deadline:
-            if process.poll() is not None:
-                break
-            time.sleep(0.02)
-        assert lock_attempt.exists(), "child never attempted the OS-level lock"
-        assert process.poll() is None, "child bypassed the held model lock"
+    process = None
+    try:
+        with models.whisper_model_path_lock(model_path):
+            process = subprocess.Popen(
+                [sys.executable, "-c", child_code, str(model_path), str(lock_attempt), str(lock_blocked)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={**os.environ, "CLIPPY_MODELS_DIR": str(models_root)},
+            )
+            deadline = time.monotonic() + 5
+            while not lock_blocked.exists() and time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.02)
+            assert lock_attempt.exists(), "child never attempted the OS-level lock"
+            assert lock_blocked.exists(), "child did not receive a lock-contention response"
+            assert process.poll() is None, "child bypassed the held model lock"
 
-    stdout, stderr = process.communicate(timeout=5)
-    assert process.returncode == 0, stderr
-    assert "LOCK_ACQUIRED" in stdout
+        stdout, stderr = process.communicate(timeout=5)
+        assert process.returncode == 0, stderr
+        assert "LOCK_ACQUIRED" in stdout
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_directory_validation_failure_restores_previous_model(
