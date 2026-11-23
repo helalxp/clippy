@@ -62,6 +62,42 @@ foreach ($requiredPlugin in @($bgutilSharedPlugin, $bgutilHttpPlugin, $bgutilScr
     }
 }
 Remove-Item -LiteralPath $bgutilScriptPlugin -Force
+
+# The upstream HTTP provider otherwise treats its default 127.0.0.1:4416 URL
+# as enabled even when Clippy's optional server did not start. In the managed
+# desktop runtime, require the explicit base_url extractor argument that the
+# supervisor supplies only after its local service passed /ping and version
+# verification. This prevents accidental calls to an unrelated process on
+# the upstream default port when Clippy is running in degraded mode.
+$bgutilHttpSource = [IO.File]::ReadAllText($bgutilHttpPlugin)
+$normalizedBgutilHttpSource = $bgutilHttpSource.Replace("`r`n", "`n")
+$httpAvailabilityBlock = "    def is_available(self):`n        return self._server_available or self._last_server_check + 60 < int(time.time())`n"
+$httpAvailabilityReplacement = @'
+    def is_available(self):
+        if not self._configuration_arg('base_url', default=[None])[0]:
+            return False
+        return self._server_available or self._last_server_check + 60 < int(time.time())
+'@
+$availabilityMatches = ([regex]::Matches(
+    $normalizedBgutilHttpSource,
+    [regex]::Escape($httpAvailabilityBlock)
+)).Count
+if ($availabilityMatches -ne 1) {
+    throw "Pinned bgutil HTTP plugin availability source changed. Refusing to package an unreviewed default-port behavior."
+}
+$patchedBgutilHttpSource = $normalizedBgutilHttpSource.Replace(
+    $httpAvailabilityBlock,
+    $httpAvailabilityReplacement + "`n"
+)
+if ($patchedBgutilHttpSource -notmatch "if not self\._configuration_arg\('base_url'") {
+    throw "bgutil HTTP provider explicit-base_url guard did not pass its source assertion."
+}
+[IO.File]::WriteAllText(
+    $bgutilHttpPlugin,
+    $patchedBgutilHttpSource,
+    [Text.UTF8Encoding]::new($false)
+)
+
 $bgutilPyCache = Join-Path $bgutilPluginRoot "__pycache__"
 if (Test-Path -LiteralPath $bgutilPyCache -PathType Container) {
     Get-ChildItem -LiteralPath $bgutilPyCache -Filter "getpot_bgutil_script.*.pyc" -File |
@@ -71,7 +107,7 @@ if (Test-Path -LiteralPath $bgutilPyCache -PathType Container) {
 $StagedPython = Join-Path $RuntimeRoot "python.exe"
 $VersionCheck = (& $StagedPython --version 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $VersionCheck -ne "Python $PythonVersion") { throw "Packaged Python failed version check: $VersionCheck" }
-$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av, streamlink, keyring, importlib.util; from keyring.backends.Windows import WinVaultKeyring; import yt_dlp_plugins.extractor.getpot_bgutil; import yt_dlp_plugins.extractor.getpot_bgutil_http; assert WinVaultKeyring; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_http') is not None; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None, 'The timeout-prone script provider must not be packaged in the managed desktop runtime'; print('bgutil HTTP-only provider OK'); print('torch=' + torch.__version__); print('av=' + av.__version__); print('streamlink=' + getattr(streamlink, '__version__', 'installed')); print('keyring_windows_backend=' + WinVaultKeyring.__name__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
+$ImportCheck = "import torch, torchvision, fastapi, uvicorn, faster_whisper, scenedetect, ultralytics, mediapipe, av, streamlink, keyring, importlib.util; from keyring.backends.Windows import WinVaultKeyring; from yt_dlp_plugins.extractor.getpot_bgutil_http import BgUtilHTTPPTP; import yt_dlp_plugins.extractor.getpot_bgutil; import yt_dlp_plugins.extractor.getpot_bgutil_http; assert WinVaultKeyring; assert av.__version__ == '18.1.0', 'Expected PyAV 18.1.0 for faster-whisper 1.2.1; found ' + av.__version__; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_http') is not None; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None, 'The timeout-prone script provider must not be packaged in the managed desktop runtime'; assert not BgUtilHTTPPTP(None, None, {}).is_available(), 'HTTP provider must be disabled when Clippy has no verified base URL'; assert BgUtilHTTPPTP(None, None, {'base_url': ['http://127.0.0.1:4416']}).is_available(), 'HTTP provider must activate when Clippy supplies a base URL'; print('bgutil HTTP-only, explicitly enabled provider OK'); print('torch=' + torch.__version__); print('av=' + av.__version__); print('streamlink=' + getattr(streamlink, '__version__', 'installed')); print('keyring_windows_backend=' + WinVaultKeyring.__name__); print('cuda_build=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available()))"
 & $StagedPython -c $ImportCheck
 if ($LASTEXITCODE -ne 0) { throw "Packaged Python failed dependency import or PyAV compatibility validation." }
 
