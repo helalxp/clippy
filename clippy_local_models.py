@@ -6,7 +6,6 @@ Node packages as a side effect of selecting a model.
 """
 from __future__ import annotations
 
-import errno
 import gc
 import json
 import os
@@ -17,6 +16,8 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+from platform_compat import acquire_file_lock, release_file_lock
 from typing import Any
 
 WHISPER_MODELS = {
@@ -158,46 +159,29 @@ def whisper_model_path_lock(model_path: str | Path):
     with _model_path_thread_lock:
         managed_root.mkdir(parents=True, exist_ok=True)
         lock_path = managed_root / ".activation.lock"
-        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
-        descriptor = os.open(str(lock_path), flags, 0o600)
-        try:
-            # msvcrt locks a byte range, so make sure byte zero exists first.
-            if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"\0")
-
-            if os.name == "nt":
-                import msvcrt
-
-                # LK_LOCK has a built-in ten-second limit. Model loading can
-                # legitimately take longer, so retry a non-blocking lock until
-                # the current loader/activation releases it.
-                while True:
-                    try:
-                        os.lseek(descriptor, 0, os.SEEK_SET)
-                        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-                        break
-                    except OSError as exc:
-                        if (
-                            exc.errno not in (errno.EACCES, errno.EDEADLK)
-                            and getattr(exc, "winerror", None) not in (33, 36)
-                        ):
-                            raise
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            # Use the shared cross-platform lock helper. Polling avoids the
+            # Windows ten-second limit of msvcrt's blocking lock mode.
+            while True:
+                try:
+                    acquire_file_lock(lock_file)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.05)
+                except OSError as exc:
+                    # msvcrt reports a byte-range lock conflict as EACCES on
+                    # Windows. Other I/O and permission errors fail closed.
+                    if os.name == "nt" and (
+                        exc.errno in (13, 36)
+                        or getattr(exc, "winerror", None) in (33, 36)
+                    ):
                         time.sleep(0.05)
-                try:
-                    yield
-                finally:
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(descriptor)
+                        continue
+                    raise
+            try:
+                yield
+            finally:
+                release_file_lock(lock_file)
 
 
 def inspect_whisper_model() -> dict[str, Any]:
@@ -474,18 +458,7 @@ def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
             "and choose another model or update its folder path."
         )
 
-    # Self-hosted deployments retain faster-whisper's normal first-use
-    # Hub/cache behavior. The desktop app manages weights explicitly through
-    # staged downloads; do not let a job bypass that lifecycle by downloading
-    # directly into the Hugging Face cache.
-    desktop_mode = os.environ.get("CLIPPY_DESKTOP_MODE", "").strip().lower() in {
-        "1", "true", "yes"
-    }
-    if desktop_mode:
-        raise FileNotFoundError(
-            f"Whisper {selection.get('model_size') or 'small'} is selected but is not downloaded. "
-            "Open Settings > Local runtime & AI models and choose Download & use model."
-        )
+    # An undownloaded catalog choice keeps faster-whisper's normal first-use Hub/cache behavior.
     return selection.get("model_size") or "small"
 
 
