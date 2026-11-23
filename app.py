@@ -3736,6 +3736,16 @@ async def process_endpoint(
     if url:
         await _validate_source_url(url)
 
+    # Desktop model weights are a separately managed component. Reject an
+    # uninstalled choice before creating a job, reserving minutes, or launching
+    # faster-whisper's implicit Hugging Face download path.
+    if os.environ.get("CLIPPY_DESKTOP_MODE", "").strip().lower() in {"1", "true", "yes"}:
+        from clippy_local_models import whisper_model_argument
+        try:
+            whisper_model_argument()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
     # Capture attestation context for legal record (IP + timestamp + UA)
     client_ip = request.client.host if request.client else "unknown"
     fwd = request.headers.get("x-forwarded-for")
