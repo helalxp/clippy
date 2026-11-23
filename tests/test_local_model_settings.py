@@ -441,28 +441,36 @@ def test_whisper_model_path_lock_serializes_processes(tmp_path, monkeypatch):
     models_root = tmp_path / "models"
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
     model_path = models_root / "whisper" / "base"
+    lock_attempt = tmp_path / "lock-attempted"
     child_code = """
 import sys
-from clippy_local_models import whisper_model_path_lock
-print('WAITING', flush=True)
-with whisper_model_path_lock(sys.argv[1]):
+import clippy_local_models as models
+original_lock = models.acquire_file_lock
+def notify_then_lock(handle):
+    with open(sys.argv[2], 'w', encoding='utf-8') as signal_file:
+        signal_file.write('attempted')
+    return original_lock(handle)
+models.acquire_file_lock = notify_then_lock
+with models.whisper_model_path_lock(sys.argv[1]):
     print('LOCK_ACQUIRED', flush=True)
 """
 
     with models.whisper_model_path_lock(model_path):
         process = subprocess.Popen(
-            [sys.executable, "-c", child_code, str(model_path)],
+            [sys.executable, "-c", child_code, str(model_path), str(lock_attempt)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, "CLIPPY_MODELS_DIR": str(models_root)},
         )
-        # Wait until the child has reached the lock attempt. It must remain
-        # blocked until the parent releases the model-size-specific lock.
-        assert process.stdout.readline().strip() == "WAITING"
         import time
-        time.sleep(0.2)
-        assert process.poll() is None
+        deadline = time.monotonic() + 5
+        while not lock_attempt.exists() and time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            time.sleep(0.02)
+        assert lock_attempt.exists(), "child never attempted the OS-level lock"
+        assert process.poll() is None, "child bypassed the held model lock"
 
     stdout, stderr = process.communicate(timeout=5)
     assert process.returncode == 0, stderr
