@@ -561,7 +561,7 @@ impl Supervisor {
                     match wait_for_bgutil_health(
                         &mut process,
                         bgutil_port,
-                        Duration::from_secs(45),
+                        Duration::from_secs(20),
                     ) {
                         Ok(()) => {
                             let _ = writeln!(
