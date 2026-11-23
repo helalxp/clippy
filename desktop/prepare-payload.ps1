@@ -63,6 +63,43 @@ Push-Location $bgutilServer
 try {
     npm ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw "bgutil provider npm ci failed (exit $LASTEXITCODE)." }
+
+    # bgutil 1.3.2's upstream listener binds to IPv6/IPv4 wildcard interfaces.
+    # Clippy's local provider has no authentication, so patch the pinned source
+    # to bind exclusively to IPv4 loopback and remove its wildcard fallback.
+    $bgutilMainSource = Join-Path $bgutilServer "src\main.ts"
+    $mainSource = [IO.File]::ReadAllText($bgutilMainSource)
+    $normalizedSource = $mainSource.Replace("`r`n", "`n")
+    $listenStartMarker = "httpServer`n    .listen("
+    $listenStart = $normalizedSource.IndexOf($listenStartMarker, [StringComparison]::Ordinal)
+    $listenEndMarker = "const sessionManager = new SessionManager();"
+    $listenEnd = if ($listenStart -ge 0) {
+        $normalizedSource.IndexOf($listenEndMarker, $listenStart, [StringComparison]::Ordinal)
+    } else { -1 }
+    if ($listenStart -lt 0 -or $listenEnd -lt 0) {
+        throw "Pinned bgutil $bgutilVersion listener source changed. Refusing to package an unreviewed network binding."
+    }
+    $loopbackListener = @'
+httpServer.listen(
+    {
+        host: "127.0.0.1",
+        port: PORT_NUMBER,
+    },
+    () => {
+        console.log(
+            `Started POT server (v${VERSION}) on address 127.0.0.1:${PORT_NUMBER}`,
+        );
+    },
+);
+
+'@
+    $patchedSource = $normalizedSource.Substring(0, $listenStart) + $loopbackListener + $normalizedSource.Substring($listenEnd)
+    if ($patchedSource -notmatch 'host:\s*"127\.0\.0\.1"' -or
+        $patchedSource -match '0\.0\.0\.0|host:\s*"::"') {
+        throw "bgutil loopback-only listener patch did not pass its source assertions."
+    }
+    [IO.File]::WriteAllText($bgutilMainSource, $patchedSource, [Text.UTF8Encoding]::new($false))
+
     npx tsc
     if ($LASTEXITCODE -ne 0) { throw "bgutil provider TypeScript build failed (exit $LASTEXITCODE)." }
     npm prune --omit=dev --no-audit --no-fund
@@ -75,8 +112,16 @@ New-Item -ItemType Directory -Path $bgutilPayload -Force | Out-Null
 Copy-Item (Join-Path $bgutilServer "build") -Destination $bgutilPayload -Recurse
 Copy-Item (Join-Path $bgutilServer "node_modules") -Destination $bgutilPayload -Recurse
 Copy-Item (Join-Path $bgutilServer "package.json") -Destination $bgutilPayload
-if (-not (Test-Path (Join-Path $bgutilPayload "build\generate_once.js"))) {
-    throw "bgutil provider payload is missing server/build/generate_once.js."
+$bgutilMainEntry = Join-Path $bgutilPayload "build\main.js"
+$bgutilExpressPackage = Join-Path $bgutilPayload "node_modules\express\package.json"
+if (-not (Test-Path $bgutilMainEntry -PathType Leaf) -or
+    -not (Test-Path $bgutilExpressPackage -PathType Leaf)) {
+    throw "bgutil HTTP provider payload is missing build/main.js or its Express runtime dependency."
+}
+$compiledBgutilMain = [IO.File]::ReadAllText($bgutilMainEntry)
+if ($compiledBgutilMain -notmatch '127\.0\.0\.1' -or
+    $compiledBgutilMain -match '0\.0\.0\.0|host:\s*"::"') {
+    throw "Compiled bgutil server is not restricted to the loopback interface."
 }
 Remove-Item $bgutilSource -Recurse -Force
 
@@ -167,7 +212,9 @@ $requiredPayloadFiles = @(
     "render-service\dist\server.js",
     "render-service\node_modules\@remotion\renderer\package.json",
     "remotion\src\index.ts",
-    "bgutil-provider\server\build\generate_once.js"
+    "bgutil-provider\server\build\main.js",
+    "bgutil-provider\server\package.json",
+    "bgutil-provider\server\node_modules\express\package.json"
 )
 foreach ($relativePath in $requiredPayloadFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $stageRoot $relativePath) -PathType Leaf)) {
