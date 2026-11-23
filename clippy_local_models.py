@@ -193,6 +193,32 @@ def whisper_model_path_lock(model_path: str | Path):
                 release_file_lock(lock_file)
 
 
+def _restore_interrupted_whisper_promotion(destination: Path) -> bool:
+    """Restore the last valid model if the process stopped between directory renames."""
+    if destination.exists():
+        return False
+
+    backups = sorted(
+        destination.parent.glob(f".{destination.name}.previous-*"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for backup in backups:
+        try:
+            validate_whisper_model_path(str(backup))
+        except (OSError, ValueError):
+            continue
+        try:
+            os.replace(backup, destination)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Clippy found a valid previous Whisper model at {backup}, "
+                f"but could not restore it to {destination}: {exc}"
+            ) from exc
+        return True
+    return False
+
+
 def inspect_whisper_model() -> dict[str, Any]:
     """Describe the persisted selection and on-disk readiness without loading weights."""
     saved = _read_settings().get("whisper", {})
@@ -222,6 +248,8 @@ def inspect_whisper_model() -> dict[str, Any]:
 
     try:
         with whisper_model_path_lock(candidate):
+            if source == "catalog":
+                _restore_interrupted_whisper_promotion(candidate)
             resolved = validate_whisper_model_path(str(candidate))
         installed = True
         validation_error = None
@@ -410,6 +438,7 @@ def verify_whisper_model_load() -> dict[str, Any]:
 def _promote_staged_whisper_model(staging: Path, destination: Path) -> Path:
     """Promote a verified model without exposing the Windows directory-rename gap."""
     with whisper_model_path_lock(destination):
+        _restore_interrupted_whisper_promotion(destination)
         backup = None
         if destination.exists():
             backup = destination.with_name(
