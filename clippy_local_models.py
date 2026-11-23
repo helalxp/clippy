@@ -6,11 +6,14 @@ Node packages as a side effect of selecting a model.
 """
 from __future__ import annotations
 
+import gc
 import json
 import os
+import shutil
 import threading
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -245,25 +248,16 @@ def save_whisper_selection(*, model_size: str | None = None,
     return get_whisper_selection()
 
 
-def verify_whisper_model_load() -> dict[str, Any]:
-    """Load the selected model and execute a real, short CPU transcription pass."""
+def _verify_whisper_model_directory(model_path: str, model_size: str) -> dict[str, Any]:
+    """Load a candidate model directory and execute a real short CPU transcription."""
     import math
     import wave
     from array import array
 
-    selection = get_whisper_selection()
-    if not selection.get("installed"):
-        raise FileNotFoundError(
-            f"Whisper {selection.get('model_size', 'small')} is selected but its model files "
-            "are not installed. Download the model first."
-        )
-
     from faster_whisper import WhisperModel
 
-    # Verification and production transcription must load the same resolved source.
-    model_path = whisper_model_argument(selection)
-    # CPU int8 keeps this diagnostic independent of CUDA availability and does
-    # not modify the user's selected production device/compute preferences.
+    # CPU int8 makes integrity verification independent of CUDA availability
+    # and does not alter the user's selected production device/preferences.
     audio_path = None
     model = None
     load_started = time.perf_counter()
@@ -271,8 +265,8 @@ def verify_whisper_model_load() -> dict[str, Any]:
         with tempfile.NamedTemporaryFile(prefix="clippy-whisper-test-", suffix=".wav", delete=False) as audio_file:
             audio_path = Path(audio_file.name)
 
-        # A short deterministic tone exercises the packaged PyAV decoder and
-        # the actual CTranslate2 encoder/decoder without needing a user file.
+        # A deterministic tone exercises both the packaged PyAV decoder and
+        # the actual CTranslate2 encoder/decoder without requiring user media.
         sample_rate = 16_000
         duration_seconds = 2
         samples = array(
@@ -315,7 +309,7 @@ def verify_whisper_model_load() -> dict[str, Any]:
 
         return {
             "ok": True,
-            "model_size": selection["model_size"],
+            "model_size": model_size,
             "model_path": model_path,
             "load_seconds": round(load_seconds, 2),
             "inference_seconds": round(inference_seconds, 2),
@@ -328,11 +322,59 @@ def verify_whisper_model_load() -> dict[str, Any]:
     finally:
         if model is not None:
             del model
+            # CTranslate2 owns native file handles; collect before the caller
+            # attempts a same-volume directory rename on Windows.
+            gc.collect()
         if audio_path is not None:
             try:
                 audio_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def verify_whisper_model_load() -> dict[str, Any]:
+    """Load the selected model and execute a real, short CPU transcription pass."""
+    selection = get_whisper_selection()
+    if not selection.get("installed"):
+        raise FileNotFoundError(
+            f"Whisper {selection.get('model_size', 'small')} is selected but its model files "
+            "are not installed. Download the model first."
+        )
+    # Verification and production transcription must load the same resolved source.
+    model_path = whisper_model_argument(selection)
+    return _verify_whisper_model_directory(model_path, selection["model_size"])
+
+
+def _promote_staged_whisper_model(staging: Path, destination: Path) -> Path:
+    """Promote a fully verified model on the same volume, restoring old files on failure."""
+    backup = None
+    if destination.exists():
+        backup = destination.with_name(
+            f".{destination.name}.previous-{uuid.uuid4().hex}"
+        )
+        # Keep the previous model intact until the new directory is ready.
+        os.replace(destination, backup)
+
+    try:
+        # staging and destination are siblings, so this is a same-volume rename.
+        os.replace(staging, destination)
+    except Exception as promotion_error:
+        if backup is not None and backup.exists() and not destination.exists():
+            try:
+                os.replace(backup, destination)
+            except OSError as restore_error:
+                raise RuntimeError(
+                    "The new Whisper model could not be activated and the previous "
+                    f"model could not be restored automatically. Previous files remain at "
+                    f"{backup}. Activation error: {promotion_error}; restore error: {restore_error}"
+                ) from promotion_error
+        raise
+
+    if backup is not None and backup.exists():
+        # Cleanup failure must not turn a successful activation into a failed
+        # download or remove the newly activated model.
+        shutil.rmtree(backup, ignore_errors=True)
+    return validate_whisper_model_path(str(destination))
 
 
 def whisper_model_argument(selection: dict[str, Any] | None = None) -> str:
@@ -428,27 +470,46 @@ def start_whisper_download(
         model_size=model_size,
         message="Downloading model files…",
     )
+    staging = None
     try:
         from huggingface_hub import snapshot_download
 
         destination = models_root() / "whisper" / model_size
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # Never download into the path used by transcription workers. A job
+        # must see either the previous complete model or the new verified one,
+        # never a directory whose model.bin is still being written.
+        staging = Path(
+            tempfile.mkdtemp(
+                prefix=f".{model_size}.staging-",
+                dir=str(destination.parent),
+            )
+        )
         snapshot_download(
             repo_id=WHISPER_MODELS[model_size]["repo_id"],
-            local_dir=str(destination),
+            local_dir=str(staging),
         )
 
         _update_download_task(
-            task_id, status="validating", message="Download complete. Checking model files…"
+            task_id,
+            status="validating",
+            message="Download complete. Checking files and testing the model…",
         )
-        model_dir = validate_whisper_model_path(str(destination))
+        validate_whisper_model_path(str(staging))
+        # Checking filenames and sizes is not enough: prove that the native
+        # CTranslate2 loader can open these exact staged weights and transcribe
+        # a short deterministic audio sample before they become selectable.
+        _verify_whisper_model_directory(str(staging), model_size)
+
+        model_dir = _promote_staged_whisper_model(staging, destination)
+        staging = None  # The staging directory was renamed into its final path.
         activated = _activate_download_if_selection_is_unchanged(
             model_size, model_dir, expected_selection_revision
         )
         message = (
-            "Model downloaded and selected."
+            "Model downloaded, load-tested, and selected."
             if activated
-            else "Model downloaded. Your newer selection was preserved."
+            else "Model downloaded and load-tested. Your newer selection was preserved."
         )
         _update_download_task(
             task_id,
@@ -465,3 +526,6 @@ def start_whisper_download(
             model_size=model_size,
             message=str(exc)[:500],
         )
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
