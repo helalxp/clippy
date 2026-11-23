@@ -45,6 +45,13 @@ Describe "Assembled Clippy application payload contract" {
         $setupSource | Should -Match "bgutil HTTP provider must require an explicit managed base URL"
     }
 
+    It "makes the desktop runtime status reject the legacy bgutil Python provider" {
+        $bootstrapSource = Get-Content (Join-Path $PSScriptRoot "../src-tauri/src/bootstrap.rs") -Raw
+        $bootstrapSource | Should -Match 'getpot_bgutil_script'
+        $bootstrapSource | Should -Match 'BgUtilHTTPPTP'
+        $bootstrapSource | Should -Match 'must require an explicit managed base URL'
+    }
+
     It "requires the packaged bgutil HTTP server and Express dependency during setup" {
         $setupSource = Get-Content (Join-Path $PSScriptRoot "../setup-runtime.ps1") -Raw
         $setupSource | Should -Match 'bgutil-provider\\server\\build\\main\.js'
