@@ -733,7 +733,8 @@ fn install_app_payload_blocking(app: tauri::AppHandle) -> Result<String, String>
         "render-service/dist/server.js",
         "render-service/node_modules/@remotion/renderer/package.json",
         "remotion/src/index.ts",
-        "bgutil-provider/server/build/generate_once.js",
+        "bgutil-provider/server/build/main.js",
+        "bgutil-provider/server/node_modules/express/package.json",
     ];
     let current_payload_is_complete = required_payload_files
         .iter()
