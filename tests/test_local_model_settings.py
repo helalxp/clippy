@@ -6,7 +6,7 @@ import clippy_local_models as models
 
 
 def make_model(path, vocabulary_name="vocabulary.txt"):
-    path.mkdir(parents=True)
+    path.mkdir(parents=True, exist_ok=True)
     (path / "model.bin").write_bytes(b"model")
     (path / "config.json").write_text("{}", encoding="utf-8")
     (path / "tokenizer.json").write_text("{}", encoding="utf-8")
@@ -198,17 +198,41 @@ def test_saving_catalog_selection_preserves_other_whisper_preferences(
     assert selected["selection_revision"] == 1
 
 
-def _install_fake_snapshot_download(monkeypatch):
+def _install_fake_snapshot_download(
+    monkeypatch, *, model_load_error=None, events=None
+):
     import sys
     import types
 
     from pathlib import Path
 
     def snapshot_download(repo_id, local_dir):
+        if events is not None:
+            events["download_path"] = Path(local_dir)
         make_model(Path(local_dir))
+
+    class FakeWhisperModel:
+        def __init__(self, model_path, **kwargs):
+            if events is not None:
+                events["load_path"] = Path(model_path)
+                events["load_kwargs"] = kwargs
+            if model_load_error:
+                raise RuntimeError(model_load_error)
+
+        def transcribe(self, audio_path, **kwargs):
+            if events is not None:
+                events["inference"] = True
+            def generated_segments():
+                yield object()
+            return generated_segments(), types.SimpleNamespace(duration=2.0)
+
     monkeypatch.setitem(
         sys.modules, "huggingface_hub",
         types.SimpleNamespace(snapshot_download=snapshot_download),
+    )
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper",
+        types.SimpleNamespace(WhisperModel=FakeWhisperModel),
     )
 
 
@@ -233,6 +257,88 @@ def test_download_completion_does_not_overwrite_a_newer_user_selection(
     assert task["activated"] is False
     assert "newer selection was preserved" in task["message"]
     assert (tmp_path / "models" / "whisper" / "medium" / "model.bin").is_file()
+
+
+def test_download_keeps_candidate_staged_until_native_model_load_passes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    destination = tmp_path / "models" / "whisper" / "small"
+    events = {}
+
+    download_revision = models.queue_whisper_download("download-staged", "small")
+    _install_fake_snapshot_download(monkeypatch, events=events)
+
+    models.start_whisper_download("download-staged", "small", download_revision)
+
+    task = models.list_download_tasks()["download-staged"]
+    assert task["status"] == "complete"
+    assert events["download_path"] == events["load_path"]
+    assert events["download_path"].parent == destination.parent
+    assert events["download_path"].name.startswith(".small.staging-")
+    assert events["load_kwargs"]["local_files_only"] is True
+    assert events["inference"] is True
+    assert destination.is_dir()
+    assert (destination / "model.bin").is_file()
+    assert not list(destination.parent.glob(".small.staging-*"))
+
+
+def test_failed_native_model_load_preserves_previous_model_and_selection(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+    destination = make_model(tmp_path / "models" / "whisper" / "small")
+    original_model = (destination / "model.bin").read_bytes()
+    events = {}
+
+    download_revision = models.queue_whisper_download("download-load-fail", "small")
+    _install_fake_snapshot_download(
+        monkeypatch,
+        model_load_error="native CTranslate2 load failed",
+        events=events,
+    )
+
+    models.start_whisper_download("download-load-fail", "small", download_revision)
+
+    task = models.list_download_tasks()["download-load-fail"]
+    assert task["status"] == "failed"
+    assert "native CTranslate2 load failed" in task["message"]
+    assert (destination / "model.bin").read_bytes() == original_model
+    assert not list(destination.parent.glob(".small.staging-*"))
+    assert models.get_whisper_selection()["model_path"] == str(destination.resolve())
+
+
+def test_interrupted_download_never_leaves_a_partial_final_model(
+    tmp_path, monkeypatch
+):
+    import sys
+    import types
+    from pathlib import Path
+
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
+
+    def interrupted_download(repo_id, local_dir):
+        staging = Path(local_dir)
+        (staging / "model.bin").write_bytes(b"partial")
+        raise RuntimeError("simulated interrupted download")
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=interrupted_download),
+    )
+    download_revision = models.queue_whisper_download("download-interrupted", "base")
+
+    models.start_whisper_download("download-interrupted", "base", download_revision)
+
+    destination = tmp_path / "models" / "whisper" / "base"
+    task = models.list_download_tasks()["download-interrupted"]
+    assert task["status"] == "failed"
+    assert "simulated interrupted download" in task["message"]
+    assert not destination.exists()
+    assert not list(destination.parent.glob(".base.staging-*"))
 
 
 def test_download_activates_model_when_selection_has_not_changed(
