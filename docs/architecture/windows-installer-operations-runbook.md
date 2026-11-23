@@ -86,6 +86,30 @@ Do not "fix" this by changing the product to PowerShell 7, removing all environm
 4. Run `windows-desktop-validation.yml`.
 5. Run the tag-based release workflow on a candidate release commit and inspect the smoke-test output. Do not publish until every release step passes.
 
+## Resolved incident: bgutil YouTube provider timeout
+
+**Symptom:** yt-dlp initialization fails while the bgutil script plugin runs
+`generate_once.js --version`; on Windows the upstream plugin's fixed 15-second
+check can expire during Node cold start.
+
+**Permanent desktop fix:** the managed Python runtime retains the shared and
+HTTP bgutil plugin modules but excludes `getpot_bgutil_script.py`. The native
+supervisor starts the pinned bgutil HTTP server as a supervised child, verifies
+its `/ping` response/version, and passes `BGUTIL_BASE_URL` only after the
+health check succeeds. If the optional server cannot start, Clippy still starts
+without the PO-token provider rather than blocking unrelated features.
+
+**Security constraint:** upstream bgutil 1.3.2 listens on wildcard interfaces.
+The payload builder replaces that listener with an IPv4 `127.0.0.1` binding
+and fails closed if the expected source block changes. Keep the compiled
+payload assertion and clean-install server smoke test. Never package this
+unauthenticated endpoint on `0.0.0.0` or `::`.
+
+The provider log is
+`%LOCALAPPDATA%\\Clippy\\logs\\bgutil-provider.log`. Re-run Windows desktop
+validation and the clean first-run smoke test after changing the package,
+listener patch, or supervisor lifecycle.
+
 ## Where to find logs
 
 The primary per-user setup log is:
