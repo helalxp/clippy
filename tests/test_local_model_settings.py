@@ -168,6 +168,32 @@ def test_catalog_selection_recovers_previous_model_after_interrupted_promotion(
     assert not backup.exists()
 
 
+def test_catalog_selection_recovers_when_destination_is_invalid(
+    tmp_path, monkeypatch
+):
+    settings = tmp_path / "settings.json"
+    models_root = tmp_path / "models"
+    monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(settings))
+    monkeypatch.setenv("CLIPPY_MODELS_DIR", str(models_root))
+    destination = models_root / "whisper" / "small"
+    destination.mkdir(parents=True)
+    (destination / "model.bin").write_bytes(b"partial")
+    backup = make_model(
+        destination.parent / ".small.previous-interrupted"
+    )
+    settings.write_text(
+        json.dumps({"whisper": {"model_size": "small", "model_path": None}}),
+        encoding="utf-8",
+    )
+
+    selection = models.get_whisper_selection()
+
+    assert selection["installed"] is True
+    assert (destination / "model.bin").read_bytes() == b"model"
+    assert not backup.exists()
+    assert list(destination.parent.glob(".small.failed-*"))
+
+
 def test_catalog_selection_reports_installed_weights(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPPY_SETTINGS_PATH", str(tmp_path / "settings.json"))
     monkeypatch.setenv("CLIPPY_MODELS_DIR", str(tmp_path / "models"))
