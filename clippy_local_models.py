@@ -10,15 +10,15 @@ import gc
 import json
 import os
 import shutil
-import threading
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from platform_compat import acquire_file_lock, release_file_lock
-from typing import Any
 
 WHISPER_MODELS = {
     "tiny": {"repo_id": "Systran/faster-whisper-tiny", "label": "Tiny", "description": "Fastest, lowest memory use; lower accuracy."},
@@ -31,7 +31,8 @@ WHISPER_MODELS = {
 
 _settings_lock = threading.RLock()
 _download_lock = threading.Lock()
-_model_path_thread_lock = threading.RLock()
+_model_path_locks_guard = threading.Lock()
+_model_path_thread_locks: dict[str, threading.RLock] = {}
 _download_tasks: dict[str, dict[str, Any]] = {}
 
 
@@ -145,8 +146,8 @@ def whisper_model_path_lock(model_path: str | Path):
     directory cannot be atomically replaced there. Holding this lock while a
     transcription loads the model prevents it from observing the brief gap
     between moving the previous directory aside and installing the verified
-    replacement. Custom model folders outside Clippy's managed model root and
-    Hugging Face model identifiers do not need this lock.
+    replacement. The lock is per model size, so unrelated models can still
+    transcribe concurrently. Custom folders and Hub identifiers need no lock.
     """
     managed_root = (models_root() / "whisper").resolve()
     try:
@@ -156,9 +157,17 @@ def whisper_model_path_lock(model_path: str | Path):
         yield
         return
 
-    with _model_path_thread_lock:
+    relative_path = resolved_path.relative_to(managed_root)
+    if not relative_path.parts:
+        yield
+        return
+    lock_path = managed_root / f".{relative_path.parts[0]}.activation.lock"
+    lock_key = str(lock_path).casefold()
+    with _model_path_locks_guard:
+        thread_lock = _model_path_thread_locks.setdefault(lock_key, threading.RLock())
+
+    with thread_lock:
         managed_root.mkdir(parents=True, exist_ok=True)
-        lock_path = managed_root / ".activation.lock"
         with lock_path.open("a+", encoding="utf-8") as lock_file:
             # Use the shared cross-platform lock helper. Polling avoids the
             # Windows ten-second limit of msvcrt's blocking lock mode.
