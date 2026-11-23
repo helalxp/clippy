@@ -158,14 +158,14 @@ _whisper_lock = threading.Lock()
 _whisper_force_cpu = False
 
 
-def _get_whisper_model():
+def _get_whisper_model(config=None):
     """Process-wide WhisperModel singleton, rebuilt if the env config changes.
 
     Keeping the model resident avoids a full reload per transcription (which
     on GPU would also mean re-allocating a couple of GB of VRAM per job).
     """
     global _whisper_model, _whisper_key
-    cfg = get_whisper_config()
+    cfg = dict(config or get_whisper_config())
     if _whisper_force_cpu:
         cfg["device"] = "cpu"
         cfg["compute_type"] = "int8"
@@ -173,13 +173,8 @@ def _get_whisper_model():
     with _whisper_lock:
         if _whisper_model is None or _whisper_key != key:
             from faster_whisper import WhisperModel
-            # The desktop downloader activates catalog models by renaming
-            # directories. Coordinate the native file open with that brief
-            # activation window across the API process and job subprocesses.
-            from clippy_local_models import whisper_model_path_lock
-            with whisper_model_path_lock(key[0]):
-                _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
-                _whisper_key = key
+            _whisper_model = WhisperModel(key[0], device=key[1], compute_type=key[2])
+            _whisper_key = key
     return _whisper_model, cfg["device"]
 
 
@@ -193,17 +188,26 @@ def _run_whisper_once(media_path, **params):
     # before unloading, so a transcription can never start on a model that is
     # being dropped underneath it.
     with gate:
-        model, _device = _get_whisper_model()
-        segments, info = model.transcribe(media_path, **params)
-        progress = _TranscribeProgress(getattr(info, "duration", 0))
-        materialized = []
-        for segment in segments:
-            materialized.append(segment)
-            progress.update(segment.end)
-        # VAD trims trailing silence, so the last segment can end short of the
-        # media duration — force the 100% line.
-        progress.update(progress.total)
-        return materialized, info
+        cfg = get_whisper_config()
+        if _whisper_force_cpu:
+            cfg["device"] = "cpu"
+            cfg["compute_type"] = "int8"
+        # Keep the managed model path stable from native model construction
+        # through lazy segment decoding. The downloader takes this same
+        # cross-process lock while it promotes a fully verified directory.
+        from clippy_local_models import whisper_model_path_lock
+        with whisper_model_path_lock(cfg["model_size"]):
+            model, _device = _get_whisper_model(cfg)
+            segments, info = model.transcribe(media_path, **params)
+            progress = _TranscribeProgress(getattr(info, "duration", 0))
+            materialized = []
+            for segment in segments:
+                materialized.append(segment)
+                progress.update(segment.end)
+            # VAD trims trailing silence, so the last segment can end short of
+            # the media duration — force the 100% line.
+            progress.update(progress.total)
+            return materialized, info
 
 
 def run_whisper_transcription(media_path, **params):
