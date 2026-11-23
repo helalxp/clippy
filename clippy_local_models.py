@@ -194,13 +194,25 @@ def whisper_model_path_lock(model_path: str | Path):
 
 
 def _restore_interrupted_whisper_promotion(destination: Path) -> bool:
-    """Restore the last valid model if the process stopped between directory renames."""
+    """Recover from a process stop during the two-rename model promotion."""
+    backups = list(destination.parent.glob(f".{destination.name}.previous-*"))
     if destination.exists():
-        return False
+        try:
+            validate_whisper_model_path(str(destination))
+        except (OSError, ValueError):
+            pass
+        else:
+            # Promotion reached a valid destination but stopped before deleting
+            # its old backup. The new model is already committed; reclaim the
+            # abandoned backup to avoid retaining a second full model forever.
+            for backup in backups:
+                shutil.rmtree(backup, ignore_errors=True)
+            return False
 
-    backups = sorted(
-        destination.parent.glob(f".{destination.name}.previous-*"),
-        key=lambda path: path.stat().st_mtime,
+    # If the destination is missing or structurally invalid, restore the newest
+    # valid backup. A failed destination is retained for diagnosis, not deleted.
+    backups.sort(
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
         reverse=True,
     )
     for backup in backups:
@@ -208,16 +220,35 @@ def _restore_interrupted_whisper_promotion(destination: Path) -> bool:
             validate_whisper_model_path(str(backup))
         except (OSError, ValueError):
             continue
+
+        failed_destination = None
+        if destination.exists():
+            failed_destination = destination.with_name(
+                f".{destination.name}.failed-{uuid.uuid4().hex}"
+            )
+            os.replace(destination, failed_destination)
         try:
             os.replace(backup, destination)
-        except OSError as exc:
+        except OSError as restore_error:
+            if failed_destination is not None and failed_destination.exists():
+                try:
+                    os.replace(failed_destination, destination)
+                except OSError as rollback_error:
+                    raise RuntimeError(
+                        f"Could not restore the previous Whisper model from {backup}. "
+                        f"The invalid destination remains at {failed_destination}; "
+                        f"restore error: {restore_error}; rollback error: {rollback_error}"
+                    ) from restore_error
             raise RuntimeError(
-                f"Clippy found a valid previous Whisper model at {backup}, "
-                f"but could not restore it to {destination}: {exc}"
-            ) from exc
+                f"Could not restore the previous Whisper model from {backup}: {restore_error}"
+            ) from restore_error
+
+        if failed_destination is not None:
+            # Keep the failed directory out of the active path, but don't
+            # delete it automatically; it can help diagnose disk corruption.
+            pass
         return True
     return False
-
 
 def inspect_whisper_model() -> dict[str, Any]:
     """Describe the persisted selection and on-disk readiness without loading weights."""
