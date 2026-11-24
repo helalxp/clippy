@@ -113,8 +113,8 @@ async def get_twitch_authorization_status(flow_id: str):
 async def stop_twitch_authorization(flow_id: str):
     if len(flow_id) < 32 or len(flow_id) > 128:
         raise HTTPException(status_code=404, detail="Sign-in attempt not found.")
-    await cancel_twitch_flow(flow_id)
-    return {"cancelled": True}
+    cancelled = await cancel_twitch_flow(flow_id)
+    return {"cancelled": cancelled}
 
 
 async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
@@ -204,8 +204,8 @@ async def get_google_authorization_status(flow_id: str):
 async def stop_google_authorization(flow_id: str):
     if len(flow_id) < 32 or len(flow_id) > 128:
         raise HTTPException(status_code=404, detail="Sign-in attempt not found.")
-    await cancel_google_flow(flow_id)
-    return {"cancelled": True}
+    cancelled = await cancel_google_flow(flow_id)
+    return {"cancelled": cancelled}
 
 
 @router.delete("/api/community-highlights/connections/youtube")

@@ -5,7 +5,6 @@ activation URL and an opaque flow ID; it never handles OAuth tokens.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import secrets
 import time
@@ -26,7 +25,6 @@ _MAX_FLOWS = 8
 # Flow state is intentionally process-local and short-lived. The backend is a
 # single supervised desktop process; a restart safely invalidates pending flows.
 _flows: dict[str, dict[str, Any]] = {}
-_flow_lock = asyncio.Lock()
 
 
 class TwitchOAuthError(RuntimeError):
@@ -104,22 +102,22 @@ async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str
             or provider_operation_generation("twitch") != start_generation
         ):
             raise TwitchOAuthError("Twitch sign-in was superseded by a disconnect.")
-        async with _flow_lock:
-            for key, flow in list(_flows.items()):
-                if flow["expires_at"] <= now or flow["status"] != "pending":
-                    _flows.pop(key, None)
-            if len(_flows) >= _MAX_FLOWS:
-                raise TwitchOAuthError("Too many sign-in attempts are active. Cancel one and try again.")
-            _flows[flow_id] = {
-                "device_code": device_code,
-                "client_id": client_id,
-                "activation_url": activation_url,
-                "expires_at": now + expires_in,
-                "interval": interval,
-                "next_poll": now + interval,
-                "status": "pending",
-                "message": "Waiting for Twitch authorization.",
-            }
+        for key, flow in list(_flows.items()):
+            if flow["expires_at"] <= now or flow["status"] != "pending":
+                flow.pop("device_code", None)
+                _flows.pop(key, None)
+        if len(_flows) >= _MAX_FLOWS:
+            raise TwitchOAuthError("Too many sign-in attempts are active. Cancel one and try again.")
+        _flows[flow_id] = {
+            "device_code": device_code,
+            "client_id": client_id,
+            "activation_url": activation_url,
+            "expires_at": now + expires_in,
+            "interval": interval,
+            "next_poll": now + interval,
+            "status": "pending",
+            "message": "Waiting for Twitch authorization.",
+        }
     return {
         "flow_id": flow_id,
         "verification_url": activation_url,
@@ -134,36 +132,30 @@ async def poll_twitch_flow(
     client: httpx.AsyncClient | None = None,
     store_factory=WindowsCredentialStore,
 ) -> dict[str, str]:
-    async with _flow_lock:
-        flow = _flows.get(flow_id)
-        if flow is None:
-            raise TwitchOAuthError("This sign-in attempt has expired. Start again.")
-        now = time.monotonic()
-        if flow["status"] != "pending":
-            return {"status": flow["status"], "message": flow["message"]}
-        if now >= flow["expires_at"]:
-            flow.update(status="expired", message="Twitch sign-in expired. Please try again.")
-            return {"status": flow["status"], "message": flow["message"]}
-        if now < flow["next_poll"]:
-            return {"status": "pending", "message": flow["message"]}
-        flow["next_poll"] = now + flow["interval"]
-        device_code = flow["device_code"]
-        client_id = flow["client_id"]
-        interval = flow["interval"]
-
     owned_client = client is None
-    client = client or httpx.AsyncClient(timeout=httpx.Timeout(15.0))
     try:
-        # Hold the shared credential lock for the complete device-token exchange,
-        # validation, and persistence. Disconnect therefore waits for an in-flight
-        # exchange, then revokes the just-saved grant before deleting it locally.
+        # Flow admission, expiry, cancellation, token exchange, validation and
+        # persistence share the provider lock.
         async with provider_credential_lock("twitch"):
             if provider_is_disconnecting("twitch"):
                 return {"status": "cancelled", "message": "Twitch is being disconnected."}
-            async with _flow_lock:
-                if _flows.get(flow_id) is not flow or flow.get("status") != "pending":
-                    return {"status": "cancelled", "message": "Twitch sign-in was cancelled."}
+            flow = _flows.get(flow_id)
+            if flow is None:
+                raise TwitchOAuthError("This sign-in attempt has expired. Start again.")
+            now = time.monotonic()
+            if flow["status"] != "pending":
+                return {"status": flow["status"], "message": flow["message"]}
+            if now >= flow["expires_at"]:
+                return _finish(flow_id, "expired", "Twitch sign-in expired. Please try again.")
+            if now < flow["next_poll"]:
+                return {"status": "pending", "message": flow["message"]}
 
+            flow["next_poll"] = now + flow["interval"]
+            device_code = flow["device_code"]
+            client_id = flow["client_id"]
+
+            if client is None:
+                client = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
             try:
                 response = await client.post(
                     TWITCH_TOKEN_URL,
@@ -184,23 +176,23 @@ async def poll_twitch_flow(
             if error == "authorization_pending":
                 return {"status": "pending", "message": "Waiting for you to approve access in Twitch."}
             if error == "slow_down":
-                async with _flow_lock:
-                    current = _flows.get(flow_id)
-                    if current is flow and current.get("status") == "pending":
-                        current["interval"] = min(current["interval"] + 5, 60)
-                        current["next_poll"] = time.monotonic() + current["interval"]
+                flow["interval"] = min(flow["interval"] + 5, 60)
+                flow["next_poll"] = time.monotonic() + flow["interval"]
                 return {"status": "pending", "message": "Twitch asked Clippy to slow down. Still waiting."}
             if error in {"access_denied", "authorization_declined"}:
                 return _finish(flow_id, "denied", "Twitch authorization was declined.")
             if error in {"expired_token", "invalid device code"}:
                 return _finish(flow_id, "expired", "Twitch sign-in expired. Please try again.")
-            if response.status_code >= 400 or not payload.get("access_token"):
-                return _finish(flow_id, "error", "Twitch sign-in failed. Please start again.")
 
-            access_token = payload["access_token"]
+            access_token = payload.get("access_token")
             refresh_token = payload.get("refresh_token")
+            expires_in = payload.get("expires_in", 14400)
+            if response.status_code >= 400 or not isinstance(access_token, str) or not access_token:
+                return _finish(flow_id, "error", "Twitch sign-in failed. Please start again.")
             if not isinstance(refresh_token, str) or not refresh_token:
                 return _finish(flow_id, "error", "Twitch did not return a refresh token. Please start again.")
+            if type(expires_in) is not int or expires_in <= 0:
+                return _finish(flow_id, "error", "Twitch returned an invalid token lifetime.")
 
             try:
                 validation = await client.get(
@@ -211,31 +203,30 @@ async def poll_twitch_flow(
                 identity = validation.json()
                 if not isinstance(identity, dict) or not isinstance(identity.get("scopes"), list):
                     raise TwitchOAuthError("Twitch returned invalid token validation details.")
-                scopes = set(identity.get("scopes") or [])
+                scope_values = identity["scopes"]
+                if not all(isinstance(scope, str) for scope in scope_values):
+                    raise TwitchOAuthError("Twitch returned invalid token validation details.")
+                scopes = set(scope_values)
                 if identity.get("client_id") != client_id or not set(TWITCH_SCOPES).issubset(scopes):
                     raise TwitchOAuthError("Twitch authorization did not grant the required chat permission.")
 
-                async with _flow_lock:
-                    current = _flows.get(flow_id)
-                    if current is not flow or current.get("status") != "pending":
-                        return {"status": "cancelled", "message": "Twitch sign-in was cancelled."}
-                    store_factory().save("twitch", {
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                        "expires_at": int(time.time()) + int(payload.get("expires_in", 14400)),
-                        "validated_at": int(time.time()),
-                        "scopes": sorted(scopes),
-                        "client_id": client_id,
-                        "user_id": identity.get("user_id"),
-                        "login": identity.get("login"),
-                    })
-                    current.pop("device_code", None)
-                    current.update(status="connected", message="Twitch is connected.")
+                store_factory().save("twitch", {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_at": int(time.time()) + expires_in,
+                    "validated_at": int(time.time()),
+                    "scopes": sorted(scopes),
+                    "client_id": client_id,
+                    "user_id": identity.get("user_id"),
+                    "login": identity.get("login"),
+                })
+                flow.pop("device_code", None)
+                flow.update(status="connected", message="Twitch is connected.")
             except (httpx.HTTPError, ValueError, CredentialStoreError, TwitchOAuthError):
                 return _finish(flow_id, "error", "Clippy could not verify or securely save Twitch access. Please try again.")
             return {"status": "connected", "message": "Twitch is connected."}
     finally:
-        if owned_client:
+        if owned_client and client is not None:
             await client.aclose()
 
 
@@ -251,17 +242,21 @@ def _finish(flow_id: str, status: str, message: str) -> dict[str, str]:
 
 
 async def cancel_all_twitch_flows() -> int:
-    """Invalidate all outstanding Twitch device flows before local disconnect."""
-    async with _flow_lock:
-        flows = list(_flows.values())
-        _flows.clear()
-        for flow in flows:
-            flow.pop("device_code", None)
-            flow.update(status="cancelled", message="Twitch sign-in was cancelled.")
-        return len(flows)
+    """Invalidate all outstanding flows while the caller owns the provider lock."""
+    flows = list(_flows.values())
+    _flows.clear()
+    for flow in flows:
+        flow.pop("device_code", None)
+        flow.update(status="cancelled", message="Twitch sign-in was cancelled.")
+    return len(flows)
 
 
 async def cancel_twitch_flow(flow_id: str) -> bool:
-    async with _flow_lock:
-        flow = _flows.pop(flow_id, None)
-        return flow is not None
+    async with provider_credential_lock("twitch"):
+        flow = _flows.get(flow_id)
+        if not flow or flow["status"] != "pending":
+            return False
+        _flows.pop(flow_id, None)
+        flow.pop("device_code", None)
+        flow.update(status="cancelled", message="Twitch sign-in was cancelled.")
+        return True

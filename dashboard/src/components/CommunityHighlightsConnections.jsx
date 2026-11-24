@@ -67,6 +67,15 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     }
   };
 
+  const cancelProviderFlow = async (provider, flowId) => {
+    const result = await apiJson(
+      `/api/community-highlights/${provider}/authorize/${encodeURIComponent(flowId)}`,
+      { method: 'DELETE' },
+    );
+    if (result?.cancelled === false) await refreshConnections();
+    return result?.cancelled === true;
+  };
+
   const retryConnections = async () => {
     setError('');
     try {
@@ -112,6 +121,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
   const pollAuthorization = async (flowId, provider) => {
     try {
       const result = await apiJson(`/api/community-highlights/${provider}/authorize/${encodeURIComponent(flowId)}`);
+      if (activeFlow.current !== flowId) return;
       setFlowMessage(result.message || 'Waiting for provider authorization.');
       if (result.status === 'pending') {
         pollTimer.current = setTimeout(() => pollAuthorization(flowId, provider), 2500);
@@ -124,6 +134,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
       if (result.status === 'connected') await refreshConnections();
       else setError(result.message || 'Provider sign-in did not complete.');
     } catch (requestError) {
+      if (activeFlow.current !== flowId) return;
       activeFlow.current = null;
       setFlow(null);
       setBusy(false);
@@ -155,15 +166,18 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
       const flowId = activeFlow.current;
       activeFlow.current = null;
       if (pendingWindow && !pendingWindow.closed) pendingWindow.close();
+      let cancellationLost = false;
       if (flowId) {
         try {
-          await apiJson(`/api/community-highlights/${provider}/authorize/${encodeURIComponent(flowId)}`, { method: 'DELETE' });
+          cancellationLost = !(await cancelProviderFlow(provider, flowId));
         } catch (_) { /* server-side expiry also clears abandoned flows */ }
       }
       setBusy(false);
       setBusyProvider('');
       setFlow(null);
-      setError(requestError?.detail || requestError?.message || 'Could not start provider sign-in.');
+      setError(cancellationLost
+        ? 'Sign-in was no longer pending. Connection status has been refreshed.'
+        : requestError?.detail || requestError?.message || 'Could not start provider sign-in.');
     }
   };
 
@@ -181,14 +195,27 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     const flowId = activeFlow.current;
     const provider = flow?.provider || 'twitch';
     activeFlow.current = null;
-    setFlow(null);
-    setBusy(false);
-    setBusyProvider('');
-    setFlowMessage('');
-    if (flowId) {
-      try {
-        await apiJson(`/api/community-highlights/${provider}/authorize/${encodeURIComponent(flowId)}`, { method: 'DELETE' });
-      } catch (_) { /* flow expiry also clears server-side state */ }
+    setError('');
+    setNotice('');
+    setBusy(true);
+    setBusyProvider(provider);
+    setFlowMessage('Cancelling sign-in…');
+    try {
+      const cancelled = flowId ? await cancelProviderFlow(provider, flowId) : true;
+      if (!cancelled) {
+        setNotice('This sign-in attempt was no longer pending. Connection status has been refreshed.');
+      }
+      setFlow(null);
+      setFlowMessage('');
+    } catch (requestError) {
+      activeFlow.current = flowId;
+      setError(requestError?.detail || 'Could not cancel sign-in. Clippy will keep checking its status.');
+      if (flowId) {
+        pollTimer.current = setTimeout(() => pollAuthorization(flowId, provider), 1500);
+      }
+    } finally {
+      setBusy(false);
+      setBusyProvider('');
     }
   };
 
@@ -263,8 +290,10 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
                     className="w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 flex items-center justify-center gap-2">
                     <ExternalLink size={15} /> Open {provider.name} authorization
                   </button>
-                  <button type="button" onClick={cancelAuthorization}
-                    className="w-full rounded-input border border-rule px-4 py-2 text-xs text-muted hover:text-ink">Cancel sign-in</button>
+                  <button type="button" disabled={busy} onClick={cancelAuthorization}
+                    className="w-full rounded-input border border-rule px-4 py-2 text-xs text-muted hover:text-ink disabled:opacity-50">
+                    {busy ? 'Cancelling sign-in…' : 'Cancel sign-in'}
+                  </button>
                 </div>
               ) : (
                 <button type="button" disabled={connectionsLoading || connections === null || !authorizationAvailable || busy}

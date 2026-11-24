@@ -1,6 +1,6 @@
 import asyncio
 import functools
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 import httpx
@@ -46,25 +46,79 @@ async def test_google_flow_uses_loopback_pkce_and_youtube_readonly_scope():
     assert query["code_challenge_method"] == ["S256"]
     assert query["code_challenge"] != [flow["verifier"]]
     assert query["state"] == [flow["state"]]
+    assert "prompt" not in query
     assert "gmail" not in query["scope"][0].lower()
 
     await google_oauth.cancel_google_flow(result["flow_id"])
 
 
 @run_async
-async def test_google_callback_rejects_invalid_state():
-    result = await google_oauth.start_google_flow(
+async def test_google_loopback_callback_rejects_invalid_requests_then_completes_valid_pkce_flow(monkeypatch):
+    store = FakeCredentialStore()
+    requests = mock_google_token_exchange(monkeypatch, {
+        "access_token": "test-access-token",
+        "refresh_token": "test-refresh-token",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": google_oauth.GOOGLE_SCOPE,
+    })
+    started = await google_oauth.start_google_flow(
         client_id="desktop-client-id",
-        store_factory=lambda: object(),
+        store_factory=lambda: store,
     )
+    flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+    server = flow["server"]
+    port = server.sockets[0].getsockname()[1]
 
-    await google_oauth._complete_google_callback(
-        result["flow_id"],
-        {"state": ["attacker-state"], "code": ["authorization-code"]},
-    )
+    async def callback_response(parameters):
+        query = urlencode(parameters)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        request = (
+            f"GET /?{query} HTTP/1.1\r\n"
+            "Host: 127.0.0.1\r\n"
+            "Connection: close\r\n\r\n"
+        )
+        writer.write(request.encode("ascii"))
+        await writer.drain()
+        response = await reader.read()
+        writer.close()
+        await writer.wait_closed()
+        return response.split(b"\r\n", 1)[0]
 
-    assert google_oauth._GOOGLE_FLOWS[result["flow_id"]]["status"] == "error"
-    await google_oauth.cancel_google_flow(result["flow_id"])
+    invalid_callbacks = [
+        [("state", "attacker-state"), ("iss", google_oauth.GOOGLE_ISSUER), ("code", "bad-code")],
+        [("state", flow["state"]), ("iss", "https://attacker.example"), ("code", "bad-code")],
+        [("state", flow["state"]), ("state", "duplicate-state"), ("iss", google_oauth.GOOGLE_ISSUER), ("code", "bad-code")],
+        [("state", flow["state"]), ("iss", google_oauth.GOOGLE_ISSUER), ("code", "first-code"), ("code", "second-code")],
+        [("state", flow["state"]), ("iss", google_oauth.GOOGLE_ISSUER), ("code", "bad-code"), ("error", "access_denied")],
+    ]
+    for parameters in invalid_callbacks:
+        response_line = await callback_response(parameters)
+        assert response_line.startswith(b"HTTP/1.1 400")
+        assert (await google_oauth.google_flow_status(started["flow_id"]))["status"] == "pending"
+        assert server.is_serving() is True
+
+    expected_verifier = flow["verifier"]
+    response_line = await callback_response([
+        ("state", flow["state"]),
+        ("iss", google_oauth.GOOGLE_ISSUER),
+        ("code", "test-authorization-code"),
+    ])
+    assert response_line.startswith(b"HTTP/1.1 200")
+    assert (await google_oauth.google_flow_status(started["flow_id"]))["status"] == "connected"
+    assert store.saved is not None
+    assert store.saved["access_token"] == "test-access-token"
+    assert store.saved["refresh_token"] == "test-refresh-token"
+    assert store.saved["client_id"] == "desktop-client-id"
+    assert store.saved["scopes"] == [google_oauth.GOOGLE_SCOPE]
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    fields = parse_qs(requests[0].content.decode("ascii"))
+    assert fields["client_id"] == ["desktop-client-id"]
+    assert fields["code"] == ["test-authorization-code"]
+    assert fields["code_verifier"] == [expected_verifier]
+    assert fields["redirect_uri"] == [flow["redirect_uri"]]
+    assert server.is_serving() is False
 
 
 @run_async
@@ -79,29 +133,15 @@ async def test_google_flow_status_expires_and_cancels_callback_listener():
     status = await google_oauth.google_flow_status(result["flow_id"])
 
     assert status["status"] == "expired"
-    assert await google_oauth.cancel_google_flow(result["flow_id"]) is True
+    assert flow["server"].is_serving() is False
+    assert await google_oauth.cancel_google_flow(result["flow_id"]) is False
 
-
-def test_google_tokeninfo_requires_our_authorized_party_but_allows_project_audience():
-    matches = google_oauth.google_token_info_matches_client
-
-    # Google documents that aud may differ from azp for OAuth clients in the
-    # same Cloud project. The requesting client (azp) is the binding we check.
-    assert matches({"aud": "another-client.apps.googleusercontent.com", "azp": "desktop-client-id"}, "desktop-client-id")
-    assert not matches({"aud": "desktop-client-id"}, "desktop-client-id")
-    assert not matches({"aud": "desktop-client-id", "azp": "another-client"}, "desktop-client-id")
-    assert not matches({"aud": "", "azp": "desktop-client-id"}, "desktop-client-id")
-    assert not matches(None, "desktop-client-id")
 
 class FakeCredentialStore:
-    def __init__(self, *, fail_save=False):
-        self.bundle = None
+    def __init__(self, *, fail_save=False, bundle=None):
+        self.bundle = bundle
         self.saved = None
         self.fail_save = fail_save
-
-    def load(self, provider):
-        assert provider == "youtube"
-        return self.bundle
 
     def save(self, provider, bundle):
         assert provider == "youtube"
@@ -129,47 +169,33 @@ def mock_google_token_exchange(monkeypatch, payload, *, status_code=200):
 
 
 @run_async
-async def test_google_callback_uses_token_response_scope_and_saves_credentials(monkeypatch):
-    store = FakeCredentialStore()
-    requests = mock_google_token_exchange(monkeypatch, {
-        "access_token": "test-access-token",
-        "refresh_token": "test-refresh-token",
+async def test_google_initial_authorization_does_not_reuse_previous_refresh_token(monkeypatch):
+    store = FakeCredentialStore(bundle={
+        "client_id": "desktop-client-id",
+        "refresh_token": "old-account-refresh-token",
+    })
+    mock_google_token_exchange(monkeypatch, {
+        "access_token": "new-access-token",
+        "token_type": "Bearer",
         "expires_in": 3600,
         "scope": google_oauth.GOOGLE_SCOPE,
-        "token_type": "Bearer",
     })
     started = await google_oauth.start_google_flow(
         client_id="desktop-client-id",
         store_factory=lambda: store,
     )
     flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
-    expected_verifier = flow["verifier"]
 
     await google_oauth._complete_google_callback(
         started["flow_id"],
-        {"state": [flow["state"]], "code": ["test-authorization-code"]},
+        {"state": [flow["state"]], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["new-authorization-code"]},
     )
 
     status = await google_oauth.google_flow_status(started["flow_id"])
-    assert status["status"] == "connected"
-    assert store.saved is not None
-    assert store.saved["access_token"] == "test-access-token"
-    assert store.saved["refresh_token"] == "test-refresh-token"
-    assert store.saved["client_id"] == "desktop-client-id"
-    assert store.saved["scopes"] == [google_oauth.GOOGLE_SCOPE]
-    # Initial authorization is completed by the PKCE-bound token exchange;
-    # it no longer makes a second tokeninfo request.
-    assert len(requests) == 1
-    assert requests[0].method == "POST"
-    fields = parse_qs(requests[0].content.decode("ascii"))
-    assert fields["client_id"] == ["desktop-client-id"]
-    assert fields["code"] == ["test-authorization-code"]
-    assert fields["code_verifier"] == [expected_verifier]
-    assert fields["redirect_uri"] == [flow["redirect_uri"]]
-
+    assert status["status"] == "error"
+    assert store.saved is None
+    assert store.bundle["refresh_token"] == "old-account-refresh-token"
     await google_oauth.cancel_google_flow(started["flow_id"])
-
-
 
 @run_async
 async def test_google_callback_logs_safe_provider_error_description(monkeypatch, caplog):
@@ -191,7 +217,7 @@ async def test_google_callback_logs_safe_provider_error_description(monkeypatch,
     with caplog.at_level("WARNING", logger=google_oauth.__name__):
         await google_oauth._complete_google_callback(
             started["flow_id"],
-            {"state": [flow["state"]], "code": ["secret-authorization-code"]},
+            {"state": [flow["state"]], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["secret-authorization-code"]},
         )
 
     status = await google_oauth.google_flow_status(started["flow_id"])
@@ -210,6 +236,7 @@ async def test_google_callback_reports_safe_credential_save_diagnostic(monkeypat
     mock_google_token_exchange(monkeypatch, {
         "access_token": "secret-access-value",
         "refresh_token": "secret-refresh-value",
+        "token_type": "Bearer",
         "expires_in": 3600,
         "scope": google_oauth.GOOGLE_SCOPE,
     })
@@ -222,7 +249,7 @@ async def test_google_callback_reports_safe_credential_save_diagnostic(monkeypat
     with caplog.at_level("WARNING", logger=google_oauth.__name__):
         await google_oauth._complete_google_callback(
             started["flow_id"],
-            {"state": [flow["state"]], "code": ["secret-authorization-code"]},
+            {"state": [flow["state"]], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["secret-authorization-code"]},
         )
 
     status = await google_oauth.google_flow_status(started["flow_id"])
@@ -243,6 +270,7 @@ async def test_google_callback_rejects_token_response_without_youtube_scope(monk
     mock_google_token_exchange(monkeypatch, {
         "access_token": "test-access-token",
         "refresh_token": "test-refresh-token",
+        "token_type": "Bearer",
         "expires_in": 3600,
         "scope": "openid",
     })
@@ -255,7 +283,7 @@ async def test_google_callback_rejects_token_response_without_youtube_scope(monk
     with caplog.at_level("WARNING", logger=google_oauth.__name__):
         await google_oauth._complete_google_callback(
             started["flow_id"],
-            {"state": [flow["state"]], "code": ["test-authorization-code"]},
+            {"state": [flow["state"]], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["test-authorization-code"]},
         )
 
     status = await google_oauth.google_flow_status(started["flow_id"])
@@ -271,6 +299,7 @@ async def test_google_callback_accepts_omitted_scope_when_it_matches_requested_s
     mock_google_token_exchange(monkeypatch, {
         "access_token": "test-access-token",
         "refresh_token": "test-refresh-token",
+        "token_type": "Bearer",
         "expires_in": 3600,
     })
     started = await google_oauth.start_google_flow(
@@ -281,7 +310,7 @@ async def test_google_callback_accepts_omitted_scope_when_it_matches_requested_s
 
     await google_oauth._complete_google_callback(
         started["flow_id"],
-        {"state": [flow["state"]], "code": ["test-authorization-code"]},
+        {"state": [flow["state"]], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["test-authorization-code"]},
     )
 
     status = await google_oauth.google_flow_status(started["flow_id"])

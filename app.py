@@ -2638,12 +2638,19 @@ def _log_community_highlights_failure(request: Request, response) -> None:
 
 @app.middleware("http")
 async def require_desktop_api_token(request: Request, call_next):
-    if not _DESKTOP_API_TOKEN:
+    path = request.url.path
+    if request.method == "OPTIONS" or path in ("/health", "/health/ready"):
+        return await call_next(request)
+
+    is_community_highlights = (
+        path == "/api/community-highlights"
+        or path.startswith("/api/community-highlights/")
+    )
+    if not _DESKTOP_API_TOKEN and not is_community_highlights:
         response = await call_next(request)
         _log_community_highlights_failure(request, response)
         return response
-    if request.method == "OPTIONS" or request.url.path in ("/health", "/health/ready"):
-        return await call_next(request)
+
     supplied = request.headers.get("X-Clippy-Token", "")
     # Native <video>/<img> requests cannot attach custom headers. Permit the
     # session token in the query string only for exact read-only Library media routes.
@@ -2653,7 +2660,7 @@ async def require_desktop_api_token(request: Request, call_next):
         request.url.path.startswith(media_paths) or library_media
     ):
         supplied = request.query_params.get("token", "")
-    if not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
+    if not _DESKTOP_API_TOKEN or not supplied or not hmac.compare_digest(supplied, _DESKTOP_API_TOKEN):
         response = JSONResponse(
             {"detail": "This local Clippy API requires its active desktop session token."},
             status_code=401,

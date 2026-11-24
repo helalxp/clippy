@@ -1,22 +1,15 @@
 """Refresh provider credentials before opening chat transports."""
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
-from .google_oauth import google_token_info_matches_client
+from .google_oauth import GOOGLE_SCOPE, GOOGLE_TOKEN_URL
+from .twitch_oauth import TWITCH_SCOPES, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL
 from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
-
-TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
-TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_TOKEN_INFO_URL = "https://oauth2.googleapis.com/tokeninfo"
-YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
-
 
 class ProviderTokenError(RuntimeError):
     """Raised when a saved provider grant cannot be refreshed safely."""
@@ -72,7 +65,7 @@ async def _ensure_access_token_locked(
                 if not isinstance(identity, dict) or not isinstance(identity.get("scopes"), list):
                     raise ProviderTokenError("Twitch returned invalid token validation details.")
                 scopes = set(identity.get("scopes") or [])
-                if identity.get("client_id") == client_id and "chat:read" in scopes:
+                if identity.get("client_id") == client_id and set(TWITCH_SCOPES).issubset(scopes):
                     store.save(provider, {
                         **bundle,
                         "scopes": sorted(scopes),
@@ -109,13 +102,18 @@ async def _ensure_access_token_locked(
                 raise ProviderTokenError("Twitch returned an invalid token response.")
             access_token = refreshed.get("access_token")
             refresh_token = refreshed.get("refresh_token")
-            if not access_token or not refresh_token:
+            expires_in = refreshed.get("expires_in", 14400)
+            if not isinstance(access_token, str) or not access_token:
+                raise ProviderTokenError("Twitch did not return a refreshed access token.")
+            if not isinstance(refresh_token, str) or not refresh_token:
                 raise ProviderTokenError("Twitch did not return a replacement refresh token.")
+            if type(expires_in) is not int or expires_in <= 0:
+                raise ProviderTokenError("Twitch returned an invalid token lifetime.")
             updated = {
                 **bundle,
                 "access_token": access_token,
                 "refresh_token": refresh_token,
-                "expires_at": now + int(refreshed.get("expires_in", 14400)),
+                "expires_at": now + expires_in,
                 "scopes": sorted(refreshed.get("scope") or bundle.get("scopes") or []),
                 "validated_at": 0,
             }
@@ -130,7 +128,7 @@ async def _ensure_access_token_locked(
             validation.raise_for_status()
             identity = validation.json()
             scopes = set(identity.get("scopes") or [])
-            if identity.get("client_id") != client_id or "chat:read" not in scopes:
+            if identity.get("client_id") != client_id or not set(TWITCH_SCOPES).issubset(scopes):
                 raise ProviderTokenError("The refreshed Twitch token is missing chat access.")
             updated.update({
                 "scopes": sorted(scopes),
@@ -152,26 +150,42 @@ async def _ensure_access_token_locked(
             if not isinstance(refreshed, dict):
                 raise ProviderTokenError("Google returned an invalid token response.")
             access_token = refreshed.get("access_token")
-            if not access_token:
+            token_type = refreshed.get("token_type")
+            expires_in = refreshed.get("expires_in")
+            if not isinstance(access_token, str) or not access_token:
                 raise ProviderTokenError("Google did not return a refreshed access token.")
-            info = await client.get(
-                GOOGLE_TOKEN_INFO_URL,
-                params={"access_token": access_token},
-            )
-            info.raise_for_status()
-            token_info = info.json()
-            if not isinstance(token_info, dict):
-                raise ProviderTokenError("Google returned invalid token details.")
-            scopes = set((token_info.get("scope") or "").split())
-            if not google_token_info_matches_client(token_info, client_id):
-                raise ProviderTokenError("Google returned a token for an unexpected OAuth client.")
-            if YOUTUBE_SCOPE not in scopes:
+            if not isinstance(token_type, str) or token_type.lower() != "bearer":
+                raise ProviderTokenError("Google returned an invalid access-token type.")
+            if type(expires_in) is not int or expires_in <= 0:
+                raise ProviderTokenError("Google returned an invalid access-token lifetime.")
+
+            granted_scope = refreshed.get("scope")
+            if granted_scope is None:
+                stored_scopes = bundle.get("scopes")
+                if not isinstance(stored_scopes, list) or not all(
+                    isinstance(scope, str) for scope in stored_scopes
+                ):
+                    raise ProviderTokenError("The saved Google grant has invalid scope metadata.")
+                scopes = set(stored_scopes)
+            elif isinstance(granted_scope, str):
+                scopes = set(granted_scope.split())
+            else:
+                raise ProviderTokenError("Google returned invalid granted YouTube permissions.")
+            if GOOGLE_SCOPE not in scopes:
                 raise ProviderTokenError("The refreshed Google token is missing YouTube read access.")
+
+            if "refresh_token" in refreshed:
+                refresh_token = refreshed["refresh_token"]
+                if not isinstance(refresh_token, str) or not refresh_token:
+                    raise ProviderTokenError("Google returned an invalid replacement refresh token.")
+            else:
+                refresh_token = bundle["refresh_token"]
+
             updated = {
                 **bundle,
                 "access_token": access_token,
-                "refresh_token": refreshed.get("refresh_token") or bundle["refresh_token"],
-                "expires_at": now + int(refreshed.get("expires_in", 3600)),
+                "refresh_token": refresh_token,
+                "expires_at": now + expires_in,
                 "scopes": sorted(scopes),
             }
 

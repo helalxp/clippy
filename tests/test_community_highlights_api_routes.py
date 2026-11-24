@@ -46,6 +46,19 @@ def test_connections_route_is_registered_and_requires_desktop_session(monkeypatc
     assert payload["providers"]["youtube"]["authorization_available"] is True
 
 
+def test_community_highlights_fails_closed_when_desktop_token_is_missing(monkeypatch):
+    client = _client(monkeypatch)
+    monkeypatch.setattr(backend_app, "_DESKTOP_API_TOKEN", "")
+
+    response = client.get(
+        "/api/community-highlights/connections",
+        headers={"X-Clippy-Token": "caller-supplied-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "This local Clippy API requires its active desktop session token."
+
+
 def test_twitch_authorization_start_status_cancel_routes(monkeypatch):
     flow_id = "t" * 40
 
@@ -56,7 +69,7 @@ def test_twitch_authorization_start_status_cancel_routes(monkeypatch):
         return {"status": "pending"}
 
     async def cancel(_flow_id):
-        return None
+        return True
 
     monkeypatch.setattr(community_api, "start_twitch_flow", start)
     monkeypatch.setattr(community_api, "poll_twitch_flow", status)
@@ -82,7 +95,7 @@ def test_google_authorization_start_status_cancel_routes(monkeypatch):
         return {"status": "pending"}
 
     async def cancel(_flow_id):
-        return None
+        return False
 
     monkeypatch.setattr(community_api, "start_google_flow", start)
     monkeypatch.setattr(community_api, "google_flow_status", status)
@@ -95,7 +108,7 @@ def test_google_authorization_start_status_cancel_routes(monkeypatch):
     assert client.get(f"/api/community-highlights/youtube/authorize/{flow_id}", headers=_headers()).json() == {"status": "pending"}
     stopped = client.delete(f"/api/community-highlights/youtube/authorize/{flow_id}", headers=_headers())
     assert stopped.status_code == 200
-    assert stopped.json() == {"cancelled": True}
+    assert stopped.json() == {"cancelled": False}
 
 
 def test_start_chat_session_returns_actionable_validation_error_without_logging_stream_url(monkeypatch, caplog):

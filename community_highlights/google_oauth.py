@@ -18,11 +18,10 @@ from .credential_lifecycle import provider_credential_lock, provider_is_disconne
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_TOKEN_INFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 GOOGLE_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+GOOGLE_ISSUER = "https://accounts.google.com"
 _LOG = logging.getLogger(__name__)
 _GOOGLE_FLOWS: dict[str, dict[str, Any]] = {}
-_GOOGLE_LOCK = asyncio.Lock()
 _GOOGLE_FLOW_TTL = 600
 _GOOGLE_EXPIRY_TASKS: set[asyncio.Task] = set()
 
@@ -34,26 +33,6 @@ class GoogleOAuthError(RuntimeError):
 def google_client_id() -> str:
     return os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "").strip()
 
-
-def google_token_info_matches_client(token_info: Any, client_id: str) -> bool:
-    """Check the OAuth client that requested the access token.
-
-    Google's tokeninfo contract distinguishes `aud` from `azp`: `azp`
-    identifies the authorized party (the client that requested the token),
-    while `aud` may differ for clients in the same Cloud project.
-    """
-    if not isinstance(token_info, dict):
-        return False
-    audience = token_info.get("aud")
-    authorized_party = token_info.get("azp")
-    return (
-        isinstance(audience, str)
-        and bool(audience)
-        and audience.isascii()
-        and isinstance(authorized_party, str)
-        and authorized_party.isascii()
-        and secrets.compare_digest(authorized_party, client_id)
-    )
 
 
 def google_authorization_available() -> bool:
@@ -70,11 +49,40 @@ def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
-def _close_listener(flow: dict[str, Any]) -> None:
+def _close_listener(flow: dict[str, Any]):
     flow["verifier"] = ""
     server = flow.get("server")
     if server:
         server.close()
+    return server
+
+
+def _google_callback_values(params: Any) -> tuple[str, str, str | None, str | None] | None:
+    """Return one unambiguous Google callback, or reject it without consuming the flow."""
+    if not isinstance(params, dict):
+        return None
+    values = {}
+    for name in ("state", "iss", "code", "error"):
+        entries = params.get(name, [])
+        if not isinstance(entries, list) or len(entries) > 1:
+            return None
+        values[name] = entries
+    if len(values["state"]) != 1 or not values["state"][0]:
+        return None
+    if len(values["iss"]) != 1 or not values["iss"][0]:
+        return None
+    if bool(values["code"]) == bool(values["error"]):
+        return None
+    state, issuer = values["state"][0], values["iss"][0]
+    code = values["code"][0] if values["code"] else None
+    error = values["error"][0] if values["error"] else None
+    if not isinstance(state, str) or not isinstance(issuer, str):
+        return None
+    if code is not None and (not isinstance(code, str) or not code):
+        return None
+    if error is not None and (not isinstance(error, str) or not error):
+        return None
+    return state, issuer, code, error
 
 
 async def start_google_flow(
@@ -117,13 +125,18 @@ async def start_google_flow(
                 if parsed.path != loopback_path:
                     status, message = "404 Not Found", "This Clippy callback is not available."
                 else:
-                    params = parse_qs(parsed.query, keep_blank_values=True)
-                    await _complete_google_callback(flow_id, params)
-                    current = _GOOGLE_FLOWS.get(flow_id, {})
-                    status = "200 OK"
+                    try:
+                        params = parse_qs(
+                            parsed.query, keep_blank_values=True,
+                            strict_parsing=True, max_num_fields=32,
+                        )
+                    except ValueError:
+                        params = {}
+                    result = await _complete_google_callback(flow_id, params)
+                    status = "200 OK" if result is not None else "400 Bad Request"
                     message = (
                         "Google authorization is complete. You can return to Clippy."
-                        if current.get("status") == "connected"
+                        if result == "connected"
                         else "Google authorization did not complete. You can return to Clippy."
                     )
             body = (
@@ -165,19 +178,16 @@ async def start_google_flow(
             server.close()
             await server.wait_closed()
             raise GoogleOAuthError("Google sign-in was superseded by a disconnect.")
-        async with _GOOGLE_LOCK:
-            now = time.monotonic()
-            for key, current in list(_GOOGLE_FLOWS.items()):
-                if current["expires_at"] <= now or current["status"] != "pending":
-                    old_server = current.get("server")
-                    if old_server:
-                        old_server.close()
-                    _GOOGLE_FLOWS.pop(key, None)
-            if len(_GOOGLE_FLOWS) >= 4:
-                server.close()
-                await server.wait_closed()
-                raise GoogleOAuthError("Too many Google sign-in attempts are active.")
-            _GOOGLE_FLOWS[flow_id] = flow
+        now = time.monotonic()
+        for key, current in list(_GOOGLE_FLOWS.items()):
+            if current["expires_at"] <= now or current["status"] != "pending":
+                _close_listener(current)
+                _GOOGLE_FLOWS.pop(key, None)
+        if len(_GOOGLE_FLOWS) >= 4:
+            server.close()
+            await server.wait_closed()
+            raise GoogleOAuthError("Too many Google sign-in attempts are active.")
+        _GOOGLE_FLOWS[flow_id] = flow
 
     expiry_task = asyncio.create_task(_expire_google_flow(flow_id))
     _GOOGLE_EXPIRY_TASKS.add(expiry_task)
@@ -192,7 +202,6 @@ async def start_google_flow(
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "access_type": "offline",
-        "prompt": "consent",
     })
     return {
         "flow_id": flow_id,
@@ -201,52 +210,48 @@ async def start_google_flow(
     }
 
 
+def _expire_google_flow_if_due(flow: dict[str, Any] | None) -> None:
+    if flow and flow["status"] == "pending" and time.monotonic() >= flow["expires_at"]:
+        flow.update(status="expired", message="Google sign-in expired. Please try again.")
+        _close_listener(flow)
+
+
 async def _expire_google_flow(flow_id: str) -> None:
     await asyncio.sleep(_GOOGLE_FLOW_TTL)
-    async with _GOOGLE_LOCK:
-        flow = _GOOGLE_FLOWS.get(flow_id)
-        if flow and flow["status"] == "pending" and time.monotonic() >= flow["expires_at"]:
-            flow.update(status="expired", message="Google sign-in expired. Please try again.")
-            _close_listener(flow)
+    async with provider_credential_lock("youtube"):
+        _expire_google_flow_if_due(_GOOGLE_FLOWS.get(flow_id))
 
 
-async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) -> None:
-    flow = _GOOGLE_FLOWS.get(flow_id)
-    if not flow or flow["status"] != "pending" or time.monotonic() >= flow["expires_at"]:
-        return
-    returned_state = (params.get("state") or [""])[0]
-    if not secrets.compare_digest(returned_state, flow["state"]):
-        flow.update(status="error", message="Google sign-in state validation failed.")
-        _close_listener(flow)
-        return
-    provider_error = (params.get("error") or [""])[0]
-    if provider_error:
-        flow.update(
-            status="denied" if provider_error == "access_denied" else "error",
-            message="Google authorization was declined." if provider_error == "access_denied"
-            else "Google authorization could not be completed.",
-        )
-        _close_listener(flow)
-        return
-    code = (params.get("code") or [""])[0]
-    if not code:
-        flow.update(status="error", message="Google did not return an authorization code.")
-        _close_listener(flow)
-        return
+async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) -> str | None:
+    callback = _google_callback_values(params)
+    if callback is None:
+        return None
+    returned_state, issuer, code, provider_error = callback
+    if issuer != GOOGLE_ISSUER:
+        return None
 
     phase = "authorization_code_exchange"
+    flow = None
     try:
-        # Serialize the full authorization-code exchange with Disconnect. If
-        # this exchange wins the lock, its new refresh token is stored before
-        # disconnect revokes it. If Disconnect wins, it removes this flow and
-        # the callback exits before contacting Google's token endpoint.
         async with provider_credential_lock("youtube"):
             if provider_is_disconnecting("youtube"):
-                return
-            async with _GOOGLE_LOCK:
-                current = _GOOGLE_FLOWS.get(flow_id)
-                if current is not flow or current.get("status") != "pending":
-                    return
+                return None
+            flow = _GOOGLE_FLOWS.get(flow_id)
+            if flow is None or flow["status"] != "pending":
+                return None
+            _expire_google_flow_if_due(flow)
+            if flow["status"] != "pending":
+                return None
+            if not secrets.compare_digest(returned_state, flow["state"]):
+                return None
+
+            if provider_error:
+                flow.update(
+                    status="denied" if provider_error == "access_denied" else "error",
+                    message="Google authorization was declined." if provider_error == "access_denied"
+                    else "Google authorization could not be completed.",
+                )
+                return flow["status"]
 
             async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
                 response = await client.post(
@@ -266,62 +271,42 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
             if not isinstance(tokens, dict):
                 raise GoogleOAuthError("Google returned an invalid token response.")
             access_token = tokens.get("access_token")
+            refresh_token = tokens.get("refresh_token")
+            token_type = tokens.get("token_type")
+            expires_in = tokens.get("expires_in")
             if not isinstance(access_token, str) or not access_token:
                 raise GoogleOAuthError("Google did not return an access token.")
+            if not isinstance(refresh_token, str) or not refresh_token:
+                raise GoogleOAuthError("Google did not provide offline access. Please sign in again.")
+            if not isinstance(token_type, str) or token_type.lower() != "bearer":
+                raise GoogleOAuthError("Google returned an invalid access-token type.")
+            if type(expires_in) is not int or expires_in <= 0:
+                raise GoogleOAuthError("Google returned an invalid access-token lifetime.")
+
             granted_scope = tokens.get("scope")
             if granted_scope is None:
-                # OAuth 2.0 permits omission when the granted scope is
-                # identical to the scope requested by the client.
                 scopes = {GOOGLE_SCOPE}
             elif isinstance(granted_scope, str):
                 scopes = set(granted_scope.split())
             else:
                 raise GoogleOAuthError("Google returned invalid granted YouTube permissions.")
 
-            # The authorization-code exchange is bound to this public client
-            # ID and the one-time PKCE verifier. Google returns the granted
-            # scopes with the token response, so an additional tokeninfo
-            # request is unnecessary for initial authorization and would add
-            # another network dependency to the sign-in path.
             phase = "scope_validation"
             if GOOGLE_SCOPE not in scopes:
                 raise GoogleOAuthError("Google did not grant the required read-only YouTube permission.")
 
-            phase = "token_expiry_validation"
-            expires_in = int(tokens.get("expires_in", 3600))
-            if expires_in <= 0:
-                raise GoogleOAuthError("Google returned an invalid access-token lifetime.")
-
-            async with _GOOGLE_LOCK:
-                current = _GOOGLE_FLOWS.get(flow_id)
-                if current is not flow or current.get("status") != "pending":
-                    return
-
-                # Keep cancellation atomic with the synchronous Credential
-                # Manager read/write. Once this lock is acquired, cancellation
-                # cannot remove the flow between the final check and save.
-                phase = "credential_store_read"
-                store = flow["store_factory"]()
-                previous = store.load("youtube") or {}
-
-                phase = "refresh_token_validation"
-                refresh_token = tokens.get("refresh_token") or previous.get("refresh_token")
-                if not isinstance(refresh_token, str) or not refresh_token:
-                    raise GoogleOAuthError("Google did not provide offline access. Please sign in again.")
-
-                phase = "credential_store_save"
-                store.save("youtube", {
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "expires_at": int(time.time()) + expires_in,
-                    "scopes": sorted(scopes),
-                    "client_id": flow["client_id"],
-                })
-                flow.update(status="connected", message="YouTube is connected.")
+            phase = "credential_store_save"
+            store = flow["store_factory"]()
+            store.save("youtube", {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "expires_at": int(time.time()) + expires_in,
+                "scopes": sorted(scopes),
+                "client_id": flow["client_id"],
+            })
+            flow.update(status="connected", message="YouTube is connected.")
+            return "connected"
     except Exception as error:
-        # Log only the failing phase, exception class, HTTP status, and a
-        # provider error identifier. Never log request URLs, response bodies,
-        # authorization codes, access/refresh tokens, or PKCE material.
         http_status = None
         provider_code = None
         provider_description = None
@@ -341,75 +326,64 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                     and candidate.replace("_", "").replace("-", "").isalnum()
                 ):
                     provider_code = candidate
-
-                # Google documents error_description as explanatory text.
-                # Log only short, single-line ASCII diagnostics using a tight
-                # character allowlist; never log the raw response body.
                 candidate_description = payload.get("error_description")
                 if (
                     isinstance(candidate_description, str)
                     and 0 < len(candidate_description) <= 180
                     and candidate_description.isascii()
-                    and all(
-                        char.isalnum() or char in " .,;:_()/-"
-                        for char in candidate_description
-                    )
+                    and all(char.isalnum() or char in " .,;:_()/-" for char in candidate_description)
                 ):
                     provider_description = " ".join(candidate_description.split())
 
         safe_reason = str(error) if isinstance(error, (GoogleOAuthError, CredentialStoreError)) else type(error).__name__
         _LOG.warning(
             "Google OAuth callback failed (phase=%s, reason=%s, http_status=%s, provider_error=%s, provider_error_description=%s)",
-            phase,
-            safe_reason,
-            http_status if http_status is not None else "-",
-            provider_code or "-",
-            provider_description or "-",
+            phase, safe_reason, http_status if http_status is not None else "-",
+            provider_code or "-", provider_description or "-",
         )
-        flow.update(
-            status="error",
-            message="Clippy could not verify or securely save Google access. Please try again.",
-        )
+        if flow is not None and flow.get("status") == "pending":
+            flow.update(
+                status="error",
+                message="Clippy could not verify or securely save Google access. Please try again.",
+            )
+        return "error" if flow is not None else None
     finally:
-        _close_listener(flow)
+        if flow is not None and flow.get("status") != "pending":
+            _close_listener(flow)
 
 
 async def google_flow_status(flow_id: str) -> dict[str, str]:
-    flow = _GOOGLE_FLOWS.get(flow_id)
-    if not flow:
-        raise GoogleOAuthError("This sign-in attempt has expired. Start again.")
-    if flow["status"] == "pending" and time.monotonic() >= flow["expires_at"]:
-        flow.update(status="expired", message="Google sign-in expired. Please try again.")
-        _close_listener(flow)
-    return {"status": flow["status"], "message": flow["message"]}
+    async with provider_credential_lock("youtube"):
+        flow = _GOOGLE_FLOWS.get(flow_id)
+        if not flow:
+            raise GoogleOAuthError("This sign-in attempt has expired. Start again.")
+        _expire_google_flow_if_due(flow)
+        return {"status": flow["status"], "message": flow["message"]}
 
 
 async def cancel_all_google_flows() -> int:
-    """Invalidate pending Google callbacks before local disconnect."""
-    async with _GOOGLE_LOCK:
-        flows = list(_GOOGLE_FLOWS.values())
-        _GOOGLE_FLOWS.clear()
-        servers = []
-        for flow in flows:
-            flow.update(status="cancelled", message="Google sign-in was cancelled.")
-            server = flow.get("server")
-            if server:
-                server.close()
-                servers.append(server)
-            flow["verifier"] = ""
-        for server in servers:
-            await server.wait_closed()
-        return len(flows)
+    """Invalidate all outstanding flows while the caller owns the provider lock."""
+    flows = list(_GOOGLE_FLOWS.values())
+    _GOOGLE_FLOWS.clear()
+    servers = []
+    for flow in flows:
+        flow.update(status="cancelled", message="Google sign-in was cancelled.")
+        server = _close_listener(flow)
+        if server:
+            servers.append(server)
+    for server in servers:
+        await server.wait_closed()
+    return len(flows)
 
 
 async def cancel_google_flow(flow_id: str) -> bool:
-    async with _GOOGLE_LOCK:
-        flow = _GOOGLE_FLOWS.pop(flow_id, None)
-        if not flow:
+    async with provider_credential_lock("youtube"):
+        flow = _GOOGLE_FLOWS.get(flow_id)
+        if not flow or flow["status"] != "pending":
             return False
-        server = flow.get("server")
+        _GOOGLE_FLOWS.pop(flow_id, None)
+        flow.update(status="cancelled", message="Google sign-in was cancelled.")
+        server = _close_listener(flow)
         if server:
-            server.close()
             await server.wait_closed()
-        flow["verifier"] = ""
         return True

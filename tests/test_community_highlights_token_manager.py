@@ -72,8 +72,7 @@ async def test_google_refresh_preserves_existing_refresh_token(monkeypatch):
         "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
     })
     client = FakeClient([
-        (200, {"access_token": "new-access", "expires_in": 3600}),
-        (200, {"aud": "google-client", "azp": "google-client", "scope": "https://www.googleapis.com/auth/youtube.readonly"}),
+        (200, {"access_token": "new-access", "token_type": "Bearer", "expires_in": 3600}),
     ])
 
     token = await ensure_access_token("youtube", store_factory=lambda: store, client=client)
@@ -81,13 +80,14 @@ async def test_google_refresh_preserves_existing_refresh_token(monkeypatch):
     assert token == "new-access"
     assert store.saved["refresh_token"] == "existing-refresh"
     assert store.saved["access_token"] == "new-access"
+    assert store.saved["scopes"] == ["https://www.googleapis.com/auth/youtube.readonly"]
+    assert len(client.calls) == 1
+    assert client.calls[0][0] == "POST"
+
 
 
 @run_async
-async def test_google_refresh_rejects_missing_authorized_party(monkeypatch):
-    import pytest
-    from community_highlights.token_manager import ProviderTokenError
-
+async def test_google_refresh_saves_rotated_refresh_token_and_checks_returned_scope(monkeypatch):
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
     store = FakeStore({
         "client_id": "google-client",
@@ -96,37 +96,22 @@ async def test_google_refresh_rejects_missing_authorized_party(monkeypatch):
         "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
     })
     client = FakeClient([
-        (200, {"access_token": "new-access", "expires_in": 3600}),
-        (200, {"aud": "google-client", "scope": "https://www.googleapis.com/auth/youtube.readonly"}),
-    ])
-
-    with pytest.raises(ProviderTokenError):
-        await ensure_access_token("youtube", store_factory=lambda: store, client=client)
-    assert store.saved is None
-
-
-@run_async
-async def test_google_refresh_accepts_distinct_project_audience_with_matching_authorized_party(monkeypatch):
-    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
-    store = FakeStore({
-        "client_id": "google-client",
-        "refresh_token": "existing-refresh",
-        "expires_at": 0,
-        "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
-    })
-    client = FakeClient([
-        (200, {"access_token": "new-access", "expires_in": 3600}),
         (200, {
-            "aud": "another-client-in-same-project",
-            "azp": "google-client",
+            "access_token": "rotated-access",
+            "refresh_token": "rotated-refresh",
+            "token_type": "Bearer",
+            "expires_in": 1800,
             "scope": "https://www.googleapis.com/auth/youtube.readonly",
         }),
     ])
 
     token = await ensure_access_token("youtube", store_factory=lambda: store, client=client)
 
-    assert token == "new-access"
-    assert store.saved["client_id"] == "google-client"
+    assert token == "rotated-access"
+    assert store.saved["refresh_token"] == "rotated-refresh"
+    assert store.saved["scopes"] == ["https://www.googleapis.com/auth/youtube.readonly"]
+    assert len(client.calls) == 1
+    assert client.calls[0][0] == "POST"
 
 
 @run_async
