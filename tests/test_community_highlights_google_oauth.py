@@ -231,3 +231,28 @@ async def test_google_callback_rejects_token_response_without_youtube_scope(monk
 
     await google_oauth.cancel_google_flow(started["flow_id"])
 
+@run_async
+async def test_google_callback_accepts_omitted_scope_when_it_matches_requested_scope(monkeypatch):
+    store = FakeCredentialStore()
+    mock_google_token_exchange(monkeypatch, {
+        "access_token": "test-access-token",
+        "refresh_token": "test-refresh-token",
+        "expires_in": 3600,
+    })
+    started = await google_oauth.start_google_flow(
+        client_id="desktop-client-id",
+        store_factory=lambda: store,
+    )
+    flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+
+    await google_oauth._complete_google_callback(
+        started["flow_id"],
+        {"state": [flow["state"]], "code": ["test-authorization-code"]},
+    )
+
+    status = await google_oauth.google_flow_status(started["flow_id"])
+    assert status["status"] == "connected"
+    assert store.saved["scopes"] == [google_oauth.GOOGLE_SCOPE]
+
+    await google_oauth.cancel_google_flow(started["flow_id"])
+
