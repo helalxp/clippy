@@ -334,3 +334,27 @@ def test_disconnect_preserves_local_credentials_when_credential_manager_delete_f
     assert response.status_code == 503
     assert store.bundle["access_token"] == "still-saved"
     assert events == ["begin", "end"]
+
+def test_candidate_file_route_serves_browser_preview_mp4(monkeypatch, tmp_path):
+    candidate_id = "candidate-preview-123"
+    media = tmp_path / "candidate-preview.mp4"
+    media.write_bytes(b"browser-preview")
+    monkeypatch.setattr(
+        community_api.capture_sessions,
+        "get_candidate",
+        lambda requested_id: (
+            {"candidate_id": requested_id, "status": "ready"},
+            media,
+        ) if requested_id == candidate_id else None,
+    )
+    client = _client(monkeypatch)
+
+    response = client.get(
+        f"/api/community-highlights/candidates/{candidate_id}/file",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.headers["content-disposition"].endswith('.mp4"')
+    assert response.content == b"browser-preview"

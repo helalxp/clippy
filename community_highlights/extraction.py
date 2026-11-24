@@ -1,4 +1,4 @@
-"""Lossless assembly of selected MPEG-TS rolling segments."""
+"""Lossless MP4 remuxing of selected MPEG-TS rolling segments."""
 from __future__ import annotations
 
 import os
@@ -23,11 +23,11 @@ def assemble_segments(
     ffmpeg_path: str = "ffmpeg",
     runner: Callable[..., Any] = subprocess.run,
 ) -> Path:
-    """Concatenate compatible MPEG-TS segments without re-encoding."""
+    """Concatenate MPEG-TS segments into a browser-playable MP4 without re-encoding."""
     if not records:
         raise RollingCaptureError("There are no segments to assemble.")
-    if output_path.suffix.lower() != ".ts":
-        raise RollingCaptureError("Lossless rolling assembly currently requires a .ts output.")
+    if output_path.suffix.lower() != ".mp4":
+        raise RollingCaptureError("Highlight preview assembly requires an .mp4 output.")
     paths = [record.path.resolve() for record in records]
     root = paths[0].parent
     if any(path.parent != root or not path.is_file() for path in paths):
@@ -60,9 +60,12 @@ def assemble_segments(
                 "-f", "concat",
                 "-safe", "0",
                 "-i", str(manifest_path),
-                "-map", "0",
+                # Keep only streams that belong in a browser-playable media file.
+                "-map", "0:v?",
+                "-map", "0:a?",
                 "-c", "copy",
-                "-f", "mpegts",
+                "-movflags", "+faststart",
+                "-f", "mp4",
                 "-y",
                 str(output_path),
             ],
@@ -75,7 +78,9 @@ def assemble_segments(
         )
         if getattr(result, "returncode", 1) != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
             output_path.unlink(missing_ok=True)
-            raise RollingCaptureError("FFmpeg could not assemble the selected highlight segments.")
+            raise RollingCaptureError(
+                "FFmpeg could not create a browser-playable MP4 from the selected highlight segments."
+            )
         return output_path
     except subprocess.TimeoutExpired:
         output_path.unlink(missing_ok=True)

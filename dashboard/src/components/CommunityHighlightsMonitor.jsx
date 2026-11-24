@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import {
@@ -26,9 +26,69 @@ export default function CommunityHighlightsMonitor({ connections }) {
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState('');
+  const [previewCandidateId, setPreviewCandidateId] = useState('');
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [previewBusy, setPreviewBusy] = useState('');
+  const previewObjectUrl = useRef(null);
+  const previewAbort = useRef(null);
   const [startingAction, setStartingAction] = useState('');
   const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => () => {
+    previewAbort.current?.abort();
+    previewAbort.current = null;
+    if (previewObjectUrl.current) URL.revokeObjectURL(previewObjectUrl.current);
+    previewObjectUrl.current = null;
+  }, []);
+
+  const closeCandidatePreview = () => {
+    previewAbort.current?.abort();
+    previewAbort.current = null;
+    if (previewObjectUrl.current) {
+      URL.revokeObjectURL(previewObjectUrl.current);
+      previewObjectUrl.current = null;
+    }
+    setPreviewUrl('');
+    setPreviewCandidateId('');
+    setPreviewBusy('');
+  };
+
+  const openCandidatePreview = async (candidateId) => {
+    if (previewAbort.current) return;
+    setError('');
+    setPreviewBusy(candidateId);
+    setPreviewCandidateId(candidateId);
+    setPreviewUrl('');
+    if (previewObjectUrl.current) {
+      URL.revokeObjectURL(previewObjectUrl.current);
+      previewObjectUrl.current = null;
+    }
+    const controller = new AbortController();
+    previewAbort.current = controller;
+    try {
+      const response = await apiFetch(
+        '/api/community-highlights/candidates/' + encodeURIComponent(candidateId) + '/file',
+        { signal: controller.signal },
+      );
+      if (!response.ok) throw new Error('The candidate preview is not ready.');
+      const blob = await response.blob();
+      if (controller.signal.aborted || previewAbort.current !== controller) return;
+      const url = URL.createObjectURL(blob);
+      previewObjectUrl.current = url;
+      setPreviewUrl(url);
+    } catch (requestError) {
+      if (requestError?.name !== 'AbortError') {
+        setError(requestError?.detail || requestError.message || 'Could not load the candidate preview.');
+        setPreviewCandidateId('');
+      }
+    } finally {
+      if (previewAbort.current === controller) {
+        previewAbort.current = null;
+        setPreviewBusy('');
+      }
+    }
+  };
 
   const streamReference = parseCommunityHighlightsStreamUrl(streamUrl);
   const providerConnection = streamReference ? connections?.[streamReference.provider] : null;
@@ -222,7 +282,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
       const blobUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = blobUrl;
-      anchor.download = `community-highlight-${candidateId}.ts`;
+      anchor.download = `community-highlight-${candidateId}.mp4`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -253,6 +313,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
 
   const deleteCandidate = async (candidateId) => {
     if (!window.confirm('Delete this highlight candidate and its local video file? This cannot be undone.')) return;
+    if (previewCandidateId === candidateId) closeCandidatePreview();
     setReviewBusy(candidateId);
     setError('');
     try {
@@ -511,8 +572,9 @@ export default function CommunityHighlightsMonitor({ connections }) {
         ) : (
           <div className="space-y-2">
             {candidates.map((candidate) => (
-              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div className="min-w-0">
+              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
                     <span className={candidate.status === 'ready' ? 'badge-ok' : 'readout'}>{candidate.status}</span>
@@ -524,10 +586,17 @@ export default function CommunityHighlightsMonitor({ connections }) {
                   {candidate.status === 'ready' && (
                     <>
                       {candidate.review_status !== 'rejected' && (
-                        <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                          {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
-                        </button>
+                        <>
+                          <button type="button" onClick={() => openCandidatePreview(candidate.candidate_id)}
+                            disabled={!!previewBusy || reviewBusy === candidate.candidate_id}
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                            {previewBusy === candidate.candidate_id ? 'Loading…' : 'Preview'}
+                          </button>
+                          <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                            {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
+                          </button>
+                        </>
                       )}
                       {candidate.review_status === 'pending' ? (
                         <>
@@ -549,13 +618,35 @@ export default function CommunityHighlightsMonitor({ connections }) {
                     <Trash2 size={13} />
                   </button>
                 </div>
+                </div>
+                {previewCandidateId === candidate.candidate_id && (
+                  <div className="mt-3 rounded-input border border-rule bg-paper3 p-3">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <span className="text-xs font-medium text-ink">Clip preview</span>
+                      <button type="button" onClick={closeCandidatePreview}
+                        className="text-xs text-muted hover:text-ink">Close preview</button>
+                    </div>
+                    {previewUrl ? (
+                      <video
+                        key={previewUrl}
+                        src={previewUrl}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full max-h-[420px] rounded-input bg-black"
+                      />
+                    ) : (
+                      <p className="text-xs text-muted">{previewBusy === candidate.candidate_id ? 'Preparing preview…' : 'Preview unavailable.'}</p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
       <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Completed highlights are saved as MPEG-TS (.ts) files. You can approve, reject, delete, or download them here. Fine trimming and MP4 export are not available yet.
+        Completed highlights are saved as MP4 files for browser preview and download. Approving a candidate keeps it locally; rejecting or deleting it removes its media. Fine trimming and handoff to Clippy's main clip-generation pipeline are not available yet.
       </p>
     </section>
   );

@@ -185,7 +185,7 @@ def test_delete_approved_candidate_removes_media_and_frees_queue_slot(tmp_path):
     session_id = "session-safe-delete"
     output_dir = tmp_path / session_id / "highlights"
     output_dir.mkdir(parents=True)
-    media = output_dir / f"{candidate_id}.ts"
+    media = output_dir / f"{candidate_id}.mp4"
     media.write_bytes(b"candidate media")
     manager._candidates[candidate_id] = _ready_candidate(candidate_id, session_id, media)
 
@@ -200,7 +200,7 @@ def test_delete_candidate_keeps_metadata_when_file_is_locked_or_unwritable(tmp_p
     session_id = "session-delete-failure"
     output_dir = tmp_path / session_id / "highlights"
     output_dir.mkdir(parents=True)
-    media = output_dir / f"{candidate_id}.ts"
+    media = output_dir / f"{candidate_id}.mp4"
     media.write_bytes(b"candidate media")
     manager._candidates[candidate_id] = _ready_candidate(candidate_id, session_id, media)
 
@@ -249,3 +249,27 @@ def test_delete_unknown_candidate_returns_false(tmp_path):
     manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
     assert manager.delete_candidate("missing") is False
 
+
+def test_stopped_capture_deletes_rolling_sources_but_preserves_candidate_mp4(tmp_path):
+    manager = CaptureSessionManager(capture_factory=FakeCapture, output_root=tmp_path)
+    started = manager.start("https://www.twitch.tv/cleanup")
+    session = manager._sessions[started["session_id"]]
+    source_dir = session.config.output_dir
+    source_dir.mkdir(parents=True, exist_ok=True)
+    segment = source_dir / "segment-00000000.ts"
+    index = source_dir / "segments.csv"
+    segment.write_bytes(b"rolling source")
+    index.write_text("segment-00000000.ts,0,4\n", encoding="utf-8")
+    highlights = source_dir / "highlights"
+    highlights.mkdir()
+    approved = highlights / "candidate-approved.mp4"
+    approved.write_bytes(b"approved media")
+    abandoned_manifest = highlights / "highlight-abandoned.ffconcat"
+    abandoned_manifest.write_text("ffconcat version 1.0\\n", encoding="utf-8")
+
+    assert asyncio.run(manager.stop(started["session_id"])) is True
+
+    assert not segment.exists()
+    assert not index.exists()
+    assert not abandoned_manifest.exists()
+    assert approved.is_file()

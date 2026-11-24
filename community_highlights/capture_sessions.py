@@ -197,6 +197,64 @@ class CaptureSessionManager:
             with self._lock:
                 session.error = "Live capture failed unexpectedly. Check the stream and FFmpeg installation."
                 session.status = "error"
+        finally:
+            # A naturally ended/failed source cannot provide any more post-trigger
+            # footage. Wake candidate workers so they fail promptly and release
+            # their pins instead of leaving this session's ring on disk forever.
+            session.stop_event.set()
+            self._cleanup_rolling_segments_if_finished(session)
+
+    def _cleanup_rolling_segments_if_finished(self, session: CaptureSession) -> None:
+        """Remove source-ring files after the capture and all candidate readers finish.
+
+        Approved/pending candidate MP4s live under the sibling highlights folder
+        and are deliberately preserved. Only disposable rolling inputs and the
+        FFmpeg index are removed.
+        """
+        with self._lock:
+            if session.status not in {"stopped", "ended", "error"}:
+                return
+            current = threading.current_thread()
+            for candidate in self._candidates.values():
+                if candidate.capture_session_id != session.session_id:
+                    continue
+                worker = candidate.worker
+                if worker is not None and worker is not current and worker.is_alive():
+                    return
+            output_dir = session.config.output_dir
+
+        if not output_dir.is_dir():
+            return
+        for segment in output_dir.glob("segment-*.ts"):
+            try:
+                segment.unlink(missing_ok=True)
+            except OSError:
+                # Leave an undeletable source in place for a later cleanup pass.
+                continue
+        for index_name in ("segments.csv", "segments.csv.tmp"):
+            try:
+                (output_dir / index_name).unlink(missing_ok=True)
+            except OSError:
+                continue
+        highlights_dir = output_dir / "highlights"
+        if highlights_dir.is_dir():
+            # FFmpeg concat manifests are disposable extraction inputs. A normal
+            # finally block deletes them; this is a second cleanup for a worker
+            # that ended abnormally after capture has stopped.
+            for manifest in highlights_dir.glob("highlight-*.ffconcat"):
+                try:
+                    manifest.unlink(missing_ok=True)
+                except OSError:
+                    continue
+        # Keep candidate MP4s; remove only empty scaffolding.
+        try:
+            highlights_dir.rmdir()
+        except OSError:
+            pass
+        try:
+            output_dir.rmdir()
+        except OSError:
+            pass
 
     def get(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -294,6 +352,23 @@ class CaptureSessionManager:
                 if remaining > 0 and session.stop_event.wait(min(remaining, 0.5)):
                     raise RollingCaptureError("The rolling capture stopped before the post-trigger window completed.")
                 indexed = session.capture.read_segment_index()
+                # Pin each newly finalized segment as it enters the requested
+                # window. Without incremental pinning, byte-pressure pruning
+                # can delete post-trigger footage while this worker is waiting.
+                window_records = select_segments_for_window(
+                    indexed,
+                    triggered_at=candidate.triggered_at,
+                    pre_seconds=candidate.pre_seconds,
+                    post_seconds=candidate.post_seconds,
+                )
+                already_protected = {Path(path).resolve() for path in protected}
+                newly_completed = [
+                    item.path for item in window_records
+                    if Path(item.path).resolve() not in already_protected
+                ]
+                if newly_completed:
+                    additional = session.capture.protect_segments(newly_completed)
+                    protected = list(dict.fromkeys([*protected, *additional]))
                 completed_end = 0.0
                 for item in indexed:
                     try:
@@ -327,7 +402,7 @@ class CaptureSessionManager:
                 pre_seconds=candidate.pre_seconds,
                 post_seconds=candidate.post_seconds,
             )
-            output_path = session.config.output_dir / "highlights" / f"{candidate.candidate_id}.ts"
+            output_path = session.config.output_dir / "highlights" / f"{candidate.candidate_id}.mp4"
             assemble_segments(records, output_path, ffmpeg_path=session.config.ffmpeg_path)
             with self._lock:
                 candidate.output_path = output_path
@@ -343,6 +418,7 @@ class CaptureSessionManager:
                 candidate.status = "error"
         finally:
             session.capture.release_segments(protected)
+            self._cleanup_rolling_segments_if_finished(session)
 
     def list_candidates(self, capture_session_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -391,7 +467,7 @@ class CaptureSessionManager:
             if output_path is not None:
                 root = self._output_root.resolve()
                 expected_parent = root / candidate.capture_session_id / "highlights"
-                expected_file = expected_parent / f"{candidate.candidate_id}.ts"
+                expected_file = expected_parent / f"{candidate.candidate_id}.mp4"
                 actual_file = Path(os.path.abspath(output_path))
                 resolved_parent = expected_parent.resolve()
                 if actual_file != expected_file or not resolved_parent.is_relative_to(root):
@@ -442,6 +518,7 @@ class CaptureSessionManager:
                 session.error = "Capture did not stop within the shutdown timeout."
             elif session.status == "stopping":
                 session.status = "stopped"
+        self._cleanup_rolling_segments_if_finished(session)
         return True
 
     async def stop_all(self) -> None:
@@ -471,6 +548,8 @@ class CaptureSessionManager:
                     session.error = "Capture did not stop within the shutdown timeout."
                 elif session.status == "stopping":
                     session.status = "stopped"
+        for session in sessions:
+            self._cleanup_rolling_segments_if_finished(session)
 
 
 capture_sessions = CaptureSessionManager()

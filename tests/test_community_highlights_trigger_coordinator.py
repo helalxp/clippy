@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 
 from community_highlights.models import ChatMessage, ChatProvider
@@ -95,3 +96,27 @@ def test_rejects_invalid_trigger_configuration():
         pass
     else:
         raise AssertionError("invalid phrase should be rejected")
+
+
+def test_trigger_creation_failure_is_logged_without_chat_content_or_identity(caplog):
+    manager = FakeCaptureManager()
+
+    def reject(**_kwargs):
+        raise ValueError("The rolling buffer does not contain the full pre-trigger window yet.")
+
+    manager.trigger = reject
+    coordinator = TriggerCoordinator(manager)
+    private_text = "private viewer says clip it"
+    private_message_id = "private-message-id"
+    item = message(private_text, private_message_id)
+
+    with caplog.at_level(logging.WARNING, logger="community_highlights.trigger_coordinator"):
+        coordinator.on_message(item)
+
+    assert "trigger was not captured" in caplog.text
+    assert "provider=twitch" in caplog.text
+    assert "reason=phrase" in caplog.text
+    assert "ValueError" in caplog.text
+    assert private_text not in caplog.text
+    assert private_message_id not in caplog.text
+    assert item.stream_id not in caplog.text

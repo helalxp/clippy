@@ -185,30 +185,41 @@ class RollingCapture:
                 self._protected_segments.discard(Path(candidate).resolve())
 
     def _prune_segments(self) -> None:
-        """Enforce both age and byte budgets, preserving the newest segment."""
-        segments = self.list_segments()
-        if len(segments) <= 1:
-            return
-        now = self._clock()
-        max_age = self.config.retention_seconds
-        max_bytes = self.config.max_buffer_size_mb * 1024 * 1024
-        sizes = {p: p.stat().st_size for p in segments}
-        total = sum(sizes.values())
-        newest = segments[-1]
+        """Enforce age and byte budgets without racing a concurrent pin operation."""
         with self._lock:
-            protected = set(self._protected_segments)
-        for segment in segments[:-1]:
-            if segment.resolve() in protected:
-                continue
+            segments = self.list_segments()
+            if len(segments) <= 1:
+                return
+
+            now = self._clock()
+            max_age = self.config.retention_seconds
+            max_bytes = self.config.max_buffer_size_mb * 1024 * 1024
             try:
-                age_expired = now - segment.stat().st_mtime > max_age
-                size_expired = total > max_bytes
-                if age_expired or size_expired:
-                    size = sizes[segment]
-                    segment.unlink(missing_ok=True)
-                    total -= size
+                sizes = {path: path.stat().st_size for path in segments}
             except FileNotFoundError:
-                continue
+                # A segment can be finalized or removed while the index is being
+                # refreshed. The next recording iteration will retry pruning.
+                return
+            total = sum(sizes.values())
+
+            # Keep the newest segment so FFmpeg can continue its sequence even
+            # when every older segment has aged out or the byte cap is reached.
+            for segment in segments[:-1]:
+                resolved = segment.resolve()
+                # Keep this final protected check and unlink under the same lock
+                # used by protect_segments(); a trigger cannot pin a file after
+                # this check but before the file is deleted.
+                if resolved in self._protected_segments:
+                    continue
+                try:
+                    stat = segment.stat()
+                    age_expired = now - stat.st_mtime > max_age
+                    size_expired = total > max_bytes
+                    if age_expired or size_expired:
+                        segment.unlink(missing_ok=True)
+                        total -= sizes[segment]
+                except FileNotFoundError:
+                    continue
 
     def request_stop(self) -> None:
         self._stop_requested.set()

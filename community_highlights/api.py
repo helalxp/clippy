@@ -372,8 +372,8 @@ async def download_highlight_candidate(candidate_id: str):
         raise HTTPException(status_code=404, detail="Highlight file is not ready.")
     return FileResponse(
         candidate[1],
-        media_type="video/mp2t",
-        filename=f"community-highlight-{candidate_id}.ts",
+        media_type="video/mp4",
+        filename=f"community-highlight-{candidate_id}.mp4",
     )
 
 

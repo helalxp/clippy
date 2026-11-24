@@ -154,3 +154,69 @@ def test_candidate_decision_requires_ready_candidate(tmp_path, monkeypatch):
         raise AssertionError("deleted candidate should not be re-approved")
 
     asyncio.run(manager.stop(started["session_id"]))
+
+
+def test_post_trigger_segments_are_pinned_as_soon_as_they_arrive(tmp_path, monkeypatch):
+    from datetime import timedelta
+    import os
+
+    trigger_time = time.time()
+    pre_path = tmp_path / "segment-pre.ts"
+    post_path = tmp_path / "segment-post.ts"
+    pre_path.write_bytes(b"pre")
+    post_path.write_bytes(b"post")
+    os.utime(pre_path, (trigger_time, trigger_time))
+    os.utime(post_path, (trigger_time + 4, trigger_time + 4))
+    pre_record = SegmentRecord(pre_path.resolve(), 0, 4)
+    post_record = SegmentRecord(post_path.resolve(), 4, 8)
+
+    class IncrementalCapture(FakeIndexedCapture):
+        def __init__(self, url, config):
+            super().__init__(url, config, pre_record)
+            self.index_reads = 0
+
+        def read_segment_index(self):
+            self.index_reads += 1
+            return [pre_record] if self.index_reads == 1 else [pre_record, post_record]
+
+    made = []
+
+    def factory(url, config):
+        capture = IncrementalCapture(url, config)
+        made.append(capture)
+        return capture
+
+    def assemble(records, output_path, **_kwargs):
+        assert records == [pre_record, post_record]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"preview mp4")
+        return output_path
+
+    monkeypatch.setattr("community_highlights.capture_sessions.assemble_segments", assemble)
+    manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path / "sessions")
+    started = manager.start("https://www.twitch.tv/channel")
+    session_worker = manager._sessions[started["session_id"]].worker
+    deadline = time.time() + 1
+    while manager.get(started["session_id"])["status"] != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+
+    candidate = manager.trigger(
+        provider="twitch",
+        stream_id="channel",
+        triggered_at=datetime.fromtimestamp(trigger_time, timezone.utc),
+        pre_seconds=4,
+        post_seconds=1,
+        reason="manual",
+    )
+    candidate_id = candidate["candidate_id"]
+    candidate_worker = manager._candidates[candidate_id].worker
+    candidate_worker.join(timeout=3)
+
+    result = manager.get_candidate(candidate_id)
+    assert result[0]["status"] == "ready"
+    assert result[1].suffix == ".mp4"
+    assert made[0].protected == [pre_path.resolve(), post_path.resolve()]
+    assert made[0].released == [pre_path.resolve(), post_path.resolve()]
+
+    asyncio.run(manager.stop(started["session_id"]))
+    session_worker.join(timeout=1)

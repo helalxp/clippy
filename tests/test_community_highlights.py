@@ -110,6 +110,39 @@ def test_cooldown_suppresses_repeated_phrase_triggers():
     assert len(engine.add(message("m3", "clip it", at=at + timedelta(seconds=11)))) == 1
 
 
+def test_trigger_volume_uses_local_receipt_clock_not_skewed_provider_time():
+    engine = TriggerEngine([
+        TriggerRule("crowd", min_messages=2, min_unique_users=2, window_seconds=5, cooldown_seconds=10)
+    ])
+    received = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+    first = ChatMessage(
+        provider=ChatProvider.TWITCH,
+        stream_id="channel",
+        message_id="future-provider-clock",
+        provider_timestamp=datetime(2035, 1, 1, tzinfo=timezone.utc),
+        received_at=received,
+        sender_id="alice",
+        sender_name="alice",
+        text="hello",
+    )
+    second = ChatMessage(
+        provider=ChatProvider.TWITCH,
+        stream_id="channel",
+        message_id="past-provider-clock",
+        provider_timestamp=datetime(1995, 1, 1, tzinfo=timezone.utc),
+        received_at=received + timedelta(seconds=1),
+        sender_id="bob",
+        sender_name="bob",
+        text="hello",
+    )
+
+    assert engine.add(first) == []
+    matches = engine.add(second)
+
+    assert len(matches) == 1
+    assert matches[0].triggered_at == second.received_at
+
+
 def test_rule_validation_rejects_unusable_thresholds():
     with pytest.raises(ValueError):
         TriggerRule("empty")

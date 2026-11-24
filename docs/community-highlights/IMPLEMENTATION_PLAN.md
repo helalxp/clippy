@@ -5,7 +5,7 @@
 **Base:** `main` at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e` (stable release `v0.3.2`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
-**Last updated:** 2026-11-24
+**Last updated:** 2026-11-25
 
 ## Code audit follow-up register
 
@@ -14,7 +14,7 @@ This register records findings from the dated source audits below. A checked ite
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
 - [x] Persist compatible Windows paths for newly selected data directories, normalize legacy Win32 extended-prefix drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
-- [ ] Configure the shared repository Actions Variable `CLIPPY_GOOGLE_OAUTH_CLIENT_ID` for Google/YouTube authorization. `CLIPPY_TWITCH_CLIENT_ID` is optional during this test phase; if blank, Twitch sign-in stays disabled without affecting Google. Both values are public client identifiers, not secrets. RC and stable builds use these same variable names.
+- [x] Configure the shared repository Actions Variables `CLIPPY_GOOGLE_OAUTH_CLIENT_ID` and `CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET` for the confirmed Google Desktop app. The generated Desktop value is public application metadata, not a confidential secret. `CLIPPY_TWITCH_CLIENT_ID` remains optional during this test phase; if blank, Twitch sign-in stays disabled without affecting Google. RC and stable builds use these same variable names.
 
 ### OAuth application identity and environment separation
 - [x] Record that the current Google OAuth project and Twitch developer application are temporary testing registrations. Their current display names, support/contact details, and client IDs are not the final Clippy production identity.
@@ -29,11 +29,14 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Add targeted backend diagnostics for failed Community Highlights requests. Logs record method, matched route template (or redacted unmatched path), and status only; they omit request bodies, query strings, opaque flow/candidate IDs, and authorization headers.
 - [x] Fix approved-candidate queue exhaustion with an explicit candidate DELETE API and dashboard control. Delete removes the candidate's local media before its metadata, refuses in-progress workers, validates the generated path remains under the capture root, and preserves metadata if Windows refuses to unlink a locked file. No candidate status is silently pruned when the queue reaches its cap.
 - [ ] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Mark interrupted captures explicitly on startup. Keep provider tokens in Windows Credential Manager, not SQLite.
-- [ ] Complete provider/capture lifecycle verification: mocked provider lifecycle/reconnect tests are incomplete; run authorized Twitch/YouTube chat and Streamlink/FFmpeg capture checks on Windows; verify audio/video continuity, timestamps, disconnect handling, and graceful shutdown. Chat reconnect exists, but capture-worker recovery is not yet proven or implemented as a bounded reconnect path.
-- [ ] Validate trigger-to-media timeline drift against real captured segments. Current wall-time alignment estimates segment intervals from filesystem modification time and FFmpeg duration; it is not frame-accurate proof.
+- [ ] Complete provider/capture lifecycle verification after the latest chat repair: test Twitch and YouTube monitoring on packaged Windows, verify chat messages continue after reconnect, verify provider-specific terminal/rate-limit errors, and verify stop/disconnect. The user has already confirmed Google connection/disconnection, stream recording, candidate extraction, and some pre/post segment behavior before this repair.
+- [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger windows now use local receipt timestamps consistently; segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
 - [ ] Merge overlapping or nearby trigger windows so several reactions to one moment do not create duplicate candidates.
-- [ ] Finish M4 candidate workflow: footage analysis and suggested boundaries, inline preview, frame-accurate trimming, reuse of existing edit components, and handoff of approved candidates to the renderer.
-- [ ] Finish M5 hardening: review/automatic/hybrid modes, bounded retention and cleanup, structured diagnostics, long-running/restart recovery, and user-facing setup/troubleshooting documentation.
+- [x] Add inline candidate preview using an MP4 remux and browser video controls. Frame-accurate trimming, analysis/suggested boundaries, and renderer handoff remain open.
+- [x] Remove rolling source segments, FFmpeg indexes, and abandoned concat manifests after normal capture termination and candidate workers finish; preserve candidate MP4s until rejection or explicit deletion.
+- [ ] Add startup reconciliation for files left by a crash/forced kill. Candidate state and trigger settings are still in memory, so restart recovery must be designed with durable metadata before safely deleting/recovering candidate media.
+- [ ] Add an explicit total candidate-media byte/age budget and disk-pressure policy. The rolling ring is bounded by age and size; accepted/pending candidate MP4s are currently bounded by count, not total bytes or age.
+- [ ] Finish M5 hardening: review/automatic/hybrid modes, durable recovery, structured user-visible trigger diagnostics, long-running session verification, and user-facing setup/troubleshooting documentation.
 - [ ] Clarify development-platform scope: the secure credential adapter intentionally requires Windows Credential Manager and fails closed on non-Windows hosts. Docker/Linux can run the backend but cannot complete provider OAuth without a deliberate non-production credential-store strategy.
 - [x] Correct the authorization-window edge case: create a blank tab synchronously from the click, set its `opener` to `null` before provider navigation, and use the same helper for the reopen action. Add executable Node tests for popup blocking, opener isolation, navigation ordering, and closed windows.
 - [x] Use one provider-specific credential lifecycle lock for flow state, cancellation, expiry, token exchanges, credential writes, and Disconnect. Disconnect cancels pending flows while holding that lock, stops chat sessions, revokes the latest saved grant when possible, and removes local credentials.
@@ -42,7 +45,7 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Return the actual provider cancellation result through the API and refresh dashboard connection state when token exchange wins the cancellation race.
 - [x] Keep Community Highlights API routes closed when the supervised desktop session token is missing.
 - [x] Add phase-specific, credential-safe Google OAuth callback diagnostics and mocked success/failure tests for authorization-code exchange, scope validation, and secure credential persistence.
-- [ ] Run the focused Google OAuth tests and a real packaged-Windows sign-in attempt on the active fix branch. Capture the safe backend phase diagnostic if the live flow still fails; do not log tokens, codes, callback query strings, or PKCE material.
+- [x] Run the focused Google OAuth tests and complete a real packaged-Windows Google sign-in/disconnect acceptance attempt on the active fix branch. The user confirmed successful connection and disconnection. Continue to keep token, code, callback query strings, and PKCE material out of logs.
 
 
 
@@ -53,7 +56,7 @@ This register records findings from the dated source audits below. A checked ite
 - The original `feature/community-highlights` branch is a historical implementation snapshot. Its feature work was merged through PR #28; subsequent OAuth, packaging, browser-handoff, and provider-UI fixes were merged separately into `main`. Keep the branch for provenance, but do not continue development on it or merge it again.
 - New work starts from `main` on `fix/community-highlights-google-oauth`. This branch is the active home for the current post-consent Google OAuth repair. The historical branch is not deleted or force-moved.
 
-## 2026-11-24 implementation review
+## 2026-11-24 implementation review (historical baseline)
 
 This review compares the current `main` source at the base commit above with the milestones and claims in this plan. A checked implementation item means the code exists; it does not mean the provider or media path has passed live acceptance.
 
@@ -87,14 +90,49 @@ This review compares the current `main` source at the base commit above with the
 11. **Hybrid automation is still only a product decision.** Review-only, automatic, and hybrid modes are not implemented. Add explicit approval policy and safeguards only after persistence and renderer handoff exist.
 12. **Operational diagnostics and user guidance are incomplete.** The new Google OAuth callback has phase-safe diagnostics, but provider chat, trigger rejection, capture synchronization, FFmpeg assembly, restart recovery, and renderer handoff still need structured, user-actionable diagnostics and troubleshooting documentation.
 
-### Plan consistency corrections
+### Plan consistency corrections (historical, superseded by the 2026-11-25 review below)
 
-- M1 chat reconnect/backoff is implemented in code, but provider lifecycle tests and live chat acceptance remain pending. Keep implementation and verification status separate.
-- M2 Streamlink/FFmpeg and M3 trigger/candidate code exists, but live Windows continuity, clock drift, and restart behavior remain unverified.
-- M4 currently means candidate status/download/approve/reject only. Its exit criteria are not met because preview, trim, analysis, and renderer handoff are absent.
-- M5 rolling-segment age/size limits and session concurrency limits exist; this does not constitute complete candidate retention, disk-pressure policy, recovery, or unattended automation.
-- The original progress log predates the Google browser-handoff and provider-action-gating merges (PRs #33 and #34) and the stable `v0.3.2` promotion (PR #37). The OAuth hardening from PR #32 is represented in the batch-3 entry, but its final merged validation outcome was not recorded there. The current baseline and later validation outcomes are recorded in the 2026-11-24 progress entry; future entries must continue to distinguish merged code, automated test results, and manual Windows/provider acceptance.
+The gaps in this section were accurate for the 2026-11-24 baseline. The current monitoring, trigger-clock, segment cleanup, and inline-preview status is reconciled in the dated 2026-11-25 review below. The distinction between code implementation, CI validation, and live Windows acceptance remains mandatory.
 
+
+## 2026-11-25 implementation review — monitoring chat, candidate preview, and storage lifecycle
+
+### User-confirmed behavior before this repair batch
+
+- The user confirmed the packaged OAuth feature can connect and disconnect successfully.
+- The user confirmed a live stream can be recorded and a candidate clip can be extracted; some tested before/after footage segments were correct.
+- This is live acceptance of the existing auth/capture foundation, not acceptance of the chat fixes or the new browser preview in this batch. The provider used for the reported capture was not specified, and the latest changed code still requires a new packaged Windows test.
+
+### Monitoring-chat root causes found
+
+1. **Twitch WebSocket frame parsing dropped batched messages.** The old loop treated each WebSocket frame as one IRC line. Twitch can place multiple CRLF-delimited IRC messages in one frame, so only the first line was processed and PING/PRIVMSG lines after it could be lost. The new parser splits the full frame and processes every line, echoes the exact PING payload, and waits for Twitch's room-join confirmation before showing the session as connected.
+2. **YouTube error handling classified every 400/403/404 as permanent.** In particular, YouTube can return HTTP 403 with `rateLimitExceeded`, which is recoverable. The new handler classifies stable API error reasons: rate limits reconnect with backoff; ended/disabled chat, missing chat, permission failures, and exhausted quota produce terminal/actionable states rather than blind retry.
+3. **The initial YouTube messages response can contain recent history.** The old code sent every item returned by the first list request into the trigger engine. A historical `clip it` message could therefore fire a trigger immediately after monitoring started. The updated loop continues showing backlog messages in the monitor but only sends messages published at/after the session start to trigger evaluation.
+4. **Errored chat sessions could not be restarted.** The dashboard considered `error` terminal, but the backend did not; it returned the old errored session on a retry and retained terminal sessions against the two-session cap. New starts reclaim terminal sessions and allow a new task for the same stream.
+5. **Trigger-window evaluation mixed provider and local clocks.** Provider timestamps were used for rule windows and cooldowns while candidate capture used local receipt time. Rule windows and cooldowns now consistently use local receipt timestamps; provider timestamps remain preserved for display/evidence.
+6. **Trigger creation errors were swallowed.** Expected candidate/capture failures now produce a credential-safe warning with provider, trigger reason, and error category. No chat text, stream URL, provider user ID, candidate ID, or token is logged. A structured, user-visible monitor event is still a follow-up.
+
+### Candidate preview
+
+- Candidate assembly now remuxes the selected TS segments into one MP4 using stream copy and `+faststart`; it does not re-encode the source. Video and audio streams are explicitly mapped, excluding data/subtitle streams that do not belong in the preview file.
+- The candidate API now serves MP4 media. The review UI has an inline Preview action using the app's authenticated fetch path and an HTML video player. Temporary object URLs are revoked on close/unmount and the preview request is abortable.
+- Approve, reject, download, and delete remain review actions. This does not hand candidates into the main Clippy clip-generation pipeline. Trimming, analysis, and renderer handoff remain outside this slice.
+- Stream-copy MP4 preview is expected to be efficient, but actual codec/browser compatibility must be checked against the user's Twitch/YouTube capture on Windows. Unsupported source codecs may still require a later explicit transcode fallback.
+
+### Segment and temporary-file lifecycle
+
+- The rolling ring remains in a unique directory per capture and is bounded by configured age and total bytes, preserving the newest segment.
+- Candidate workers pin their selected segments. Newly completed segments overlapping the pending post-trigger window are now pinned incrementally, not only at the final extraction step.
+- Pruning now performs its final protected check and unlink under the same lock as pinning; a segment cannot become protected after prune has committed to deleting it.
+- After the capture terminates and all candidate workers for that session finish, the manager removes disposable `segment-*.ts` files, FFmpeg CSV indexes, and abandoned `highlight-*.ffconcat` manifests. Candidate MP4s are preserved until rejection or explicit candidate deletion.
+- Normal stop/end/error cleanup is covered with regression tests. An abrupt process crash or forced kill can bypass Python cleanup; startup reconciliation is still not implemented. Candidate metadata is in memory and is not recoverable after restart. A bounded total candidate-media byte/age policy also remains open.
+
+### Validation and acceptance status for this batch
+
+- Regression tests have been added for multi-message Twitch frames, join confirmation, Twitch reconnect/session-slot behavior, YouTube rate-limit versus ended-chat classification, YouTube historical backlog suppression, provider-clock skew, atomic segment pin/prune behavior, post-window pinning, MP4 assembly, and normal-stop cleanup.
+- These tests are authored in the branch; they are not considered passed until the new PR CI run completes.
+- After CI, the packaged Windows retest must verify: Twitch and YouTube chat messages actually appear; old YouTube backlog does not trigger candidates; rate-limit states recover; a new monitor can start after an error; a candidate MP4 plays in the inline preview; approve/reject/delete behave correctly; rolling TS sources disappear after capture stop while approved MP4 candidates remain.
+- Keep the PR open. Do not wire generated candidates into the main clip-generation pipeline until the monitor repair and preview have passed this acceptance.
 
 ## Goal
 
@@ -173,9 +211,9 @@ This plan is deliberately incremental. Implement and verify one working slice at
 ### M1 — Twitch and YouTube chat connectivity (first implementation milestone)
 
 - [x] Define a normalized chat-message model containing provider, stream ID, provider message ID, provider timestamp, local receipt timestamp, sender identity, and text. Emote normalization remains provider-adapter work.
-- [x] Implement Twitch IRC live chat connection and message normalization.
-- [x] Implement YouTube Data API live-chat polling and message normalization.
-- [x] Implement connection lifecycle: start, stop, reconnect, bounded backoff, cancellation, and clear status/error reporting.
+- [x] Implement Twitch IRC live chat connection and message normalization, including CRLF-delimited multi-message WebSocket frames and room-join confirmation.
+- [x] Implement YouTube Data API live-chat polling and message normalization, including provider-reason-aware terminal and recoverable error handling and suppression of historical backlog triggers.
+- [x] Implement connection lifecycle: start, stop, reconnect, bounded backoff, cancellation, clear status/error reporting, and reclamation/restart of terminal sessions.
 - [x] Parse supported Twitch channel and YouTube video/live URLs into provider-neutral stream references. Provider-specific live-chat ID resolution remains adapter work.
 - [x] Add focused unit tests for normalized message validation, URL parsing, phrase/volume triggers, duplicate suppression, cooldowns, and rule-window behavior. Provider lifecycle tests remain pending.
 - [ ] Add a small integration/smoke test path that can be run manually with a stream the developer can access; do not make live credentials a CI requirement.
@@ -191,7 +229,7 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [ ] Verify audio/video continuity, timestamp metadata, stream disconnect/reconnect behavior, and graceful shutdown on Windows.
 - [x] Add a bounded capture-session manager with isolated output directories, immutable per-session settings snapshots, a two-session concurrency cap, safe status snapshots, and bounded worker shutdown.
 - [x] Expose protected API operations to start, list, inspect, and stop capture sessions; stop owned capture and chat workers during API shutdown.
-- [x] Add configurable pre-trigger/post-trigger window selection, segment protection, and lossless MPEG-TS assembly. The initial clock bridge estimates completed segment wall intervals from file modification times and FFmpeg segment durations; real-stream accuracy is not yet proven.
+- [x] Add configurable pre-trigger/post-trigger window selection, incremental segment protection while the post-window is collected, and lossless MP4 remuxing. The initial clock bridge estimates completed segment wall intervals from file modification times and FFmpeg segment durations; real-stream accuracy is not yet proven.
 - [ ] Test capture and extraction with streams the developer is authorized to capture.
 
 **Exit criteria:** an isolated backend proof of concept can capture a live stream from a URL, retain a bounded rolling buffer, and extract arbitrary configured time windows reliably. Code paths and mocked tests are in place; the live Windows proof remains outstanding.
@@ -201,8 +239,10 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [x] Implement configurable phrase and community-volume rules, exposed through the Community Highlights monitor.
 - [x] Add unique-user thresholds, provider-message deduplication, and per-rule cooldowns.
 - [ ] Merge overlapping/nearby trigger windows to avoid duplicate candidates.
+- [x] Use local chat receipt timestamps consistently for trigger windows and cooldowns; retain provider timestamps as message metadata.
 - [x] Coordinate chat receipt timestamps with completed rolling segments using a documented file-mtime/duration estimate. Validate drift on Windows before tightening accuracy guarantees.
-- [x] Protect pre-trigger segments, wait for the configured post-trigger duration, validate coverage/gaps, and assemble the candidate without re-encoding.
+- [x] Protect pre-trigger segments, incrementally protect completed post-trigger segments, wait for the configured post-trigger duration, validate coverage/gaps, and assemble the candidate without re-encoding.
+- [x] Log safe trigger-creation failures rather than silently dropping them; a structured user-visible monitor diagnostic remains pending.
 - [ ] Persist trigger/candidate state and recover interrupted work after backend restart.
 
 **Exit criteria:** a simulated or live chat trigger consistently produces the requested pre/post footage window. Mocked lifecycle coverage is authored; real Windows validation remains pending.
@@ -212,7 +252,8 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [ ] Analyze triggered footage and propose clip boundaries.
 - [x] Create an in-memory candidate lifecycle with capture status, processing status, segment count, and error reporting. Durable persistence remains pending.
 - [x] Add Community Highlights UI for candidate status, file download, approve, and reject.
-- [ ] Add inline preview and frame-accurate start/end trimming.
+- [x] Add inline MP4 preview and download for completed candidates.
+- [ ] Add frame-accurate start/end trimming.
 - [ ] Reuse existing preview/editing components where appropriate.
 - [ ] Route approved candidates into the existing Clippy renderer.
 
@@ -221,7 +262,8 @@ This plan is deliberately incremental. Implement and verify one working slice at
 ### M5 — Hybrid automation and hardening
 
 - [ ] Add review-only, automatic, and hybrid processing modes.
-- [ ] Add bounded disk retention and capture concurrency controls.
+- [x] Enforce bounded rolling-buffer age/byte retention and clean rolling TS/index/concat temp files after normal capture termination and candidate-worker completion.
+- [ ] Add a total candidate-media byte/age budget, startup reconciliation after crash, and explicit disk-pressure policy.
 - [ ] Add structured diagnostics for provider, capture, synchronization, analysis, and rendering failures.
 - [ ] Verify long-running sessions and recovery from backend restart.
 - [ ] Document user-facing setup and troubleshooting.

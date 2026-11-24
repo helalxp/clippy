@@ -1,5 +1,6 @@
 
 import pytest
+import threading
 
 from community_highlights.rolling_capture import (
     RollingCapture,
@@ -271,3 +272,54 @@ def test_protected_segments_cannot_exceed_storage_budget(tmp_path):
 
     with pytest.raises(RollingCaptureError, match="storage budget"):
         capture.protect_segments([oversized])
+
+def test_pruning_serializes_with_concurrent_segment_pinning(tmp_path, monkeypatch):
+    now = [1000.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, retention_seconds=20),
+        clock=lambda: now[0],
+    )
+    stale = tmp_path / "segment-00000000.ts"
+    newest = tmp_path / "segment-00000001.ts"
+    stale.write_bytes(b"stale")
+    newest.write_bytes(b"newest")
+    import os
+    os.utime(stale, (900, 900))
+    os.utime(newest, (995, 995))
+
+    unlink_started = threading.Event()
+    allow_unlink = threading.Event()
+    pin_finished = threading.Event()
+    pin_result = []
+    original_unlink = Path.unlink
+
+    def blocked_unlink(path, *args, **kwargs):
+        if path == stale:
+            unlink_started.set()
+            assert allow_unlink.wait(timeout=2)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", blocked_unlink)
+    prune_worker = threading.Thread(target=capture._prune_segments)
+    prune_worker.start()
+    assert unlink_started.wait(timeout=1)
+
+    def pin():
+        pin_result.extend(capture.protect_segments([stale]))
+        pin_finished.set()
+
+    pin_worker = threading.Thread(target=pin)
+    pin_worker.start()
+    # protect_segments must wait for the in-progress prune decision. It cannot
+    # report a segment as protected after prune has already committed to unlink it.
+    assert not pin_finished.wait(timeout=0.05)
+
+    allow_unlink.set()
+    prune_worker.join(timeout=2)
+    pin_worker.join(timeout=2)
+
+    assert not prune_worker.is_alive()
+    assert not pin_worker.is_alive()
+    assert not stale.exists()
+    assert pin_result == []

@@ -1,6 +1,7 @@
 """Bridge normalized chat events into capture-window requests."""
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
@@ -8,6 +9,9 @@ from .capture_sessions import capture_sessions
 from .rolling_capture import RollingCaptureError
 from .models import ChatMessage
 from .triggers import TriggerEngine, TriggerRule
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class TriggerCoordinator:
@@ -100,10 +104,16 @@ class TriggerCoordinator:
                     post_seconds=post_seconds,
                     reason=match.reason,
                 )
-            except (ValueError, RollingCaptureError):
-                # Keep chat transport alive; an undersized buffer is surfaced
-                # through capture/candidate diagnostics rather than dropping chat.
-                continue
+            except (ValueError, RollingCaptureError) as error:
+                # A failed trigger must not tear down chat, but it must leave a
+                # safe diagnostic instead of disappearing silently. Avoid logging
+                # message text, stream URLs, provider IDs, or credential data.
+                _LOG.warning(
+                    "Community Highlights trigger was not captured (provider=%s, reason=%s, error_type=%s)",
+                    match.provider,
+                    match.reason,
+                    type(error).__name__,
+                )
 
 
 trigger_coordinator = TriggerCoordinator()
