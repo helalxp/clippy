@@ -35,22 +35,6 @@ def google_client_id() -> str:
     return os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "").strip()
 
 
-def google_client_secret() -> str:
-    """Return the configured Desktop OAuth client_secret.
-
-    Google Desktop clients are public clients: this value is distributed with
-    the app and is not a confidentiality boundary. PKCE remains mandatory.
-    """
-    value = os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
-    if (
-        len(value) > 512
-        or not value.isascii()
-        or any(ord(char) < 32 or ord(char) == 127 for char in value)
-    ):
-        return ""
-    return value
-
-
 def google_token_info_matches_client(token_info: Any, client_id: str) -> bool:
     """Check the OAuth client that requested the access token.
 
@@ -73,7 +57,7 @@ def google_token_info_matches_client(token_info: Any, client_id: str) -> bool:
 
 
 def google_authorization_available() -> bool:
-    if not google_client_id() or not google_client_secret():
+    if not google_client_id():
         return False
     try:
         WindowsCredentialStore()
@@ -88,7 +72,6 @@ def _b64url(value: bytes) -> str:
 
 def _close_listener(flow: dict[str, Any]) -> None:
     flow["verifier"] = ""
-    flow["client_secret"] = ""
     server = flow.get("server")
     if server:
         server.close()
@@ -102,11 +85,6 @@ async def start_google_flow(
     client_id = (client_id or google_client_id()).strip()
     if not client_id:
         raise GoogleOAuthError("Google sign-in is not configured in this Clippy build.")
-    client_secret = google_client_secret()
-    if not client_secret:
-        raise GoogleOAuthError(
-            "Google sign-in is not configured. The generated Desktop OAuth client credential is missing or invalid."
-        )
     if provider_is_disconnecting("youtube"):
         raise GoogleOAuthError("Google is being disconnected. Try again shortly.")
     start_generation = provider_operation_generation("youtube")
@@ -121,7 +99,6 @@ async def start_google_flow(
         "state": state,
         "verifier": verifier,
         "client_id": client_id,
-        "client_secret": client_secret,
         "status": "pending",
         "message": "Waiting for Google authorization.",
         "expires_at": time.monotonic() + _GOOGLE_FLOW_TTL,
@@ -192,7 +169,9 @@ async def start_google_flow(
             now = time.monotonic()
             for key, current in list(_GOOGLE_FLOWS.items()):
                 if current["expires_at"] <= now or current["status"] != "pending":
-                    _close_listener(current)
+                    old_server = current.get("server")
+                    if old_server:
+                        old_server.close()
                     _GOOGLE_FLOWS.pop(key, None)
             if len(_GOOGLE_FLOWS) >= 4:
                 server.close()
@@ -274,7 +253,6 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                     GOOGLE_TOKEN_URL,
                     data={
                         "client_id": flow["client_id"],
-                        "client_secret": flow["client_secret"],
                         "code": code,
                         "code_verifier": flow["verifier"],
                         "grant_type": "authorization_code",
@@ -419,7 +397,6 @@ async def cancel_all_google_flows() -> int:
                 server.close()
                 servers.append(server)
             flow["verifier"] = ""
-            flow["client_secret"] = ""
         for server in servers:
             await server.wait_closed()
         return len(flows)
@@ -435,5 +412,4 @@ async def cancel_google_flow(flow_id: str) -> bool:
             server.close()
             await server.wait_closed()
         flow["verifier"] = ""
-        flow["client_secret"] = ""
         return True
