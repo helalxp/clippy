@@ -536,7 +536,7 @@ Before a public production release:
 2. Create or configure separate production Google and Twitch application registrations, using the final app display name, support email, and required production callback/redirect settings for the actual implemented flows.
 3. Complete Google's production audience, consent-screen branding, homepage/privacy-policy/terms, scope classification, and any applicable verification steps. The homepage and privacy policy must be hosted on a verified domain controlled by the brand, and the privacy policy must accurately disclose access, use, storage, and sharing of YouTube user data.
 4. During the later production-cleanup phase, update the existing generic Actions Variables to the final public Client IDs after registrations and branding are ready. No separate *_TEST or *_PRODUCTION variable sets are used in the current workflow.
-5. Keep client secrets out of the desktop app, packaged OAuth JSON, GitHub Actions Variables, frontend, and logs. The desktop OAuth clients are public clients; the current implementation uses PKCE for Google and Device Code Grant for Twitch.
+5. Do not treat the Google Desktop OAuth client credential as confidential: Google currently requires it in token and refresh requests, and a desktop app cannot keep it private. Package it only as public-client configuration and use PKCE for the authorization flow. Keep it out of logs, frontend state, user token storage, and unrelated settings. Twitch continues to use Device Code Grant without a client secret.
 
 Google's current policy documentation says External apps in Testing are limited to 100 test users and authorizations for scopes beyond the basic profile/email subset expire after seven days. A production app is subject to applicable branding and scope verification before general distribution. The exact verification path depends on the final audience and scope classification. References: Google Cloud Help, "Manage App Audience", "Manage OAuth App Branding", and "Verification requirements".
 
@@ -595,7 +595,7 @@ The user chose to keep one shared OAuth configuration for development, friend te
 **Current configuration**
 - GitHub Actions reads `CLIPPY_GOOGLE_OAUTH_CLIENT_ID` for both RC and stable tags. This value is required because the current live test path is Google sign-in and YouTube chat access.
 - GitHub Actions reads `CLIPPY_TWITCH_CLIENT_ID` for both RC and stable tags, but it is optional for this phase. When blank, the payload contains an empty Twitch ID, the connection status reports Twitch authorization unavailable, and the Twitch sign-in button remains disabled. It does not block Google sign-in or packaging.
-- A non-empty ID is still format-validated. Neither value is a client secret; no provider client secret is packaged.
+- A non-empty ID is still format-validated. The Google Desktop credential packaging requirement was discovered later during live token exchange; see the 2026-11-24 callback-repair entry, which supersedes this historical configuration note. Twitch still does not use a client secret.
 - Windows PR validation and tagged releases use the same generic variable names. There are no `*_TEST` or `*_PRODUCTION` variables in the current workflow.
 - Final brand ownership, production registration, consent-screen verification, and any eventual production-specific identity changes remain a separate cleanup milestone.
 
