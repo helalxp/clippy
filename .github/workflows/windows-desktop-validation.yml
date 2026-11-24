@@ -119,6 +119,9 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($google)) {
             throw "Missing CLIPPY_GOOGLE_OAUTH_CLIENT_ID repository Actions Variable."
           }
+          if ([string]::IsNullOrWhiteSpace($googleClientSecret)) {
+            throw "Missing CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET repository Actions Variable for the configured Google Desktop OAuth client."
+          }
 
           foreach ($entry in @(
             @{ Name = "Google"; Value = $google },

@@ -121,6 +121,9 @@ Describe "Assembled Clippy application payload contract" {
         }
 
         $config.schemaVersion | Should -Be 1
+        if (-not [string]::IsNullOrWhiteSpace($config.googleOauthClientId)) {
+            $config.googleOauthClientSecret | Should -Not -BeNullOrEmpty
+        }
         $config.twitchClientId | Should -Be ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
         $config.googleOauthClientId | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
         $config.googleOauthClientSecret | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET).Trim()

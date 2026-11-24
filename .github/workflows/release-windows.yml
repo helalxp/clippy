@@ -48,6 +48,10 @@ jobs:
             echo "::error::Missing Google OAuth Client ID. Configure CLIPPY_GOOGLE_OAUTH_CLIENT_ID before tagging this release."
             exit 1
           fi
+          if [ -z "$google_client_secret" ]; then
+            echo "::error::Missing CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET repository Actions Variable for the configured Google Desktop OAuth client."
+            exit 1
+          fi
 
           for entry in "Google:$google" "Twitch:$twitch"; do
             name="${entry%%:*}"
