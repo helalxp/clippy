@@ -260,9 +260,9 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                     },
                 )
                 response.raise_for_status()
+                phase = "token_response_validation"
                 tokens = response.json()
 
-            phase = "token_response_validation"
             if not isinstance(tokens, dict):
                 raise GoogleOAuthError("Google returned an invalid token response.")
             access_token = tokens.get("access_token")
