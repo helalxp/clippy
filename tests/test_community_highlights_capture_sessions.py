@@ -273,3 +273,47 @@ def test_stopped_capture_deletes_rolling_sources_but_preserves_candidate_mp4(tmp
     assert not index.exists()
     assert not abandoned_manifest.exists()
     assert approved.is_file()
+
+
+def test_cleanup_waits_for_capture_worker_after_stop_timeout(tmp_path):
+    class SlowCapture:
+        def __init__(self, _url, config):
+            self.config = config
+            self.release = threading.Event()
+
+        def run(self, _stop_event, *, on_started=None):
+            if on_started:
+                on_started()
+            self.release.wait(5)
+
+        def request_stop(self):
+            # Simulate a Streamlink/FFmpeg worker that has not yet unwound.
+            pass
+
+    made = []
+
+    def factory(url, config):
+        capture = SlowCapture(url, config)
+        made.append(capture)
+        return capture
+
+    manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path)
+    started = manager.start("https://www.twitch.tv/slowcleanup")
+    session = manager._sessions[started["session_id"]]
+    deadline = time.time() + 1
+    while session.status != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+
+    segment = session.config.output_dir / "segment-00000000.ts"
+    segment.parent.mkdir(parents=True, exist_ok=True)
+    segment.write_bytes(b"still in use")
+    # This is the state stop() records if its worker-join timeout expires.
+    session.status = "error"
+
+    manager._cleanup_rolling_segments_if_finished(session)
+    assert segment.exists()
+
+    made[0].release.set()
+    session.worker.join(timeout=2)
+    assert not session.worker.is_alive()
+    assert not segment.exists()

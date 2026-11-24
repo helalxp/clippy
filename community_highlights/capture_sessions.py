@@ -215,6 +215,13 @@ class CaptureSessionManager:
             if session.status not in {"stopped", "ended", "error"}:
                 return
             current = threading.current_thread()
+            capture_worker = session.worker
+            if capture_worker is not None and capture_worker is not current and capture_worker.is_alive():
+                # A stop request can time out while Streamlink/FFmpeg is still
+                # closing. Never unlink its source files from the API thread.
+                # The capture worker's own finally block retries cleanup after
+                # its process and reader have been closed.
+                return
             for candidate in self._candidates.values():
                 if candidate.capture_session_id != session.session_id:
                     continue
