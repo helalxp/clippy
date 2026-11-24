@@ -34,6 +34,10 @@ def google_client_id() -> str:
     return os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "").strip()
 
 
+def google_client_secret() -> str:
+    """Return the non-confidential shared credential generated for Google's Desktop client."""
+    return os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+
 
 def google_authorization_available() -> bool:
     if not google_client_id():
@@ -51,6 +55,7 @@ def _b64url(value: bytes) -> str:
 
 def _close_listener(flow: dict[str, Any]):
     flow["verifier"] = ""
+    flow["client_secret"] = ""
     server = flow.get("server")
     if server:
         server.close()
@@ -107,6 +112,7 @@ async def start_google_flow(
         "state": state,
         "verifier": verifier,
         "client_id": client_id,
+        "client_secret": google_client_secret(),
         "status": "pending",
         "message": "Waiting for Google authorization.",
         "expires_at": time.monotonic() + _GOOGLE_FLOW_TTL,
@@ -254,16 +260,20 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 )
                 return flow["status"]
 
+            token_request = {
+                "client_id": flow["client_id"],
+                "code": code,
+                "code_verifier": flow["verifier"],
+                "grant_type": "authorization_code",
+                "redirect_uri": flow["redirect_uri"],
+            }
+            if flow["client_secret"]:
+                token_request["client_secret"] = flow["client_secret"]
+
             async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
                 response = await client.post(
                     GOOGLE_TOKEN_URL,
-                    data={
-                        "client_id": flow["client_id"],
-                        "code": code,
-                        "code_verifier": flow["verifier"],
-                        "grant_type": "authorization_code",
-                        "redirect_uri": flow["redirect_uri"],
-                    },
+                    data=token_request,
                 )
                 response.raise_for_status()
                 phase = "token_response_validation"
@@ -328,13 +338,18 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 ):
                     provider_code = candidate
                 candidate_description = payload.get("error_description")
-                if (
-                    isinstance(candidate_description, str)
-                    and 0 < len(candidate_description) <= 180
-                    and candidate_description.isascii()
-                    and all(char.isalnum() or char in " .,;:_()/-" for char in candidate_description)
-                ):
-                    provider_description = " ".join(candidate_description.split())
+                if isinstance(candidate_description, str):
+                    public_client_secret = flow.get("client_secret", "") if flow else ""
+                    if public_client_secret:
+                        candidate_description = candidate_description.replace(
+                            public_client_secret, "REDACTED"
+                        )
+                    if (
+                        0 < len(candidate_description) <= 180
+                        and candidate_description.isascii()
+                        and all(char.isalnum() or char in " .,;:_()/-" for char in candidate_description)
+                    ):
+                        provider_description = " ".join(candidate_description.split())
 
         safe_reason = str(error) if isinstance(error, (GoogleOAuthError, CredentialStoreError)) else type(error).__name__
         _LOG.warning(

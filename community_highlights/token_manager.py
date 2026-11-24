@@ -7,7 +7,7 @@ import time
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
-from .google_oauth import GOOGLE_SCOPE, GOOGLE_TOKEN_URL
+from .google_oauth import GOOGLE_SCOPE, GOOGLE_TOKEN_URL, google_client_secret
 from .twitch_oauth import TWITCH_SCOPES, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL
 from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
 
@@ -137,13 +137,17 @@ async def _ensure_access_token_locked(
                 "validated_at": now,
             })
         else:
+            google_refresh_data = {
+                "client_id": client_id,
+                "grant_type": "refresh_token",
+                "refresh_token": bundle["refresh_token"],
+            }
+            public_client_secret = google_client_secret()
+            if public_client_secret:
+                google_refresh_data["client_secret"] = public_client_secret
             response = await client.post(
                 GOOGLE_TOKEN_URL,
-                data={
-                    "client_id": client_id,
-                    "grant_type": "refresh_token",
-                    "refresh_token": bundle["refresh_token"],
-                },
+                data=google_refresh_data,
             )
             response.raise_for_status()
             refreshed = response.json()

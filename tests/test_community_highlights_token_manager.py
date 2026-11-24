@@ -65,6 +65,7 @@ async def test_twitch_refresh_persists_rotated_refresh_token_before_returning_ac
 @run_async
 async def test_google_refresh_preserves_existing_refresh_token(monkeypatch):
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "public-desktop-client-credential")
     store = FakeStore({
         "client_id": "google-client",
         "refresh_token": "existing-refresh",
@@ -83,12 +84,13 @@ async def test_google_refresh_preserves_existing_refresh_token(monkeypatch):
     assert store.saved["scopes"] == ["https://www.googleapis.com/auth/youtube.readonly"]
     assert len(client.calls) == 1
     assert client.calls[0][0] == "POST"
-
+    assert client.calls[0][2]["client_secret"] == "public-desktop-client-credential"
 
 
 @run_async
 async def test_google_refresh_saves_rotated_refresh_token_and_checks_returned_scope(monkeypatch):
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.delenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
     store = FakeStore({
         "client_id": "google-client",
         "refresh_token": "existing-refresh",
@@ -112,6 +114,7 @@ async def test_google_refresh_saves_rotated_refresh_token_and_checks_returned_sc
     assert store.saved["scopes"] == ["https://www.googleapis.com/auth/youtube.readonly"]
     assert len(client.calls) == 1
     assert client.calls[0][0] == "POST"
+    assert "client_secret" not in client.calls[0][2]
 
 
 @run_async

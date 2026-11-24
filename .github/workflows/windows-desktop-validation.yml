@@ -110,9 +110,11 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           $google = ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
           $twitch = ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
+          $googleClientSecret = ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET).Trim()
 
           if ([string]::IsNullOrWhiteSpace($google)) {
             throw "Missing CLIPPY_GOOGLE_OAUTH_CLIENT_ID repository Actions Variable."
@@ -128,7 +130,13 @@ jobs:
             }
           }
 
+          if ($googleClientSecret.Length -gt 4096 -or
+              ($googleClientSecret -and $googleClientSecret -match '[^\x21-\x7E]')) {
+            throw "Google Desktop OAuth client metadata has an invalid format."
+          }
+
           Write-Host "Google OAuth Client ID is configured."
+          Write-Host "Google Desktop OAuth client credential configured: $(-not [string]::IsNullOrWhiteSpace($googleClientSecret))"
           Write-Host "Twitch OAuth Client ID configured: $(-not [string]::IsNullOrWhiteSpace($twitch))"
 
       - name: Validate PowerShell installer scripts
@@ -154,6 +162,7 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: ./desktop/prepare-payload.ps1
 
       # PayloadContract.Tests.ps1 opens the real ZIP produced above. Running the
@@ -163,6 +172,7 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI

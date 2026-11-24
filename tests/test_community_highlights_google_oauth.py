@@ -54,6 +54,7 @@ async def test_google_flow_uses_loopback_pkce_and_youtube_readonly_scope():
 
 @run_async
 async def test_google_loopback_callback_rejects_invalid_requests_then_completes_valid_pkce_flow(monkeypatch):
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "public-desktop-client-credential")
     store = FakeCredentialStore()
     requests = mock_google_token_exchange(monkeypatch, {
         "access_token": "test-access-token",
@@ -111,10 +112,13 @@ async def test_google_loopback_callback_rejects_invalid_requests_then_completes_
     assert store.saved["refresh_token"] == "test-refresh-token"
     assert store.saved["client_id"] == "desktop-client-id"
     assert store.saved["scopes"] == [google_oauth.GOOGLE_SCOPE]
+    assert "client_secret" not in store.saved
+    assert flow["client_secret"] == ""
     assert len(requests) == 1
     assert requests[0].method == "POST"
     fields = parse_qs(requests[0].content.decode("ascii"))
     assert fields["client_id"] == ["desktop-client-id"]
+    assert fields["client_secret"] == ["public-desktop-client-credential"]
     assert fields["code"] == ["test-authorization-code"]
     assert fields["code_verifier"] == [expected_verifier]
     assert fields["redirect_uri"] == [flow["redirect_uri"]]
@@ -198,13 +202,15 @@ async def test_google_initial_authorization_does_not_reuse_previous_refresh_toke
     await google_oauth.cancel_google_flow(started["flow_id"])
 
 @run_async
-async def test_google_callback_logs_safe_provider_error_description(monkeypatch, caplog):
+async def test_google_callback_logs_safe_provider_error_description_without_public_client_credential(monkeypatch, caplog):
+    public_client_credential = "public-desktop-client-credential"
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", public_client_credential)
     store = FakeCredentialStore()
     mock_google_token_exchange(
         monkeypatch,
         {
             "error": "invalid_request",
-            "error_description": "Missing required parameter: code_verifier",
+            "error_description": f"Rejected client credential {public_client_credential}",
         },
         status_code=400,
     )
@@ -224,7 +230,8 @@ async def test_google_callback_logs_safe_provider_error_description(monkeypatch,
     assert status["status"] == "error"
     assert "phase=authorization_code_exchange" in caplog.text
     assert "provider_error=invalid_request" in caplog.text
-    assert "provider_error_description=Missing required parameter: code_verifier" in caplog.text
+    assert "provider_error_description=Rejected client credential REDACTED" in caplog.text
+    assert public_client_credential not in caplog.text
     assert "secret-authorization-code" not in caplog.text
     assert store.saved is None
 
