@@ -42,7 +42,11 @@ def google_client_secret() -> str:
     the app and is not a confidentiality boundary. PKCE remains mandatory.
     """
     value = os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
-    if len(value) > 512 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+    if (
+        len(value) > 512
+        or not value.isascii()
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
         return ""
     return value
 
