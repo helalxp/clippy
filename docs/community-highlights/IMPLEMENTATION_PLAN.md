@@ -9,7 +9,7 @@
 
 ## Code audit follow-up register
 
-This register records the implementation gaps found in the 2026-11-21 source audit. A checked item means the focused code repair is implemented, not that the corresponding live-provider acceptance test has passed.
+This register records findings from the dated source audits below. A checked item means the code change is implemented; it does not imply that automated tests, live-provider acceptance, or packaged-Windows behavior have passed.
 
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
@@ -68,7 +68,7 @@ This review compares the current `main` source at the base commit above with the
 1. **Two clocks are mixed in trigger evaluation.** `TriggerEngine.add()` uses provider timestamps for message-window membership and cooldowns, while `TriggerMatch.triggered_at` uses local receipt time and the capture timeline is estimated from local file modification times. Provider clock skew, delayed delivery, or out-of-order chat messages can therefore change trigger decisions while capture uses a different clock. Use local receipt timestamps consistently for window/cooldown evaluation; retain provider timestamps as evidence/metadata. Add skewed and out-of-order event tests.
 2. **Automatic trigger failures can disappear silently.** `TriggerCoordinator.on_message()` catches `ValueError` and `RollingCaptureError` from candidate creation and continues without a log or UI-visible event. Queue-full, insufficient-buffer, and capture-state conflicts can therefore drop a trigger with no actionable feedback. Surface a bounded diagnostic/event to the monitor and test each rejected-trigger reason.
 3. **Segment pinning can race with rolling-buffer pruning.** `RollingCapture._prune_segments()` snapshots the protected set under its lock but unlinks segments after releasing the lock. A trigger can pin a segment after that snapshot and still lose the file to the in-progress prune pass. Serialize the final protected check and unlink with `protect_segments()`; add a deterministic concurrency regression test.
-4. **Capture settings and trigger windows are not validated as one contract.** Capture start validates basic segment/retention limits, while `CaptureSessionManager.trigger()` later rejects windows when retention is less than pre + post + one segment. The plan's contract describes retention around the maximum pre-trigger window plus a safety margin, and pinned pre-trigger segments should be accounted for separately. Define one explicit buffer-sizing formula, validate/warn when settings are saved or a capture starts, and make automatic-trigger rejection visible.
+4. **Capture settings and trigger windows are not validated as one contract.** Capture start validates basic segment/retention limits, while `CaptureSessionManager.trigger()` later rejects windows when retention is less than pre + post + one segment. Pre-trigger segments are pinned immediately, but post-trigger segments are not pinned incrementally while `_finish_candidate()` waits for the post window, so those early post segments can age out before extraction. Define one explicit retention/pinning strategy: either pin completed post segments as they arrive or require enough retention for the unpinned post window. Validate/warn when settings are saved or a capture starts, and make automatic-trigger rejection visible.
 
 **P1 — provider and capture resilience**
 
@@ -90,7 +90,7 @@ This review compares the current `main` source at the base commit above with the
 - M2 Streamlink/FFmpeg and M3 trigger/candidate code exists, but live Windows continuity, clock drift, and restart behavior remain unverified.
 - M4 currently means candidate status/download/approve/reject only. Its exit criteria are not met because preview, trim, analysis, and renderer handoff are absent.
 - M5 rolling-segment age/size limits and session concurrency limits exist; this does not constitute complete candidate retention, disk-pressure policy, recovery, or unattended automation.
-- The original branch and progress log were last updated before PRs #32–#37 and stable `v0.3.2`. This plan now records the current branch lineage; future progress entries must distinguish merged code, automated test results, and manual Windows/provider acceptance.
+- The original progress log predates the Google browser-handoff and provider-action-gating merges (PRs #33 and #34) and the stable `v0.3.2` promotion (PR #37). The OAuth hardening from PR #32 is represented in the batch-3 entry, but its final merged validation outcome was not recorded there. The current baseline and later validation outcomes are recorded in the 2026-11-24 progress entry; future entries must continue to distinguish merged code, automated test results, and manual Windows/provider acceptance.
 
 
 ## Goal
