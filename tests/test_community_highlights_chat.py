@@ -280,7 +280,7 @@ def test_start_replaces_error_session_and_reclaims_its_slot():
             )
             manager._sessions[session.session_id] = session
 
-        started = await manager.start("https://www.twitch.tv/new-channel")
+        started = await manager.start("https://www.twitch.tv/newchannel")
         await manager._sessions[started["session_id"]].task
 
         assert started["status"] == "connecting"
@@ -299,6 +299,9 @@ def test_youtube_backlog_is_visible_but_does_not_trigger_old_chat(monkeypatch):
         seen_by_trigger = []
 
         class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
             async def __aenter__(self):
                 return self
 
@@ -372,6 +375,9 @@ def test_youtube_rate_limit_retries_the_same_chat_without_resolving_video_again(
         chat_calls = []
 
         class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
             async def __aenter__(self):
                 return self
 

@@ -69,7 +69,7 @@ def test_validates_window_coverage_and_gaps(tmp_path):
 def test_assembles_selected_segments_without_reencoding(tmp_path):
     first = make_record(tmp_path / "a.ts", 0, 4, 1000)
     second = make_record(tmp_path / "b.ts", 4, 8, 1004)
-    output = tmp_path / "highlights" / "candidate.ts"
+    output = tmp_path / "highlights" / "candidate.mp4"
     calls = []
 
     def runner(args, **kwargs):
@@ -86,12 +86,12 @@ def test_assembles_selected_segments_without_reencoding(tmp_path):
     assert kwargs["timeout"] == 120
 
 
-def test_assembly_rejects_mixed_capture_directories_and_non_ts_output(tmp_path):
+def test_assembly_rejects_mixed_capture_directories_and_non_mp4_output(tmp_path):
     first = make_record(tmp_path / "a.ts", 0, 4, 1000)
     other_dir = tmp_path / "other"
     other_dir.mkdir()
     second = make_record(other_dir / "b.ts", 4, 8, 1004)
     with pytest.raises(RollingCaptureError, match="one capture directory"):
-        assemble_segments([first, second], tmp_path / "candidate.ts")
-    with pytest.raises(RollingCaptureError, match=".ts output"):
-        assemble_segments([first], tmp_path / "candidate.mp4")
+        assemble_segments([first, second], tmp_path / "candidate.mp4")
+    with pytest.raises(RollingCaptureError, match=r"requires an \.mp4"):
+        assemble_segments([first], tmp_path / "candidate.ts")

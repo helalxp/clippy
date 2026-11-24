@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import {
@@ -42,7 +42,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
     previewObjectUrl.current = null;
   }, []);
 
-  const closeCandidatePreview = () => {
+  const closeCandidatePreview = useCallback(() => {
     previewAbort.current?.abort();
     previewAbort.current = null;
     if (previewObjectUrl.current) {
@@ -52,7 +52,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
     setPreviewUrl('');
     setPreviewCandidateId('');
     setPreviewBusy('');
-  };
+  }, []);
 
   const openCandidatePreview = async (candidateId) => {
     if (previewAbort.current) return;
@@ -89,6 +89,12 @@ export default function CommunityHighlightsMonitor({ connections }) {
       }
     }
   };
+
+  useEffect(() => {
+    if (previewCandidateId && !candidates.some((candidate) => candidate.candidate_id === previewCandidateId)) {
+      closeCandidatePreview();
+    }
+  }, [candidates, previewCandidateId, closeCandidatePreview]);
 
   const streamReference = parseCommunityHighlightsStreamUrl(streamUrl);
   const providerConnection = streamReference ? connections?.[streamReference.provider] : null;
@@ -303,6 +309,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ approved }),
       });
+      if (previewCandidateId === candidateId) closeCandidatePreview();
       await refreshSessions();
     } catch (requestError) {
       setError(requestError?.detail || 'Could not save the candidate decision.');

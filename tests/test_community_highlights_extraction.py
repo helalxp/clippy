@@ -41,7 +41,7 @@ def test_assembles_single_browser_preview_mp4_without_reencoding(tmp_path):
     assert mappings == ["0:v?", "0:a?"]
     assert args[args.index("-c") + 1] == "copy"
     assert args[args.index("-movflags") + 1] == "+faststart"
-    assert args[args.index("-f") + 1] == "mp4"
+    assert args[-4:-2] == ["-f", "mp4"]
     assert "segment-00000000.ts" in invocation["manifest"]
     assert "segment-00000001.ts" in invocation["manifest"]
     assert invocation["kwargs"]["shell"] is False

@@ -1,6 +1,7 @@
 
 import pytest
 import threading
+from pathlib import Path
 
 from community_highlights.rolling_capture import (
     RollingCapture,
