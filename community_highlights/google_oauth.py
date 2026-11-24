@@ -192,9 +192,7 @@ async def start_google_flow(
             now = time.monotonic()
             for key, current in list(_GOOGLE_FLOWS.items()):
                 if current["expires_at"] <= now or current["status"] != "pending":
-                    old_server = current.get("server")
-                    if old_server:
-                        old_server.close()
+                    _close_listener(current)
                     _GOOGLE_FLOWS.pop(key, None)
             if len(_GOOGLE_FLOWS) >= 4:
                 server.close()
@@ -421,6 +419,7 @@ async def cancel_all_google_flows() -> int:
                 server.close()
                 servers.append(server)
             flow["verifier"] = ""
+            flow["client_secret"] = ""
         for server in servers:
             await server.wait_closed()
         return len(flows)
@@ -436,4 +435,5 @@ async def cancel_google_flow(flow_id: str) -> bool:
             server.close()
             await server.wait_closed()
         flow["verifier"] = ""
+        flow["client_secret"] = ""
         return True
