@@ -143,6 +143,7 @@ async def test_google_callback_uses_token_response_scope_and_saves_credentials(m
         store_factory=lambda: store,
     )
     flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+    expected_verifier = flow["verifier"]
 
     await google_oauth._complete_google_callback(
         started["flow_id"],
@@ -163,7 +164,7 @@ async def test_google_callback_uses_token_response_scope_and_saves_credentials(m
     fields = parse_qs(requests[0].content.decode("ascii"))
     assert fields["client_id"] == ["desktop-client-id"]
     assert fields["code"] == ["test-authorization-code"]
-    assert fields["code_verifier"] == [flow["verifier"]]
+    assert fields["code_verifier"] == [expected_verifier]
     assert fields["redirect_uri"] == [flow["redirect_uri"]]
 
     await google_oauth.cancel_google_flow(started["flow_id"])
