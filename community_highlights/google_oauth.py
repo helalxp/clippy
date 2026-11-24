@@ -282,27 +282,36 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
             if GOOGLE_SCOPE not in scopes:
                 raise GoogleOAuthError("Google did not grant the required read-only YouTube permission.")
 
-            phase = "credential_store_read"
-            store = flow["store_factory"]()
-            previous = store.load("youtube") or {}
+            phase = "token_expiry_validation"
+            expires_in = int(tokens.get("expires_in", 3600))
+            if expires_in <= 0:
+                raise GoogleOAuthError("Google returned an invalid access-token lifetime.")
 
-            phase = "refresh_token_validation"
-            refresh_token = tokens.get("refresh_token") or previous.get("refresh_token")
-            if not isinstance(refresh_token, str) or not refresh_token:
-                raise GoogleOAuthError("Google did not provide offline access. Please sign in again.")
-
-            phase = "credential_store_save"
-            store.save("youtube", {
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "expires_at": int(time.time()) + int(tokens.get("expires_in", 3600)),
-                "scopes": sorted(scopes),
-                "client_id": flow["client_id"],
-            })
             async with _GOOGLE_LOCK:
                 current = _GOOGLE_FLOWS.get(flow_id)
                 if current is not flow or current.get("status") != "pending":
                     return
+
+                # Keep cancellation atomic with the synchronous Credential
+                # Manager read/write. Once this lock is acquired, cancellation
+                # cannot remove the flow between the final check and save.
+                phase = "credential_store_read"
+                store = flow["store_factory"]()
+                previous = store.load("youtube") or {}
+
+                phase = "refresh_token_validation"
+                refresh_token = tokens.get("refresh_token") or previous.get("refresh_token")
+                if not isinstance(refresh_token, str) or not refresh_token:
+                    raise GoogleOAuthError("Google did not provide offline access. Please sign in again.")
+
+                phase = "credential_store_save"
+                store.save("youtube", {
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_at": int(time.time()) + expires_in,
+                    "scopes": sorted(scopes),
+                    "client_id": flow["client_id"],
+                })
                 flow.update(status="connected", message="YouTube is connected.")
     except Exception as error:
         # Log only the failing phase, exception class, HTTP status, and a
