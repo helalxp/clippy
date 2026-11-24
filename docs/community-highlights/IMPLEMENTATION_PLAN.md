@@ -1,10 +1,11 @@
 # Community Highlights Implementation Plan
 
 **Status:** In progress  
-**Feature branch:** `feature/community-highlights`  
-**Base:** `main` at `61edcd5027e3f4e05c8019896e25af0e1cfa19f3`  
+**Active working branch:** `fix/community-highlights-google-oauth`  
+**Base:** `main` at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e` (stable release `v0.3.2`)  
+**Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
-**Last updated:** 2026-11-21
+**Last updated:** 2026-11-24
 
 ## Code audit follow-up register
 
@@ -36,7 +37,60 @@ This register records the implementation gaps found in the 2026-11-21 source aud
 - [ ] Clarify development-platform scope: the secure credential adapter intentionally requires Windows Credential Manager and fails closed on non-Windows hosts. Docker/Linux can run the backend but cannot complete provider OAuth without a deliberate non-production credential-store strategy.
 - [x] Correct the authorization-window edge case: create a blank tab synchronously from the click, set its `opener` to `null` before provider navigation, and use the same helper for the reopen action. Add executable Node tests for popup blocking, opener isolation, navigation ordering, and closed windows.
 - [x] Serialize OAuth device/code exchanges, refresh-token writes, and provider disconnect through one provider-specific credential lifecycle lock. Disconnect cancels pending flows while holding that lock, stops chat sessions, revokes the latest saved grant when possible, and then removes local credentials. Add race tests proving disconnect waits for a refresh or OAuth exchange to finish before deleting its resulting credential bundle.
+- [x] Remove the redundant Google `tokeninfo` request from the initial authorization-code callback; verify the granted YouTube scope from the token endpoint response while retaining PKCE, state, exact Client ID use, and refresh-time token validation.
+- [x] Add phase-specific, credential-safe Google OAuth callback diagnostics and mocked success/failure tests for authorization-code exchange, scope validation, and secure credential persistence.
+- [ ] Run the focused Google OAuth tests and a real packaged-Windows sign-in attempt on the active fix branch. Capture the safe backend phase diagnostic if the live flow still fails; do not log tokens, codes, callback query strings, or PKCE material.
 
+
+
+
+### Branch status — 2026-11-24
+
+- `main` is the authoritative base at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e`, which is the commit underlying stable release `v0.3.2`.
+- The original `feature/community-highlights` branch is a historical implementation snapshot. Its feature work was merged through PR #28; subsequent OAuth, packaging, browser-handoff, and provider-UI fixes were merged separately into `main`. Keep the branch for provenance, but do not continue development on it or merge it again.
+- New work starts from `main` on `fix/community-highlights-google-oauth`. This branch is the active home for the current post-consent Google OAuth repair. The historical branch is not deleted or force-moved.
+
+## 2026-11-24 implementation review
+
+This review compares the current `main` source at the base commit above with the milestones and claims in this plan. A checked implementation item means the code exists; it does not mean the provider or media path has passed live acceptance.
+
+### Confirmed implementation already present
+
+- Provider authentication is separated from Clippy account login. Twitch uses a public Device Code flow; Google uses a desktop loopback flow with state and PKCE. Provider tokens are kept in Windows Credential Manager, and the packaged desktop supervisor supplies public OAuth Client IDs to the backend.
+- Chat adapters, bounded in-memory session management, phrase/volume triggers, Streamlink resolution, FFmpeg rolling segments, segment pinning, extraction, candidate review decisions, candidate download, and explicit candidate deletion are implemented.
+- The dashboard exposes provider connections, monitoring, rolling capture, trigger settings, and candidate status/review.
+- Focused mocked tests exist across the provider, trigger, timeline, capture, credential-store, and API modules. The current source still lacks proof of live-provider and real-media behavior.
+
+### Open gaps, ordered by risk
+
+**P0 — correctness before relying on automatic highlights**
+
+1. **Two clocks are mixed in trigger evaluation.** `TriggerEngine.add()` uses provider timestamps for message-window membership and cooldowns, while `TriggerMatch.triggered_at` uses local receipt time and the capture timeline is estimated from local file modification times. Provider clock skew, delayed delivery, or out-of-order chat messages can therefore change trigger decisions while capture uses a different clock. Use local receipt timestamps consistently for window/cooldown evaluation; retain provider timestamps as evidence/metadata. Add skewed and out-of-order event tests.
+2. **Automatic trigger failures can disappear silently.** `TriggerCoordinator.on_message()` catches `ValueError` and `RollingCaptureError` from candidate creation and continues without a log or UI-visible event. Queue-full, insufficient-buffer, and capture-state conflicts can therefore drop a trigger with no actionable feedback. Surface a bounded diagnostic/event to the monitor and test each rejected-trigger reason.
+3. **Segment pinning can race with rolling-buffer pruning.** `RollingCapture._prune_segments()` snapshots the protected set under its lock but unlinks segments after releasing the lock. A trigger can pin a segment after that snapshot and still lose the file to the in-progress prune pass. Serialize the final protected check and unlink with `protect_segments()`; add a deterministic concurrency regression test.
+4. **Capture settings and trigger windows are not validated as one contract.** Capture start validates basic segment/retention limits, while `CaptureSessionManager.trigger()` later rejects windows when retention is less than pre + post + one segment. The plan's contract describes retention around the maximum pre-trigger window plus a safety margin, and pinned pre-trigger segments should be accounted for separately. Define one explicit buffer-sizing formula, validate/warn when settings are saved or a capture starts, and make automatic-trigger rejection visible.
+
+**P1 — provider and capture resilience**
+
+5. **YouTube API failures are classified too broadly.** The chat loop treats every HTTP 400/403/404 as terminal, although YouTube can use 403 for quota and rate-limit reasons that need provider-reason-aware handling and bounded backoff. Parse safe API error reasons, distinguish ended/disabled chat from quota/rate limits, and test retry-after/polling behavior. Do not blindly retry permanent permission errors.
+6. **Capture has no bounded reconnect path.** Chat sessions reconnect with bounded backoff, but Streamlink/FFmpeg capture currently ends when its reader returns EOF or errors. Implement capture reconnect only after defining segment continuity, timestamp discontinuity, retry budget, and a clear terminal state; never silently concatenate across an unverified gap.
+7. **Timeline alignment remains an estimate.** Segment wall intervals are derived from file modification times minus media duration. This is not frame-accurate, and the 2-second coverage tolerance is not evidence of acceptable drift. Measure drift on authorized Twitch and YouTube streams on Windows before claiming dependable pre/post boundaries.
+8. **Quota and resource budgets need end-to-end limits.** Active chats/captures and rolling bytes are bounded, but YouTube API quota consumption, total candidate-media bytes, candidate age, and disk-pressure behavior do not yet have explicit product-level budgets.
+
+**P2 — complete the actual highlight workflow**
+
+9. **Approval is not renderer handoff.** Approve currently records an in-memory review decision; it does not create a normal Clippy job. Candidate footage is downloadable as MPEG-TS, but there is no inline playable preview, frame-accurate trim, MP4 export, or renderer handoff.
+10. **Candidate state and trigger settings are volatile.** Sessions, trigger rules, candidates, and review decisions live in process memory. Restart loses the index/decisions and can leave media directories orphaned. Add durable metadata and startup reconciliation before unattended use; mark interrupted captures explicitly.
+11. **Hybrid automation is still only a product decision.** Review-only, automatic, and hybrid modes are not implemented. Add explicit approval policy and safeguards only after persistence and renderer handoff exist.
+12. **Operational diagnostics and user guidance are incomplete.** The new Google OAuth callback has phase-safe diagnostics, but provider chat, trigger rejection, capture synchronization, FFmpeg assembly, restart recovery, and renderer handoff still need structured, user-actionable diagnostics and troubleshooting documentation.
+
+### Plan consistency corrections
+
+- M1 chat reconnect/backoff is implemented in code, but provider lifecycle tests and live chat acceptance remain pending. Keep implementation and verification status separate.
+- M2 Streamlink/FFmpeg and M3 trigger/candidate code exists, but live Windows continuity, clock drift, and restart behavior remain unverified.
+- M4 currently means candidate status/download/approve/reject only. Its exit criteria are not met because preview, trim, analysis, and renderer handoff are absent.
+- M5 rolling-segment age/size limits and session concurrency limits exist; this does not constitute complete candidate retention, disk-pressure policy, recovery, or unattended automation.
+- The original branch and progress log were last updated before PRs #32–#37 and stable `v0.3.2`. This plan now records the current branch lineage; future progress entries must distinguish merged code, automated test results, and manual Windows/provider acceptance.
 
 
 ## Goal
@@ -546,3 +600,22 @@ The user chose to keep one shared OAuth configuration for development, friend te
 - Final brand ownership, production registration, consent-screen verification, and any eventual production-specific identity changes remain a separate cleanup milestone.
 
 **Validation after this configuration change:** pending a fresh backend CI run, frontend CI run, and Windows desktop validation on the new commit. The preceding Windows validation passed its build and contract checks; CPU/CUDA runtime rebuild and first-run runtime smoke were skipped because no Python runtime inputs changed. The preceding frontend build passed; the backend CI job was still running at the time of this update. No live Google authorization, live YouTube chat, Twitch authorization, or stream capture has been completed by CI.
+
+### Branch refresh and current baseline — 2026-11-24
+
+- Created `fix/community-highlights-google-oauth` from current `main` at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e` (the commit underlying stable `v0.3.2`).
+- Reclassified `feature/community-highlights` as historical/superseded. It remains available for provenance; it is not the active development branch and must not be used as a merge base.
+- PR #33 (Google browser handoff) and PR #34 (provider action gating) are merged into main. PR #37 promoted `v0.3.2` to stable.
+- Latest mainline evidence: the backend test job and frontend build passed; Windows desktop validation passed. The release workflow built CPU and CUDA runtime packages. The separate Windows PR-validation job skipped runtime rebuilds because no Python runtime inputs changed.
+- None of those results constitutes live Google OAuth, live chat, real Streamlink/FFmpeg capture, timestamp-drift, or user-machine media playback acceptance.
+
+### Google post-consent callback repair — 2026-11-24
+
+- The user added their Google account to the OAuth Test users list. The original Google 403 tester restriction no longer occurs; the remaining failure is after the consent screen, during callback completion.
+- Updated `community_highlights/google_oauth.py` to validate the granted YouTube scope from the authorization-code token response instead of making a second `tokeninfo` request during initial sign-in. The code exchange remains bound to the configured public Client ID, the original redirect URI, the one-time PKCE verifier, and validated OAuth state. Refresh-time token validation remains unchanged.
+- Added safe callback diagnostics identifying the failing phase and exception category, plus HTTP status/provider error identifier when available. Request URLs, response bodies, authorization codes, access/refresh tokens, and PKCE material are not logged. The generic user-facing error remains unchanged.
+- Kept the final flow-state check and synchronous Credential Manager read/write under the Google flow lock so user cancellation cannot race between the final check and credential persistence.
+- Added mocked tests for successful code exchange and secure save, no redundant tokeninfo request, missing YouTube scope, and a credential-save failure whose logs must not contain test secrets.
+- **Validation status:** tests are authored but have not been executed in this GitHub-only editing session. No actual Google consent flow or Windows Credential Manager write has been exercised on this branch. The next acceptance step is to run the focused tests, then reproduce the packaged-Windows sign-in and inspect only the new safe phase diagnostic if it still fails.
+
+
