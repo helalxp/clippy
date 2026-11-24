@@ -324,6 +324,7 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
         # authorization codes, access/refresh tokens, or PKCE material.
         http_status = None
         provider_code = None
+        provider_description = None
         response = getattr(error, "response", None)
         if isinstance(response, httpx.Response):
             http_status = response.status_code
@@ -341,13 +342,29 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 ):
                     provider_code = candidate
 
+                # Google documents error_description as explanatory text.
+                # Log only short, single-line ASCII diagnostics using a tight
+                # character allowlist; never log the raw response body.
+                candidate_description = payload.get("error_description")
+                if (
+                    isinstance(candidate_description, str)
+                    and 0 < len(candidate_description) <= 180
+                    and candidate_description.isascii()
+                    and all(
+                        char.isalnum() or char in " .,;:_()/-"
+                        for char in candidate_description
+                    )
+                ):
+                    provider_description = " ".join(candidate_description.split())
+
         safe_reason = str(error) if isinstance(error, (GoogleOAuthError, CredentialStoreError)) else type(error).__name__
         _LOG.warning(
-            "Google OAuth callback failed (phase=%s, reason=%s, http_status=%s, provider_error=%s)",
+            "Google OAuth callback failed (phase=%s, reason=%s, http_status=%s, provider_error=%s, provider_error_description=%s)",
             phase,
             safe_reason,
             http_status if http_status is not None else "-",
             provider_code or "-",
+            provider_description or "-",
         )
         flow.update(
             status="error",
