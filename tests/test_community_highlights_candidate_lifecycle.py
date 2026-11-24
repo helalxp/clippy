@@ -157,10 +157,9 @@ def test_candidate_decision_requires_ready_candidate(tmp_path, monkeypatch):
 
 
 def test_post_trigger_segments_are_pinned_as_soon_as_they_arrive(tmp_path, monkeypatch):
-    from datetime import timedelta
     import os
 
-    trigger_time = time.time()
+    trigger_time = time.time() - 10
     pre_path = tmp_path / "segment-pre.ts"
     post_path = tmp_path / "segment-post.ts"
     pre_path.write_bytes(b"pre")

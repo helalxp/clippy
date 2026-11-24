@@ -345,7 +345,7 @@ def test_youtube_backlog_is_visible_but_does_not_trigger_old_chat(monkeypatch):
         monkeypatch.setattr(chat_module.asyncio, "sleep", no_wait)
 
         manager = ChatSessionManager(
-            token_provider=lambda *_args, **_kwargs: asyncio.sleep(0, result="token"),
+            token_provider=lambda *_args, **_kwargs: original_sleep(0, result="token"),
             message_callback=seen_by_trigger.append,
         )
         # The monitor was started shortly before these polls began. The old
