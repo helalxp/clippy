@@ -127,7 +127,7 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - Persist provider access and refresh tokens in Windows Credential Manager. Never put tokens in browser storage, the normal Clippy settings JSON, callback URLs after exchange, logs, or frontend state. Connection-status APIs return only safe metadata, never credentials.
 - Existing `cloud/oauth.py` remains exclusively for Clippy account login. Do not merge Community Highlights provider grants into that flow.
 - The backend is a separately supervised Python process, while Tauri is the Windows desktop shell. Before implementation, establish a single secure credential-store boundary usable by the backend and packaged desktop runtime; do not assume a Rust-only credential store is automatically accessible to Python. Prefer a Windows Credential Manager-backed adapter with mocked tests and explicit failure behavior when the secure store is unavailable.
-- OAuth client IDs are public application identifiers, not secrets, but must be registered by Clippy's app owner. Do not embed a client secret in the distributed desktop app. Verify required Twitch scopes for the chosen chat transport before implementing the connection.
+- OAuth client IDs are public application identifiers, not secrets, but must be registered by Clippy's app owner. Do not embed a confidential Web-client secret in the distributed desktop app. A generated Google Desktop-app client_secret, if used, is public metadata and must not be treated as client authentication. Verify required Twitch scopes for the chosen chat transport before implementing the connection.
 
 ## Proposed architecture
 
