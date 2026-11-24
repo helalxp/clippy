@@ -153,11 +153,16 @@ function Get-PublicOAuthClientSecret([string]$Value, [string]$Name) {
     }
     return $value
 }
+$googleOauthClientId = Get-PublicOAuthClientId -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_ID"
+$googleOauthClientSecret = Get-PublicOAuthClientSecret -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET"
+if ([bool]$googleOauthClientId -ne [bool]$googleOauthClientSecret) {
+    throw "CLIPPY_GOOGLE_OAUTH_CLIENT_ID and CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET must both be configured or both be empty."
+}
 $communityHighlightsOAuth = [ordered]@{
     schemaVersion = 1
     twitchClientId = (Get-PublicOAuthClientId -Value $env:CLIPPY_TWITCH_CLIENT_ID -Name "CLIPPY_TWITCH_CLIENT_ID")
-    googleOauthClientId = (Get-PublicOAuthClientId -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_ID")
-    googleOauthClientSecret = (Get-PublicOAuthClientSecret -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET")
+    googleOauthClientId = $googleOauthClientId
+    googleOauthClientSecret = $googleOauthClientSecret
 }
 [IO.File]::WriteAllText(
     (Join-Path $stageRoot "community-highlights-oauth.json"),
