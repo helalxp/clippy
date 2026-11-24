@@ -3,6 +3,9 @@ import functools
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import httpx
+
+from community_highlights.credentials import CredentialStoreError
 
 
 
@@ -89,3 +92,141 @@ def test_google_tokeninfo_requires_our_authorized_party_but_allows_project_audie
     assert not matches({"aud": "desktop-client-id", "azp": "another-client"}, "desktop-client-id")
     assert not matches({"aud": "", "azp": "desktop-client-id"}, "desktop-client-id")
     assert not matches(None, "desktop-client-id")
+
+class FakeCredentialStore:
+    def __init__(self, *, fail_save=False):
+        self.bundle = None
+        self.saved = None
+        self.fail_save = fail_save
+
+    def load(self, provider):
+        assert provider == "youtube"
+        return self.bundle
+
+    def save(self, provider, bundle):
+        assert provider == "youtube"
+        if self.fail_save:
+            raise CredentialStoreError("Windows Credential Manager could not save the provider credentials.")
+        self.saved = dict(bundle)
+        self.bundle = dict(bundle)
+
+
+def mock_google_token_exchange(monkeypatch, payload):
+    requests = []
+    transport = httpx.MockTransport(
+        lambda request: (
+            requests.append(request)
+            or httpx.Response(200, json=payload, request=request)
+        )
+    )
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        google_oauth.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_async_client(*args, transport=transport, **kwargs),
+    )
+    return requests
+
+
+@run_async
+async def test_google_callback_uses_token_response_scope_and_saves_credentials(monkeypatch):
+    store = FakeCredentialStore()
+    requests = mock_google_token_exchange(monkeypatch, {
+        "access_token": "test-access-token",
+        "refresh_token": "test-refresh-token",
+        "expires_in": 3600,
+        "scope": google_oauth.GOOGLE_SCOPE,
+        "token_type": "Bearer",
+    })
+    started = await google_oauth.start_google_flow(
+        client_id="desktop-client-id",
+        store_factory=lambda: store,
+    )
+    flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+
+    await google_oauth._complete_google_callback(
+        started["flow_id"],
+        {"state": [flow["state"]], "code": ["test-authorization-code"]},
+    )
+
+    status = await google_oauth.google_flow_status(started["flow_id"])
+    assert status["status"] == "connected"
+    assert store.saved is not None
+    assert store.saved["access_token"] == "test-access-token"
+    assert store.saved["refresh_token"] == "test-refresh-token"
+    assert store.saved["client_id"] == "desktop-client-id"
+    assert store.saved["scopes"] == [google_oauth.GOOGLE_SCOPE]
+    # Initial authorization is completed by the PKCE-bound token exchange;
+    # it no longer makes a second tokeninfo request.
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    fields = parse_qs(requests[0].content.decode("ascii"))
+    assert fields["client_id"] == ["desktop-client-id"]
+    assert fields["code"] == ["test-authorization-code"]
+    assert fields["code_verifier"] == [flow["verifier"]]
+    assert fields["redirect_uri"] == [flow["redirect_uri"]]
+
+    await google_oauth.cancel_google_flow(started["flow_id"])
+
+
+@run_async
+async def test_google_callback_reports_safe_credential_save_diagnostic(monkeypatch, caplog):
+    store = FakeCredentialStore(fail_save=True)
+    mock_google_token_exchange(monkeypatch, {
+        "access_token": "secret-access-value",
+        "refresh_token": "secret-refresh-value",
+        "expires_in": 3600,
+        "scope": google_oauth.GOOGLE_SCOPE,
+    })
+    started = await google_oauth.start_google_flow(
+        client_id="desktop-client-id",
+        store_factory=lambda: store,
+    )
+    flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+
+    with caplog.at_level("WARNING", logger=google_oauth.__name__):
+        await google_oauth._complete_google_callback(
+            started["flow_id"],
+            {"state": [flow["state"]], "code": ["secret-authorization-code"]},
+        )
+
+    status = await google_oauth.google_flow_status(started["flow_id"])
+    assert status["status"] == "error"
+    assert "phase=credential_store_save" in caplog.text
+    assert "Windows Credential Manager could not save" in caplog.text
+    assert "secret-access-value" not in caplog.text
+    assert "secret-refresh-value" not in caplog.text
+    assert "secret-authorization-code" not in caplog.text
+    assert store.saved is None
+
+    await google_oauth.cancel_google_flow(started["flow_id"])
+
+
+@run_async
+async def test_google_callback_rejects_token_response_without_youtube_scope(monkeypatch, caplog):
+    store = FakeCredentialStore()
+    mock_google_token_exchange(monkeypatch, {
+        "access_token": "test-access-token",
+        "refresh_token": "test-refresh-token",
+        "expires_in": 3600,
+        "scope": "openid",
+    })
+    started = await google_oauth.start_google_flow(
+        client_id="desktop-client-id",
+        store_factory=lambda: store,
+    )
+    flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+
+    with caplog.at_level("WARNING", logger=google_oauth.__name__):
+        await google_oauth._complete_google_callback(
+            started["flow_id"],
+            {"state": [flow["state"]], "code": ["test-authorization-code"]},
+        )
+
+    status = await google_oauth.google_flow_status(started["flow_id"])
+    assert status["status"] == "error"
+    assert "phase=scope_validation" in caplog.text
+    assert store.saved is None
+
+    await google_oauth.cancel_google_flow(started["flow_id"])
+
