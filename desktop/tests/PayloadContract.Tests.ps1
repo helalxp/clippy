@@ -109,7 +109,7 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
-    It "packages the Community Highlights public-client OAuth configuration" {
+    It "packages only public Community Highlights OAuth client IDs" {
         $entry = Get-PayloadZipEntry "community-highlights-oauth.json"
         $entry | Should -Not -BeNullOrEmpty
         $stream = $entry.Open()
@@ -123,8 +123,7 @@ Describe "Assembled Clippy application payload contract" {
         $config.schemaVersion | Should -Be 1
         $config.twitchClientId | Should -Be ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
         $config.googleOauthClientId | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
-        $config.googleOauthClientSecret | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET).Trim()
-        @($config.PSObject.Properties.Name) | Should -Be @("schemaVersion", "twitchClientId", "googleOauthClientId", "googleOauthClientSecret")
+        @($config.PSObject.Properties.Name) | Should -Be @("schemaVersion", "twitchClientId", "googleOauthClientId")
     }
 
     It "uses the persisted data directory for all user-data components" {
