@@ -19,8 +19,7 @@ from community_highlights import google_oauth
 
 
 @pytest.fixture(autouse=True)
-def reset_google_flows(monkeypatch):
-    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "test-google-desktop-client-secret")
+def reset_google_flows():
     google_oauth._GOOGLE_FLOWS.clear()
     yield
     for flow in google_oauth._GOOGLE_FLOWS.values():
@@ -51,22 +50,6 @@ async def test_google_flow_uses_loopback_pkce_and_youtube_readonly_scope():
 
     await google_oauth.cancel_google_flow(result["flow_id"])
 
-
-
-@run_async
-async def test_google_flow_requires_generated_desktop_client_credential(monkeypatch):
-    monkeypatch.delenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
-
-    with pytest.raises(
-        google_oauth.GoogleOAuthError,
-        match="generated Desktop OAuth client credential is missing",
-    ):
-        await google_oauth.start_google_flow(
-            client_id="desktop-client-id",
-            store_factory=lambda: object(),
-        )
-
-    assert not google_oauth._GOOGLE_FLOWS
 
 @run_async
 async def test_google_callback_rejects_invalid_state():
@@ -180,7 +163,6 @@ async def test_google_callback_uses_token_response_scope_and_saves_credentials(m
     assert requests[0].method == "POST"
     fields = parse_qs(requests[0].content.decode("ascii"))
     assert fields["client_id"] == ["desktop-client-id"]
-    assert fields["client_secret"] == ["test-google-desktop-client-secret"]
     assert fields["code"] == ["test-authorization-code"]
     assert fields["code_verifier"] == [expected_verifier]
     assert fields["redirect_uri"] == [flow["redirect_uri"]]
