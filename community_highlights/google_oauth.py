@@ -269,9 +269,14 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
             if not isinstance(access_token, str) or not access_token:
                 raise GoogleOAuthError("Google did not return an access token.")
             granted_scope = tokens.get("scope")
-            if not isinstance(granted_scope, str):
-                raise GoogleOAuthError("Google did not return the granted YouTube permissions.")
-            scopes = set(granted_scope.split())
+            if granted_scope is None:
+                # OAuth 2.0 permits omission when the granted scope is
+                # identical to the scope requested by the client.
+                scopes = {GOOGLE_SCOPE}
+            elif isinstance(granted_scope, str):
+                scopes = set(granted_scope.split())
+            else:
+                raise GoogleOAuthError("Google returned invalid granted YouTube permissions.")
 
             # The authorization-code exchange is bound to this public client
             # ID and the one-time PKCE verifier. Google returns the granted
