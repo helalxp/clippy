@@ -32,7 +32,6 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           set -euo pipefail
 
@@ -41,16 +40,6 @@ jobs:
           # disables Twitch sign-in in the packaged application.
           google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID"
           twitch="$CLIPPY_TWITCH_CLIENT_ID"
-          google_secret="$CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET"
-
-          if [ -z "$google_secret" ]; then
-            echo "::error::Missing Google Desktop OAuth client credential. Configure the CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET Actions Secret."
-            exit 1
-          fi
-          if [ "${#google_secret}" -gt 512 ] || [[ "$google_secret" =~ [[:cntrl:]] ]]; then
-            echo "::error::Google Desktop OAuth client credential has an invalid format."
-            exit 1
-          fi
 
           if [ -z "$google" ]; then
             echo "::error::Missing Google OAuth Client ID. Configure CLIPPY_GOOGLE_OAUTH_CLIENT_ID before tagging this release."
@@ -226,7 +215,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: ./desktop/build.ps1 -CreateUpdaterArtifacts
 
       # The payload contract tests must run after prepare-payload.ps1 has built
@@ -236,7 +224,6 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
