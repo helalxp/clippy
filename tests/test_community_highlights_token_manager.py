@@ -65,6 +65,7 @@ async def test_twitch_refresh_persists_rotated_refresh_token_before_returning_ac
 @run_async
 async def test_google_refresh_preserves_existing_refresh_token(monkeypatch):
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "test-google-desktop-client-secret")
     store = FakeStore({
         "client_id": "google-client",
         "refresh_token": "existing-refresh",
@@ -79,6 +80,7 @@ async def test_google_refresh_preserves_existing_refresh_token(monkeypatch):
     token = await ensure_access_token("youtube", store_factory=lambda: store, client=client)
 
     assert token == "new-access"
+    assert client.calls[0][2]["client_secret"] == "test-google-desktop-client-secret"
     assert store.saved["refresh_token"] == "existing-refresh"
     assert store.saved["access_token"] == "new-access"
 
@@ -89,6 +91,7 @@ async def test_google_refresh_rejects_missing_authorized_party(monkeypatch):
     from community_highlights.token_manager import ProviderTokenError
 
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "test-google-desktop-client-secret")
     store = FakeStore({
         "client_id": "google-client",
         "refresh_token": "existing-refresh",
@@ -108,6 +111,7 @@ async def test_google_refresh_rejects_missing_authorized_party(monkeypatch):
 @run_async
 async def test_google_refresh_accepts_distinct_project_audience_with_matching_authorized_party(monkeypatch):
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "test-google-desktop-client-secret")
     store = FakeStore({
         "client_id": "google-client",
         "refresh_token": "existing-refresh",
@@ -135,6 +139,7 @@ async def test_google_refresh_rejects_non_object_provider_responses(monkeypatch)
     from community_highlights.token_manager import ProviderTokenError
 
     monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", "test-google-desktop-client-secret")
     store = FakeStore({
         "client_id": "google-client",
         "refresh_token": "existing-refresh",
@@ -148,3 +153,26 @@ async def test_google_refresh_rejects_non_object_provider_responses(monkeypatch)
     with pytest.raises(ProviderTokenError):
         await ensure_access_token("youtube", store_factory=lambda: store, client=client)
     assert store.saved is None
+
+
+@run_async
+async def test_google_refresh_requires_desktop_client_credential(monkeypatch):
+    import pytest
+    from community_highlights.token_manager import ProviderTokenError
+
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    monkeypatch.delenv("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
+    store = FakeStore({
+        "client_id": "google-client",
+        "refresh_token": "existing-refresh",
+        "expires_at": 0,
+        "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
+    })
+    client = FakeClient([])
+
+    with pytest.raises(ProviderTokenError, match="Could not refresh"):
+        await ensure_access_token("youtube", store_factory=lambda: store, client=client)
+
+    assert client.calls == []
+    assert store.saved is None
+
