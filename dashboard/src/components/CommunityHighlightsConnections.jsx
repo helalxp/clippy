@@ -47,6 +47,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
   const [flowMessage, setFlowMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [busyProvider, setBusyProvider] = useState('');
+  const [cancellingAuthorization, setCancellingAuthorization] = useState(false);
   const pollTimer = useRef(null);
   const activeFlow = useRef(null);
 
@@ -199,6 +200,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     setNotice('');
     setBusy(true);
     setBusyProvider(provider);
+    setCancellingAuthorization(true);
     setFlowMessage('Cancelling sign-in…');
     try {
       const cancelled = flowId ? await cancelProviderFlow(provider, flowId) : true;
@@ -216,6 +218,7 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
     } finally {
       setBusy(false);
       setBusyProvider('');
+      setCancellingAuthorization(false);
     }
   };
 
@@ -290,9 +293,9 @@ export default function CommunityHighlightsConnections({ compact = false, onConn
                     className="w-full rounded-input border border-rule bg-paper3 px-4 py-2.5 text-sm text-ink2 hover:bg-paper3 flex items-center justify-center gap-2">
                     <ExternalLink size={15} /> Open {provider.name} authorization
                   </button>
-                  <button type="button" disabled={busy} onClick={cancelAuthorization}
+                  <button type="button" disabled={cancellingAuthorization} onClick={cancelAuthorization}
                     className="w-full rounded-input border border-rule px-4 py-2 text-xs text-muted hover:text-ink disabled:opacity-50">
-                    {busy ? 'Cancelling sign-in…' : 'Cancel sign-in'}
+                    {cancellingAuthorization ? 'Cancelling sign-in…' : 'Cancel sign-in'}
                   </button>
                 </div>
               ) : (
