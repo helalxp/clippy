@@ -254,8 +254,6 @@ struct PublicOAuthClientConfig {
     twitch_client_id: String,
     #[serde(default)]
     google_oauth_client_id: String,
-    #[serde(default)]
-    google_oauth_client_secret: String,
 }
 
 impl PublicOAuthClientConfig {
@@ -274,12 +272,6 @@ impl PublicOAuthClientConfig {
             {
                 return Err(format!("Packaged {name} OAuth client ID contains unsupported characters."));
             }
-        }
-        if self.google_oauth_client_secret.len() > 512
-            || !self.google_oauth_client_secret.is_ascii()
-            || self.google_oauth_client_secret.bytes().any(|byte| byte.is_ascii_control())
-        {
-            return Err("Packaged Google Desktop OAuth client credential contains unsupported characters.".into());
         }
         Ok(self)
     }
@@ -669,7 +661,6 @@ impl Supervisor {
             // empty values) so user-shell environment cannot change app config.
             .env("CLIPPY_TWITCH_CLIENT_ID", &oauth_clients.twitch_client_id)
             .env("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", &oauth_clients.google_oauth_client_id)
-            .env("CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET", &oauth_clients.google_oauth_client_secret)
             .stdout(Stdio::from(
                 backend_log.try_clone().map_err(|e| e.to_string())?,
             ))
@@ -1077,14 +1068,13 @@ mod oauth_config_tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("community-highlights-oauth.json"),
-            r#"{"schemaVersion":1,"twitchClientId":"twitch-client_123","googleOauthClientId":"google.apps.example","googleOauthClientSecret":"GOCSPX-test-desktop-value"}"#,
+            r#"{"schemaVersion":1,"twitchClientId":"twitch-client_123","googleOauthClientId":"google.apps.example"}"#,
         )
         .unwrap();
 
         let config = load_public_oauth_client_config(&root).unwrap();
         assert_eq!(config.twitch_client_id, "twitch-client_123");
         assert_eq!(config.google_oauth_client_id, "google.apps.example");
-        assert_eq!(config.google_oauth_client_secret, "GOCSPX-test-desktop-value");
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1125,27 +1115,13 @@ mod oauth_config_tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-
-    #[test]
-    fn rejects_invalid_google_desktop_oauth_client_credential() {
-        let root = temp_root();
-        fs::create_dir_all(&root).unwrap();
-        fs::write(
-            root.join("community-highlights-oauth.json"),
-            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"valid-id","googleOauthClientSecret":"bad\nvalue"}"#,
-        )
-        .unwrap();
-        assert!(load_public_oauth_client_config(&root).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
     fn rejects_unexpected_fields_such_as_client_secrets() {
         let root = temp_root();
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("community-highlights-oauth.json"),
-            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"valid-id","unexpectedSecret":"must-still-be-rejected"}"#,
+            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"valid-id","clientSecret":"never-package-this"}"#,
         )
         .unwrap();
         assert!(load_public_oauth_client_config(&root).is_err());
