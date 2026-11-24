@@ -267,7 +267,7 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 "grant_type": "authorization_code",
                 "redirect_uri": flow["redirect_uri"],
             }
-            if flow["client_secret"]:
+            if flow.get("client_secret"):
                 token_request["client_secret"] = flow["client_secret"]
 
             async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
