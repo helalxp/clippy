@@ -46,7 +46,7 @@ async def test_google_flow_uses_loopback_pkce_and_youtube_readonly_scope():
     assert query["code_challenge_method"] == ["S256"]
     assert query["code_challenge"] != [flow["verifier"]]
     assert query["state"] == [flow["state"]]
-    assert "prompt" not in query
+    assert query["prompt"] == ["consent"]
     assert "gmail" not in query["scope"][0].lower()
 
     await google_oauth.cancel_google_flow(result["flow_id"])

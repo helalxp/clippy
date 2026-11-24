@@ -202,6 +202,7 @@ async def start_google_flow(
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "access_type": "offline",
+        "prompt": "consent",
     })
     return {
         "flow_id": flow_id,
