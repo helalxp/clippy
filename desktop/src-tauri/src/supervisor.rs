@@ -1132,7 +1132,7 @@ mod oauth_config_tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("community-highlights-oauth.json"),
-            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"valid-id","googleOauthClientSecret":"bad\\nvalue"}"#,
+            r#"{"schemaVersion":1,"twitchClientId":"valid-id","googleOauthClientId":"valid-id","googleOauthClientSecret":"bad\nvalue"}"#,
         )
         .unwrap();
         assert!(load_public_oauth_client_config(&root).is_err());
