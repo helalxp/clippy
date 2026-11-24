@@ -111,12 +111,12 @@ class FakeCredentialStore:
         self.bundle = dict(bundle)
 
 
-def mock_google_token_exchange(monkeypatch, payload):
+def mock_google_token_exchange(monkeypatch, payload, *, status_code=200):
     requests = []
     transport = httpx.MockTransport(
         lambda request: (
             requests.append(request)
-            or httpx.Response(200, json=payload, request=request)
+            or httpx.Response(status_code, json=payload, request=request)
         )
     )
     real_async_client = httpx.AsyncClient
@@ -169,6 +169,40 @@ async def test_google_callback_uses_token_response_scope_and_saves_credentials(m
 
     await google_oauth.cancel_google_flow(started["flow_id"])
 
+
+
+@run_async
+async def test_google_callback_logs_safe_provider_error_description(monkeypatch, caplog):
+    store = FakeCredentialStore()
+    mock_google_token_exchange(
+        monkeypatch,
+        {
+            "error": "invalid_request",
+            "error_description": "Missing required parameter: code_verifier",
+        },
+        status_code=400,
+    )
+    started = await google_oauth.start_google_flow(
+        client_id="desktop-client-id",
+        store_factory=lambda: store,
+    )
+    flow = google_oauth._GOOGLE_FLOWS[started["flow_id"]]
+
+    with caplog.at_level("WARNING", logger=google_oauth.__name__):
+        await google_oauth._complete_google_callback(
+            started["flow_id"],
+            {"state": [flow["state"]], "code": ["secret-authorization-code"]},
+        )
+
+    status = await google_oauth.google_flow_status(started["flow_id"])
+    assert status["status"] == "error"
+    assert "phase=authorization_code_exchange" in caplog.text
+    assert "provider_error=invalid_request" in caplog.text
+    assert "provider_error_description=Missing required parameter: code_verifier" in caplog.text
+    assert "secret-authorization-code" not in caplog.text
+    assert store.saved is None
+
+    await google_oauth.cancel_google_flow(started["flow_id"])
 
 @run_async
 async def test_google_callback_reports_safe_credential_save_diagnostic(monkeypatch, caplog):
