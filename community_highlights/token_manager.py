@@ -8,7 +8,7 @@ import time
 import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
-from .google_oauth import google_client_secret, google_token_info_matches_client
+from .google_oauth import google_token_info_matches_client
 from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
 
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
@@ -139,14 +139,10 @@ async def _ensure_access_token_locked(
                 "validated_at": now,
             })
         else:
-            client_secret = google_client_secret()
-            if not client_secret:
-                raise ProviderTokenError("Google Desktop OAuth client configuration is incomplete.")
             response = await client.post(
                 GOOGLE_TOKEN_URL,
                 data={
                     "client_id": client_id,
-                    "client_secret": client_secret,
                     "grant_type": "refresh_token",
                     "refresh_token": bundle["refresh_token"],
                 },
