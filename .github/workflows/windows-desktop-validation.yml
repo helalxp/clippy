@@ -110,15 +110,9 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           $google = ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
           $twitch = ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
-          $googleSecret = [string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET
-
-          if ($googleSecret.Length -gt 512 -or $googleSecret -match '[\x00-\x1F\x7F]') {
-            throw "Google Desktop OAuth client credential has an invalid format."
-          }
 
           if ([string]::IsNullOrWhiteSpace($google)) {
             throw "Missing CLIPPY_GOOGLE_OAUTH_CLIENT_ID repository Actions Variable."
@@ -160,7 +154,6 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: ./desktop/prepare-payload.ps1
 
       # PayloadContract.Tests.ps1 opens the real ZIP produced above. Running the
@@ -170,7 +163,6 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
-          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI
