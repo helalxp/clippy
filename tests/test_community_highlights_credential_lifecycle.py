@@ -20,6 +20,23 @@ def run_async(test_function):
     return wrapper
 
 
+@pytest.fixture(autouse=True)
+def reset_provider_flows():
+    # Each test gets an isolated process-local registry. Completed flows are
+    # intentionally retained until consumed/next start, so clear them here.
+    google_oauth._GOOGLE_FLOWS.clear()
+    twitch_oauth._flows.clear()
+    yield
+    for flow in google_oauth._GOOGLE_FLOWS.values():
+        server = flow.get("server")
+        if server:
+            server.close()
+    google_oauth._GOOGLE_FLOWS.clear()
+    for flow in twitch_oauth._flows.values():
+        flow.pop("device_code", None)
+    twitch_oauth._flows.clear()
+
+
 class MemoryStore:
     def __init__(self, bundle=None):
         self.bundle = bundle
