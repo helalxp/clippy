@@ -141,6 +141,7 @@ class TriggerCoordinator:
                     "phrases": list(settings["phrases"]),
                 })
             self._apply_settings_locked(settings)
+        log_event("trigger.settings.updated", phrase_count=len(settings["phrases"]), pre_seconds=settings["pre_seconds"], post_seconds=settings["post_seconds"])
         return self.settings()
 
     def restore(self) -> None:
@@ -153,11 +154,13 @@ class TriggerCoordinator:
             return
         if not isinstance(settings, dict):
             _LOG.warning("Stored Community Highlights trigger settings were invalid; defaults remain active.")
+            log_event("trigger.settings.restore_failed", level=logging.WARNING, outcome="invalid_shape")
             return
         try:
             self.configure(**settings, persist=False)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as error:
             _LOG.warning("Stored Community Highlights trigger settings failed validation; defaults remain active.")
+            log_event("trigger.settings.restore_failed", level=logging.WARNING, error_type=type(error).__name__)
 
     def on_message(self, message: ChatMessage) -> None:
         with self._lock:
@@ -165,6 +168,7 @@ class TriggerCoordinator:
             pre_seconds = self._pre_seconds
             post_seconds = self._post_seconds
         for match in matches:
+            log_event("trigger.detected", provider=match.provider, reason=match.reason)
             try:
                 self._capture_manager.trigger(
                     provider=match.provider,
