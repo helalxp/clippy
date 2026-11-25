@@ -14,7 +14,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 _LOG = logging.getLogger("clippy.community_highlights")
-_ID_FIELDS = {"candidate_id", "session_id", "job_id", "flow_id"}
+_ID_FIELDS = {
+    "candidate_id",
+    "session_id",
+    "job_id",
+    "flow_id",
+    "stream_id",
+    "channel_id",
+    "user_id",
+    "account_id",
+}
 _FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 _SAFE_STRING_FIELDS = {"provider", "outcome", "status", "reason", "method", "route", "error_type", "quality", "phase"}
 _SAFE_REASONS = {"phrase", "chat_volume", "manual", "chat_trigger"}
