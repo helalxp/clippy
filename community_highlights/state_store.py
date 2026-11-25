@@ -11,6 +11,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -131,9 +132,7 @@ class CommunityHighlightsStateStore:
     def _write_locked(self, state: dict[str, Any]) -> None:
         self._ensure_directory()
         state["schema_version"] = STATE_SCHEMA_VERSION
-        state["updated_at"] = __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc
-        ).isoformat()
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
         temporary_path: str | None = None
         try:
             descriptor, temporary_path = tempfile.mkstemp(
