@@ -1,0 +1,49 @@
+"""Safe, timestamped Community Highlights diagnostics.
+
+Only fixed event labels, bounded enum-like fields, exception types, and hashed
+opaque references are written. Never pass credentials, chat text, URLs, or
+raw provider/channel identifiers here.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+_LOG = logging.getLogger("clippy.community_highlights")
+_ID_FIELDS = {"candidate_id", "session_id", "job_id", "flow_id"}
+_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+
+
+def _safe_value(name: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if name in _ID_FIELDS:
+        return hashlib.sha256(str(value).encode("utf-8", "replace")).hexdigest()[:12]
+    if isinstance(value, bool) or isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return round(value, 3)
+    if isinstance(value, str):
+        if any(part in name for part in ("token", "secret", "url", "text", "path", "code", "message")):
+            return None
+        return value.replace("\r", "").replace("\n", " ")[:120]
+    return None
+
+
+def log_event(event: str, *, level: int = logging.INFO, **fields: Any) -> None:
+    """Write one JSON event with an explicit UTC timestamp and redacted refs."""
+    safe: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "event": re.sub(r"[^a-z0-9_.-]", "_", str(event).lower())[:80],
+    }
+    for name, value in fields.items():
+        if not _FIELD_RE.fullmatch(name):
+            continue
+        cleaned = _safe_value(name, value)
+        if cleaned is not None:
+            safe[name + "_ref" if name in _ID_FIELDS else name] = cleaned
+    _LOG.log(level, "community_highlights %s", json.dumps(safe, sort_keys=True, separators=(",", ":")))
