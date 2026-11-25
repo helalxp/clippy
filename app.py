@@ -2804,6 +2804,13 @@ def _log_community_highlights_failure(request: Request, response) -> None:
         safe_path,
         response.status_code,
     )
+    community_log_event(
+        "api.request.failed",
+        level=logging.WARNING,
+        method=request.method,
+        route=safe_path,
+        status=response.status_code,
+    )
 
 
 @app.middleware("http")
