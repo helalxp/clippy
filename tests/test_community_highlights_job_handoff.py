@@ -429,3 +429,30 @@ def test_completed_generation_state_cannot_be_downgraded_by_stale_recovery(tmp_p
 
     assert result["generation_status"] == "completed"
     assert manager.get_candidate_generation(candidate_id)["generation_status"] == "completed"
+
+
+
+def test_manifest_failure_marks_candidate_and_local_library_retryable(handoff, monkeypatch):
+    output_root, upload_root, original, manager, queued = handoff
+    library_statuses = []
+    monkeypatch.setattr(app_module, "_write_resume_manifest", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        app_module.local_library,
+        "update_project_status",
+        lambda job_id, status: library_statuses.append((job_id, status)),
+    )
+
+    response = _post_process({
+        "community_candidate_id": manager.snapshot["candidate_id"],
+        "acknowledged": True,
+    })
+
+    assert response.status_code == 503
+    assert manager.snapshot["generation_status"] == "failed"
+    assert manager.snapshot["generation_job_id"]
+    assert original.is_file()
+    assert original.read_bytes() == b"original-highlight-mp4"
+    assert list(upload_root.iterdir()) == []
+    assert not (output_root / manager.snapshot["generation_job_id"]).exists()
+    assert library_statuses == [(manager.snapshot["generation_job_id"], "failed")]
+    assert queued == []
