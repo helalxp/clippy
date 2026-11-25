@@ -1690,6 +1690,78 @@ def _resume_interrupted_jobs() -> set:
     return keep_reservations
 
 
+def _reconcile_community_candidate_generations() -> None:
+    """Reconcile candidate links with completed and resumed normal Clippy jobs."""
+    for candidate in capture_sessions.list_candidates():
+        candidate_id = candidate.get("candidate_id")
+        job_id = candidate.get("generation_job_id")
+        current = candidate.get("generation_status")
+        if not candidate_id or not job_id or current == "not_started" or current == "failed":
+            continue
+
+        job = jobs.get(job_id)
+        if job is not None:
+            job_status = job.get("status")
+            if job_status in {"queued", "processing", "completed", "failed"} and job_status != current:
+                try:
+                    capture_sessions.update_candidate_generation(
+                        candidate_id,
+                        job_id,
+                        status=job_status,
+                        error=(
+                            "The Clippy generation job failed. The approved candidate is safe to retry."
+                            if job_status == "failed" else None
+                        ),
+                    )
+                except Exception as error:
+                    community_log_event(
+                        "generation.recovery.sync_failed",
+                        level=logging.ERROR,
+                        candidate_id=candidate_id,
+                        job_id=job_id,
+                        error_type=type(error).__name__,
+                    )
+            continue
+
+        manifest = _read_manifest(job_id)
+        if manifest and _manifest_busy_elsewhere(manifest):
+            try:
+                capture_sessions.update_candidate_generation(
+                    candidate_id, job_id, status="processing",
+                )
+            except Exception as error:
+                community_log_event(
+                    "generation.recovery.sync_failed",
+                    level=logging.ERROR,
+                    candidate_id=candidate_id,
+                    job_id=job_id,
+                    error_type=type(error).__name__,
+                )
+            continue
+
+        try:
+            capture_sessions.update_candidate_generation(
+                candidate_id,
+                job_id,
+                status="failed",
+                error="The generation job could not be recovered. The approved candidate is safe to retry.",
+            )
+            community_log_event(
+                "generation.recovery.missing_job",
+                level=logging.ERROR,
+                candidate_id=candidate_id,
+                job_id=job_id,
+            )
+        except Exception as error:
+            community_log_event(
+                "generation.recovery.failed",
+                level=logging.ERROR,
+                candidate_id=candidate_id,
+                job_id=job_id,
+                error_type=type(error).__name__,
+            )
+
+
 def _dir_size(path: str) -> int:
     total = 0
     for root, _dirs, files in os.walk(path):
@@ -3887,24 +3959,6 @@ async def process_endpoint(
 
     community_candidate_source = None
     community_candidate_claimed = False
-    if community_candidate_id:
-        try:
-            _candidate, community_candidate_source, community_candidate_claimed = capture_sessions.claim_candidate_generation(community_candidate_id, job_id)
-        except KeyError:
-            shutil.rmtree(job_output_dir, ignore_errors=True)
-            raise HTTPException(status_code=404, detail="Highlight candidate not found.") from None
-        except ValueError as error:
-            shutil.rmtree(job_output_dir, ignore_errors=True)
-            raise HTTPException(status_code=409, detail=str(error)) from None
-        except Exception as error:
-            shutil.rmtree(job_output_dir, ignore_errors=True)
-            community_log_event("generation.claim.failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
-            raise HTTPException(status_code=503, detail="Clippy could not safely reserve this highlight for generation.") from None
-        if not community_candidate_claimed:
-            shutil.rmtree(job_output_dir, ignore_errors=True)
-            latest = capture_sessions.get_candidate_generation(community_candidate_id) or {}
-            return {"job_id": latest.get("generation_job_id"), "status": latest.get("generation_status", "queued"), "partial": None, "idempotent": True}
-        community_log_event("generation.source_claimed", candidate_id=community_candidate_id, job_id=job_id, outcome="staging")
 
     # Prepare Command
     # sys.executable, not "python": bare "python" resolves against PATH, which
@@ -4079,7 +4133,25 @@ async def process_endpoint(
         os.replace(src, input_path)
         pending_uploads.pop(upload_id, None)
         cmd.extend(["-i", input_path])
-    elif community_candidate_source is not None:
+    elif community_candidate_id:
+        community_candidate_claimed = False
+        try:
+            _candidate, community_candidate_source, community_candidate_claimed = capture_sessions.claim_candidate_generation(community_candidate_id, job_id)
+        except KeyError:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=404, detail="Highlight candidate not found.") from None
+        except ValueError as error:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        except Exception as error:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            community_log_event("generation.claim.failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
+            raise HTTPException(status_code=503, detail="Clippy could not safely reserve this highlight for generation.") from None
+        if not community_candidate_claimed:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            latest = capture_sessions.get_candidate_generation(community_candidate_id) or {}
+            return {"job_id": latest.get("generation_job_id"), "status": latest.get("generation_status", "queued"), "partial": None, "idempotent": True}
+        community_log_event("generation.source_claimed", candidate_id=community_candidate_id, job_id=job_id, outcome="staging")
         input_path = None
         try:
             input_path = _stage_community_candidate_source(community_candidate_source, community_candidate_id, job_id)
