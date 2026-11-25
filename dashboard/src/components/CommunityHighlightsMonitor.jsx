@@ -677,7 +677,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
                     </>
                   )}
                   <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
-                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing'}
+                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing' || ['staging', 'queued', 'processing'].includes(candidate.generation_status)}
                     title="Delete candidate and local file"
                     aria-label="Delete candidate"
                     className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40">
@@ -712,7 +712,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
         )}
       </div>
       <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Completed highlights are saved as MP4 files for browser preview and download. Approving a candidate keeps it locally; rejecting or deleting it removes its media. Fine trimming and handoff to Clippy's main clip-generation pipeline are not available yet.
+        Approving a candidate starts one vertical Short through Clippy's normal generation pipeline. The original highlight remains available locally; publishing is always a separate action.
       </p>
     </section>
   );
