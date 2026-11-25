@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .streamlink_capture import ResolvedLiveStream, resolve_live_stream
+from .diagnostics import log_event
 
 
 class RollingCaptureError(RuntimeError):
@@ -263,6 +264,7 @@ class RollingCapture:
 
             resolved = self._resolver(self.stream_url, quality=self.config.quality)
             reader = resolved.open()
+            log_event("capture.ffmpeg.starting", quality=self.config.quality, segment_seconds=self.config.segment_seconds)
             args = build_ffmpeg_segment_args(self.config)
             args[0] = ffmpeg
             try:
@@ -290,17 +292,21 @@ class RollingCapture:
                 self._prune_segments()
 
             self._finish_process(process)
+            return_code = process.poll()
             process = None
             self._prune_segments()
-        except RollingCaptureError:
+            log_event("capture.ffmpeg.finished", outcome="stopped", return_code=return_code)
+        except RollingCaptureError as error:
             if process is not None:
                 self._finish_process(process, force=True)
                 process = None
+            log_event("capture.ffmpeg.failed", level=40, error_type=type(error).__name__)
             raise
-        except Exception:
+        except Exception as error:
             if process is not None:
                 self._finish_process(process, force=True)
                 process = None
+            log_event("capture.ffmpeg.failed", level=40, error_type=type(error).__name__)
             raise RollingCaptureError("Live capture ended unexpectedly. Check the stream and FFmpeg installation.") from None
         finally:
             if process is not None:
