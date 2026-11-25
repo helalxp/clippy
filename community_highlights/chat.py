@@ -16,6 +16,7 @@ from .credentials import CredentialStoreError, WindowsCredentialStore
 from .models import ChatMessage, ChatProvider, StreamReference
 from .token_manager import ProviderTokenError, ensure_access_token
 from .urls import StreamUrlError, parse_stream_url
+from .diagnostics import log_event
 
 YOUTUBE_API = "https://www.googleapis.com/youtube/v3"
 TWITCH_IRC = "wss://irc-ws.chat.twitch.tv:443"
@@ -256,6 +257,7 @@ class ChatSessionManager:
         try:
             await self._token_provider(provider)
         except ProviderTokenError as error:
+            log_event("chat.start.auth_failed", level=logging.WARNING, provider=provider, error_type=type(error).__name__)
             raise ValueError(str(error)) from None
 
         async with self._lock:
@@ -274,6 +276,7 @@ class ChatSessionManager:
             session = ChatSession(secrets.token_urlsafe(18), reference)
             self._sessions[session.session_id] = session
             session.task = asyncio.create_task(self._run(session))
+            log_event("chat.start.accepted", provider=provider, session_id=session.session_id)
             return session.snapshot()
 
     async def stop(self, session_id: str) -> bool:
@@ -289,6 +292,7 @@ class ChatSessionManager:
             except asyncio.CancelledError:
                 pass
         session.status = "stopped"
+        log_event("chat.stopped", provider=session.reference.provider.value, session_id=session.session_id)
         return True
 
     async def begin_provider_disconnect(self, provider: str) -> None:
@@ -310,11 +314,13 @@ class ChatSessionManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         for session in sessions:
             session.status = "stopped"
+        log_event("chat.provider_disconnect", provider=provider, session_count=len(sessions), outcome="stopped")
 
     async def end_provider_disconnect(self, provider: str) -> None:
         """Allow new chat sessions after local credential cleanup has finished."""
         async with self._lock:
             self._disconnecting_providers.discard(provider)
+        log_event("chat.provider_disconnect.finished", provider=provider)
 
     async def get(self, session_id: str) -> dict[str, Any] | None:
         async with self._lock:
@@ -337,16 +343,19 @@ class ChatSessionManager:
                     break
                 session.status = "reconnecting"
                 session.error = "The chat connection ended. Reconnecting…"
+                log_event("chat.reconnecting", level=logging.WARNING, provider=session.reference.provider.value, session_id=session.session_id, outcome="connection_ended")
             except asyncio.CancelledError:
                 raise
-            except (ProviderTokenError, CredentialStoreError):
+            except (ProviderTokenError, CredentialStoreError) as error:
                 session.status = "error"
                 session.error = "Provider authorization is unavailable. Reconnect the account."
+                log_event("chat.terminal_error", level=logging.ERROR, provider=session.reference.provider.value, session_id=session.session_id, error_type=type(error).__name__)
                 break
             except ChatTerminalError as error:
                 session.status = error.status
                 session.error = str(error)
                 session.diagnostic = error.diagnostic
+                log_event("chat.terminal_error", level=logging.ERROR, provider=session.reference.provider.value, session_id=session.session_id, outcome=error.status)
                 if error.diagnostic:
                     _LOG.warning(
                         "YouTube chat API request rejected (operation=%s, http_status=%s, reason=%s)",
@@ -373,11 +382,13 @@ class ChatSessionManager:
                     )
                 session.status = "reconnecting"
                 session.error = "Chat connection interrupted. Clippy is retrying."
+                log_event("chat.http_reconnecting", level=logging.WARNING, provider=session.reference.provider.value, session_id=session.session_id, http_status=diagnostic["http_status"], outcome=diagnostic["reason"])
                 if error.response.status_code == 403 and diagnostic["reason"] == "rateLimitExceeded":
                     delay = max(delay, 5)
-            except Exception:
+            except Exception as error:
                 session.status = "reconnecting"
                 session.error = "Chat connection interrupted. Clippy is retrying."
+                log_event("chat.reconnecting", level=logging.WARNING, provider=session.reference.provider.value, session_id=session.session_id, error_type=type(error).__name__)
             try:
                 await asyncio.wait_for(session.stop_event.wait(), timeout=delay)
             except asyncio.TimeoutError:
@@ -385,8 +396,9 @@ class ChatSessionManager:
             delay = min(delay * 2, 30)
         if session.status not in {"error", "stopped", "ended"}:
             session.status = "stopped"
+        log_event("chat.worker.finished", provider=session.reference.provider.value, session_id=session.session_id, outcome=session.status)
 
-    async def _run_twitch(self, session: ChatSession) -> None:
+    async def _run_twitch(self, session: ChatSession) -> None
         channel = session.reference.stream_id
         store = WindowsCredentialStore()
         bundle = store.load("twitch") or {}
