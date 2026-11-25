@@ -242,3 +242,54 @@ def test_lifespan_shutdown_helper_stops_capture_then_chat(monkeypatch):
         "list_chats",
         ("stop_chat", "chat-session"),
     ]
+
+
+
+def test_restart_cleans_rolling_files_for_already_stopped_sessions(tmp_path):
+    output_root = tmp_path / "community-highlights"
+    session_dir = output_root / SESSION_ID
+    highlights_dir = session_dir / "highlights"
+    highlights_dir.mkdir(parents=True)
+    ready_video = highlights_dir / f"{READY_ID}.mp4"
+    ready_video.write_bytes(b"completed-video")
+    rolling_segment = session_dir / "segment-00000000.ts"
+    rolling_segment.write_bytes(b"stale-ring")
+    index = session_dir / "segments.csv"
+    index.write_text("filename,duration\n", encoding="utf-8")
+
+    store = CommunityHighlightsStateStore(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    store.update_sections(
+        capture_sessions=[{
+            "session_id": SESSION_ID,
+            "provider": "youtube",
+            "stream_id": "abcdefghijk",
+            "started_at": now,
+            "status": "stopped",
+            "segment_seconds": 4,
+            "retention_seconds": 180,
+            "max_buffer_size_mb": 512,
+            "quality": "best",
+        }],
+        candidates=[{
+            "candidate_id": READY_ID,
+            "capture_session_id": SESSION_ID,
+            "triggered_at": now,
+            "pre_seconds": 30,
+            "post_seconds": 25,
+            "reason": "phrase",
+            "status": "ready",
+            "review_status": "approved",
+            "segment_count": 8,
+            "trigger_count": 1,
+        }],
+    )
+
+    manager = CaptureSessionManager(output_root=output_root, state_store=store)
+    manager.restore()
+
+    assert manager.list()[0]["status"] == "stopped"
+    assert not rolling_segment.exists()
+    assert not index.exists()
+    assert ready_video.exists()
+    assert manager.get_candidate(READY_ID)[0]["review_status"] == "approved"

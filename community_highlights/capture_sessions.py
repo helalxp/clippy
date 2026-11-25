@@ -375,12 +375,12 @@ class CaptureSessionManager:
             # No capture or candidate worker survives a backend restart. The
             # rolling source ring is therefore disposable; completed candidate
             # MP4s and interrupted partial MP4s remain available for review/delete.
-            interrupted = [
-                item for item in self._sessions.values()
-                if item.status == "interrupted"
-            ]
+            # No capture or candidate worker survives a backend restart.
+            # Every restored session is terminal at this point, even if it had
+            # already saved stopped/ended/error before the process died.
+            cleanup_sessions = list(self._sessions.values())
 
-        for session in interrupted:
+        for session in cleanup_sessions:
             self._cleanup_rolling_segments_if_finished(session)
 
     def start(
