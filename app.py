@@ -1460,14 +1460,14 @@ async def _handover_watch():
 
 
 async def _resume_scan():
-    """Keep looking for manifests nobody is running (the old instance left
-    them queued, or was killed at the end of its grace period)."""
+    """Recover abandoned jobs and reconcile Community Highlights handoffs."""
     while True:
         await asyncio.sleep(RESUME_SCAN_INTERVAL)
         if _draining or _MAINTENANCE_PENDING:
             continue
         try:
             _resume_interrupted_jobs()
+            _reconcile_community_candidate_generations()
         except Exception as e:
             print(f"⚠️ Resume scan failed: {e}")
 
@@ -1690,6 +1690,38 @@ def _resume_interrupted_jobs() -> set:
     return keep_reservations
 
 
+def _mark_community_library_project_failed(job_id: str, candidate_id: str | None = None) -> None:
+    """Keep Local Library state aligned when a candidate handoff never queues."""
+    if BILLING_ENABLED:
+        return
+    try:
+        local_library.update_project_status(job_id, "failed")
+    except Exception as error:
+        community_log_event(
+            "generation.library_state_failed",
+            level=logging.ERROR,
+            candidate_id=candidate_id,
+            job_id=job_id,
+            error_type=type(error).__name__,
+        )
+
+
+def _mark_community_generation_failed(candidate_id: str, job_id: str, reason: str) -> None:
+    """Best-effort retryable state after a pre-queue handoff failure."""
+    try:
+        capture_sessions.update_candidate_generation(
+            candidate_id, job_id, status="failed", error=reason,
+        )
+    except Exception as error:
+        community_log_event(
+            "generation.failure_state_write_failed",
+            level=logging.ERROR,
+            candidate_id=candidate_id,
+            job_id=job_id,
+            error_type=type(error).__name__,
+        )
+
+
 def _cleanup_orphaned_community_candidate_stage(job_id: str) -> None:
     """Remove only our exact staged filenames when no resumable job manifest exists."""
     try:
@@ -1779,6 +1811,7 @@ def _cleanup_orphaned_community_candidate_stage(job_id: str) -> None:
             job_id=normalized_job_id,
             error_type=type(error).__name__,
         )
+    _mark_community_library_project_failed(normalized_job_id)
     community_log_event(
         "generation.orphan_cleanup.completed",
         job_id=normalized_job_id,
@@ -4459,10 +4492,12 @@ async def process_endpoint(
                 except OSError:
                     pass
             shutil.rmtree(job_output_dir, ignore_errors=True)
-            try:
-                capture_sessions.update_candidate_generation(community_candidate_id, job_id, status="failed", error="Clippy could not save the resumable generation job. Retry this approved candidate.")
-            except Exception:
-                pass
+            _mark_community_generation_failed(
+                community_candidate_id,
+                job_id,
+                "Clippy could not save the resumable generation job. Retry this approved candidate.",
+            )
+            _mark_community_library_project_failed(job_id, community_candidate_id)
             raise HTTPException(status_code=503, detail="Clippy could not safely queue this highlight for generation.")
         try:
             capture_sessions.update_candidate_generation(community_candidate_id, job_id, status="queued")
@@ -4475,6 +4510,12 @@ async def process_endpoint(
                 except OSError:
                     pass
             shutil.rmtree(job_output_dir, ignore_errors=True)
+            _mark_community_generation_failed(
+                community_candidate_id,
+                job_id,
+                "Clippy could not safely save the generation state. Retry this approved candidate.",
+            )
+            _mark_community_library_project_failed(job_id, community_candidate_id)
             community_log_event("generation.queue_state_failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
             raise HTTPException(status_code=503, detail="Clippy could not safely save the generation state. Retry this approved candidate.") from None
     _enqueue_job(job_id, priority)
