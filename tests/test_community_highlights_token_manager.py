@@ -136,3 +136,30 @@ async def test_google_refresh_rejects_non_object_provider_responses(monkeypatch)
     with pytest.raises(ProviderTokenError):
         await ensure_access_token("youtube", store_factory=lambda: store, client=client)
     assert store.saved is None
+
+
+@run_async
+async def test_refresh_failure_emits_safe_timestamped_diagnostic(monkeypatch, caplog):
+    import logging
+    import pytest
+    from community_highlights.token_manager import ProviderTokenError
+
+    monkeypatch.setenv("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "google-client")
+    secret_refresh_token = "refresh-token-must-never-appear-in-logs"
+    store = FakeStore({
+        "client_id": "google-client",
+        "refresh_token": secret_refresh_token,
+        "expires_at": 0,
+        "scopes": ["https://www.googleapis.com/auth/youtube.readonly"],
+    })
+    client = FakeClient([
+        (400, {"error": "invalid_grant"}),
+    ])
+
+    with caplog.at_level(logging.ERROR, logger="clippy.community_highlights"):
+        with pytest.raises(ProviderTokenError):
+            await ensure_access_token("youtube", store_factory=lambda: store, client=client)
+
+    assert "oauth.token.refresh_failed" in caplog.text
+    assert "timestamp" in caplog.text
+    assert secret_refresh_token not in caplog.text
