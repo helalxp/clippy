@@ -35,6 +35,7 @@ from .twitch_oauth import (
 from .revocation import revoke_google_credentials, revoke_twitch_credentials
 from .credential_lifecycle import provider_disconnect_lock
 from .state_store import StateStoreError
+from .diagnostics import log_event
 
 router = APIRouter()
 
@@ -128,6 +129,7 @@ async def stop_twitch_authorization(flow_id: str):
 
 async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
     """Stop chat and atomically revoke/delete credentials relative to token writes."""
+    log_event("provider.disconnect.started", provider=provider)
     await chat_sessions.begin_provider_disconnect(provider)
     try:
         # Refresh, initial OAuth token exchange, and disconnect all share this
@@ -174,12 +176,14 @@ async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
             # the shared lock is released because all outstanding flows were
             # cancelled while holding the same lock.
             store.delete(provider)
+            log_event("provider.disconnect.finished", provider=provider, outcome=revocation_status)
             return {
                 "connected": False,
                 "revocation_status": revocation_status,
                 "message": message,
             }
     except CredentialStoreError as error:
+        log_event("provider.disconnect.failed", level=40, provider=provider, error_type=type(error).__name__)
         raise HTTPException(status_code=503, detail=str(error)) from None
     finally:
         await chat_sessions.end_provider_disconnect(provider)
@@ -409,10 +413,13 @@ async def trigger_highlight(session_id: str, body: ManualTriggerRequest):
             reason=body.reason,
         )
     except (ValueError, RollingCaptureError) as error:
+        log_event("candidate.trigger.failed", level=30, session_id=session_id, error_type=type(error).__name__)
         raise HTTPException(status_code=409, detail=str(error)) from None
-    except StateStoreError:
+    except StateStoreError as error:
+        log_event("candidate.trigger.persist_failed", level=40, session_id=session_id, error_type=type(error).__name__)
         raise HTTPException(status_code=503, detail="Community Highlights could not save candidate metadata to local storage.") from None
     if candidate is None:
+        log_event("candidate.trigger.unavailable", level=30, session_id=session_id, outcome="capture_not_recording")
         raise HTTPException(status_code=409, detail="Capture is not recording.")
     return candidate
 
