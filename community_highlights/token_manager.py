@@ -10,6 +10,7 @@ from .credentials import CredentialStoreError, WindowsCredentialStore
 from .google_oauth import GOOGLE_SCOPE, GOOGLE_TOKEN_URL, google_client_secret
 from .twitch_oauth import TWITCH_SCOPES, TWITCH_TOKEN_URL, TWITCH_VALIDATE_URL
 from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting
+from .diagnostics import log_event
 
 class ProviderTokenError(RuntimeError):
     """Raised when a saved provider grant cannot be refreshed safely."""
@@ -27,9 +28,11 @@ async def _ensure_access_token_locked(
     try:
         store = store_factory()
         bundle = store.load(provider)
-    except CredentialStoreError:
+    except CredentialStoreError as error:
+        log_event("oauth.token_store.read_failed", level=40, provider=provider, error_type=type(error).__name__)
         raise ProviderTokenError("Could not read provider credentials from Windows Credential Manager.") from None
     if not bundle or not bundle.get("refresh_token"):
+        log_event("oauth.token_unavailable", level=30, provider=provider, outcome="not_connected")
         raise ProviderTokenError(f"{provider.title()} is not connected. Sign in first.")
 
     now = int(time.time())
@@ -44,13 +47,16 @@ async def _ensure_access_token_locked(
         else os.environ.get("CLIPPY_GOOGLE_OAUTH_CLIENT_ID", "").strip()
     )
     if not client_id or bundle.get("client_id") != client_id:
+        log_event("oauth.token_unavailable", level=40, provider=provider, outcome="client_id_mismatch")
         raise ProviderTokenError(f"{provider.title()} app authorization is not configured correctly.")
 
     if access_token_current and provider == "youtube":
+        log_event("oauth.token.reused", provider=provider, outcome="access_token_current")
         return bundle["access_token"]
     if access_token_current and provider == "twitch":
         last_validated = bundle.get("validated_at", 0)
         if isinstance(last_validated, int) and last_validated > now - 3600:
+            log_event("oauth.token.reused", provider=provider, outcome="validated_access_token_current")
             return bundle["access_token"]
         validation_client_owned = client is None
         validation_client = client or httpx.AsyncClient(timeout=httpx.Timeout(20.0))
@@ -74,7 +80,8 @@ async def _ensure_access_token_locked(
                         "validated_at": now,
                     })
                     return bundle["access_token"]
-        except (httpx.HTTPError, ValueError, CredentialStoreError):
+        except (httpx.HTTPError, ValueError, CredentialStoreError) as error:
+            log_event("oauth.token.validation_failed", level=40, provider=provider, error_type=type(error).__name__)
             raise ProviderTokenError(
                 "Could not validate Twitch access. Check your connection and try again."
             ) from None
@@ -196,8 +203,10 @@ async def _ensure_access_token_locked(
         # Twitch refresh tokens are single-use. Persist the replacement before
         # returning the access token or allowing the chat transport to proceed.
         store.save(provider, updated)
+        log_event("oauth.token.refreshed", provider=provider, outcome="success")
         return access_token
-    except (httpx.HTTPError, ValueError, CredentialStoreError, ProviderTokenError):
+    except (httpx.HTTPError, ValueError, CredentialStoreError, ProviderTokenError) as error:
+        log_event("oauth.token.refresh_failed", level=40, provider=provider, error_type=type(error).__name__)
         raise ProviderTokenError(
             f"Could not refresh {provider.title()} access. Reconnect the account and try again."
         ) from None
@@ -220,6 +229,7 @@ async def ensure_access_token(
     # cannot persist a newly rotated credential after local disconnect removes it.
     async with provider_credential_lock(provider):
         if provider_is_disconnecting(provider):
+            log_event("oauth.token.refresh_blocked", level=30, provider=provider, outcome="disconnect_in_progress")
             raise ProviderTokenError(f"{provider.title()} is being disconnected. Try again shortly.")
         return await _ensure_access_token_locked(
             provider,
