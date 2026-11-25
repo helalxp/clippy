@@ -74,14 +74,17 @@ class FakeCandidateManager:
         return [dict(self.snapshot)]
 
 
-def _post_process(body):
+def _post_process(body, *, desktop_token="test-desktop-session-token"):
     async def _do():
         transport = httpx.ASGITransport(app=app_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             return await client.post(
                 "/api/process",
                 json=body,
-                headers={"X-Gemini-Key": "test-key"},
+                headers={
+                    "X-Gemini-Key": "test-key",
+                    "X-Clippy-Token": desktop_token,
+                },
             )
     return asyncio.run(_do())
 
@@ -106,6 +109,7 @@ def handoff(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "UPLOAD_DIR", str(upload_root))
     monkeypatch.setattr(app_module, "capture_sessions", manager)
     monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
+    monkeypatch.setattr(app_module, "_DESKTOP_API_TOKEN", "test-desktop-session-token")
     monkeypatch.setattr(app_module, "jobs", {})
     monkeypatch.setattr(app_module, "_job_seq", itertools.count())
     monkeypatch.setattr(app_module, "_assert_data_storage_available", lambda: None)
@@ -333,3 +337,32 @@ def test_startup_marks_missing_generation_job_retryable(handoff, monkeypatch):
 
     assert manager.snapshot["generation_status"] == "failed"
     assert manager.snapshot["generation_error"]
+
+
+
+def test_candidate_generation_rejects_string_false_as_rights_acknowledgement(handoff):
+    _output_root, _upload_root, _original, manager, queued = handoff
+
+    response = _post_process({
+        "community_candidate_id": manager.snapshot["candidate_id"],
+        "acknowledged": "false",
+    })
+
+    assert response.status_code == 400
+    assert manager.snapshot["generation_status"] == "not_started"
+    assert manager.snapshot["generation_job_id"] is None
+    assert queued == []
+
+
+def test_candidate_generation_requires_active_desktop_session_token(handoff):
+    _output_root, _upload_root, _original, manager, queued = handoff
+
+    response = _post_process({
+        "community_candidate_id": manager.snapshot["candidate_id"],
+        "acknowledged": True,
+    }, desktop_token="")
+
+    assert response.status_code == 401
+    assert manager.snapshot["generation_status"] == "not_started"
+    assert manager.snapshot["generation_job_id"] is None
+    assert queued == []
