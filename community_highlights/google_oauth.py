@@ -15,6 +15,7 @@ import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
 from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting, provider_operation_generation
+from .diagnostics import log_event
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -97,6 +98,7 @@ async def start_google_flow(
 ) -> dict[str, Any]:
     client_id = (client_id or google_client_id()).strip()
     if not client_id:
+        log_event("oauth.start.unavailable", level=logging.WARNING, provider="google", outcome="missing_client_id")
         raise GoogleOAuthError("Google sign-in is not configured in this Clippy build.")
     if provider_is_disconnecting("youtube"):
         raise GoogleOAuthError("Google is being disconnected. Try again shortly.")
@@ -195,6 +197,7 @@ async def start_google_flow(
             raise GoogleOAuthError("Too many Google sign-in attempts are active.")
         _GOOGLE_FLOWS[flow_id] = flow
 
+    log_event("oauth.flow.started", provider="google", outcome="pending")
     expiry_task = asyncio.create_task(_expire_google_flow(flow_id))
     _GOOGLE_EXPIRY_TASKS.add(expiry_task)
     expiry_task.add_done_callback(_GOOGLE_EXPIRY_TASKS.discard)
@@ -232,9 +235,11 @@ async def _expire_google_flow(flow_id: str) -> None:
 async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) -> str | None:
     callback = _google_callback_values(params)
     if callback is None:
+        log_event("oauth.callback.rejected", level=logging.WARNING, provider="google", outcome="ambiguous_or_malformed")
         return None
     returned_state, issuer, code, provider_error = callback
     if issuer != GOOGLE_ISSUER:
+        log_event("oauth.callback.rejected", level=logging.WARNING, provider="google", outcome="issuer_mismatch")
         return None
 
     phase = "authorization_code_exchange"
@@ -250,6 +255,7 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
             if flow["status"] != "pending":
                 return None
             if not secrets.compare_digest(returned_state, flow["state"]):
+                log_event("oauth.callback.rejected", level=logging.WARNING, provider="google", outcome="state_mismatch")
                 return None
 
             if provider_error:
@@ -258,6 +264,7 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                     message="Google authorization was declined." if provider_error == "access_denied"
                     else "Google authorization could not be completed.",
                 )
+                log_event("oauth.flow.finished", provider="google", outcome=flow["status"])
                 return flow["status"]
 
             token_request = {
@@ -316,8 +323,10 @@ async def _complete_google_callback(flow_id: str, params: dict[str, list[str]]) 
                 "client_id": flow["client_id"],
             })
             flow.update(status="connected", message="YouTube is connected.")
+            log_event("oauth.flow.connected", provider="google", outcome="success")
             return "connected"
     except Exception as error:
+        log_event("oauth.flow.failed", level=logging.ERROR, provider="google", outcome=phase, error_type=type(error).__name__)
         http_status = None
         provider_code = None
         provider_description = None
