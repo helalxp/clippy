@@ -314,16 +314,19 @@ class CaptureSessionManager:
                 candidate_dir = output_root / session_id
                 highlights_dir = candidate_dir / "highlights"
                 media_path = highlights_dir / f"{candidate_id}.mp4"
-                safe_media = (
-                    not candidate_dir.is_symlink()
-                    and not highlights_dir.is_symlink()
-                    and not media_path.is_symlink()
-                    and media_path.is_file()
-                    and media_path.stat().st_size > 0
-                    and media_path.resolve().parent == highlights_dir.resolve()
-                    and highlights_dir.resolve().parent == candidate_dir.resolve()
-                    and candidate_dir.resolve().parent == output_root
-                )
+                try:
+                    safe_media = (
+                        not candidate_dir.is_symlink()
+                        and not highlights_dir.is_symlink()
+                        and not media_path.is_symlink()
+                        and media_path.is_file()
+                        and media_path.stat().st_size > 0
+                        and media_path.resolve().parent == highlights_dir.resolve()
+                        and highlights_dir.resolve().parent == candidate_dir.resolve()
+                        and candidate_dir.resolve().parent == output_root
+                    )
+                except OSError:
+                    safe_media = False
                 output_path = media_path if safe_media else None
                 if saved_status in {"capturing", "assembling"}:
                     status = "error"

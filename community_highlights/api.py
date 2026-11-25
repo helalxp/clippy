@@ -302,6 +302,8 @@ async def start_capture_session(body: StartCaptureSessionRequest):
         return capture_sessions.start(body.stream_url, settings)
     except (StreamUrlError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save capture metadata to local storage.") from None
 
 
 @router.get("/api/community-highlights/captures/{session_id}")
@@ -314,7 +316,10 @@ async def get_capture_session(session_id: str):
 
 @router.delete("/api/community-highlights/captures/{session_id}")
 async def stop_capture_session(session_id: str):
-    stopped = await capture_sessions.stop(session_id)
+    try:
+        stopped = await capture_sessions.stop(session_id)
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the stop status to local storage.") from None
     if not stopped:
         raise HTTPException(status_code=404, detail="Capture session not found.")
     return {"stopped": True}
@@ -372,6 +377,8 @@ async def delete_highlight_candidate(candidate_id: str):
             status_code=500,
             detail="The highlight file failed its storage safety check.",
         ) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the deletion to local storage.") from None
     if not deleted:
         raise HTTPException(status_code=404, detail="Highlight candidate not found.")
     return {"deleted": True}
@@ -405,6 +412,8 @@ async def trigger_highlight(session_id: str, body: ManualTriggerRequest):
         )
     except (ValueError, RollingCaptureError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save candidate metadata to local storage.") from None
     if candidate is None:
         raise HTTPException(status_code=409, detail="Capture is not recording.")
     return candidate
@@ -416,6 +425,8 @@ async def decide_highlight_candidate(candidate_id: str, body: CandidateDecisionR
         candidate = capture_sessions.decide_candidate(candidate_id, approved=body.approved)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the review decision to local storage.") from None
     if candidate is None:
         raise HTTPException(status_code=404, detail="Highlight candidate not found.")
     return candidate
