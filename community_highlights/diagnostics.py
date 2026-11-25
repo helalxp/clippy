@@ -16,6 +16,8 @@ from typing import Any
 _LOG = logging.getLogger("clippy.community_highlights")
 _ID_FIELDS = {"candidate_id", "session_id", "job_id", "flow_id"}
 _FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_SAFE_STRING_FIELDS = {"provider", "outcome", "status", "reason", "method", "route", "error_type", "quality", "phase"}
+_SAFE_REASONS = {"phrase", "chat_volume", "manual", "chat_trigger"}
 
 
 def _safe_value(name: str, value: Any) -> Any:
@@ -28,7 +30,11 @@ def _safe_value(name: str, value: Any) -> Any:
     if isinstance(value, float):
         return round(value, 3)
     if isinstance(value, str):
-        if any(part in name for part in ("token", "secret", "url", "text", "path", "code", "message")):
+        if name not in _SAFE_STRING_FIELDS:
+            return None
+        if name == "reason" and value not in _SAFE_REASONS:
+            return None
+        if name == "route" and not value.startswith("/api/community-highlights/"):
             return None
         return value.replace("\r", "").replace("\n", " ")[:120]
     return None
