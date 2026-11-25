@@ -31,7 +31,7 @@ This register records findings from the dated source audits below. A checked ite
 - [ ] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Mark interrupted captures explicitly on startup. Keep provider tokens in Windows Credential Manager, not SQLite.
 - [ ] Complete provider/capture lifecycle verification after the latest chat repair: test Twitch and YouTube monitoring on packaged Windows, verify chat messages continue after reconnect, verify provider-specific terminal/rate-limit errors, and verify stop/disconnect. The user has already confirmed Google connection/disconnection, stream recording, candidate extraction, and some pre/post segment behavior before this repair.
 - [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger windows now use local receipt timestamps consistently; segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
-- [ ] Merge overlapping or nearby trigger windows so several reactions to one moment do not create duplicate candidates.
+- [x] Merge overlapping or nearby trigger windows into one candidate while it is still collecting. Hold the candidate through the original pre-window plus one segment interval to catch a later overlapping pre-window; atomically seal before assembly. The union is bounded by the capture's configured retention, and newly included segments are pinned before the union is published.
 - [x] Add inline candidate preview using an MP4 remux and browser video controls. Frame-accurate trimming, analysis/suggested boundaries, and renderer handoff remain open.
 - [x] Remove rolling source segments, FFmpeg indexes, and abandoned concat manifests after normal capture termination and candidate workers finish; preserve candidate MP4s until rejection or explicit deletion.
 - [ ] Add startup reconciliation for files left by a crash/forced kill. Candidate state and trigger settings are still in memory, so restart recovery must be designed with durable metadata before safely deleting/recovering candidate media.
@@ -239,7 +239,7 @@ This plan is deliberately incremental. Implement and verify one working slice at
 
 - [x] Implement configurable phrase and community-volume rules, exposed through the Community Highlights monitor.
 - [x] Add unique-user thresholds, provider-message deduplication, and per-rule cooldowns.
-- [ ] Merge overlapping/nearby trigger windows to avoid duplicate candidates.
+- [x] Merge overlapping/nearby trigger windows to avoid duplicate candidates. Candidate workers use exact union intervals, reference-counted source pins, a bounded merge grace, and an atomic collecting-to-assembling transition.
 - [x] Use local chat receipt timestamps consistently for trigger windows and cooldowns; retain provider timestamps as message metadata.
 - [x] Coordinate chat receipt timestamps with completed rolling segments using a documented file-mtime/duration estimate. Validate drift on Windows before tightening accuracy guarantees.
 - [x] Protect pre-trigger segments, incrementally protect completed post-trigger segments, wait for the configured post-trigger duration, validate coverage/gaps, and assemble the candidate without re-encoding.
@@ -721,3 +721,13 @@ The rolling capture originally represented protected segments as a set. Two conc
 ### Next planned implementation step
 
 Complete M3 by merging overlapping/nearby trigger windows into one candidate. The merge must preserve the exact union of requested media intervals, protect newly included segments before they can be pruned, have a bounded merge/maximum-duration policy, and seal the candidate atomically before assembly. Only after that should the feature take on durable candidate/settings persistence and restart reconciliation, then M4 trim/analysis/renderer handoff.
+
+
+### M3 trigger-window merge implementation — 2026-11-25
+
+- Overlapping or near-adjacent event windows on the same active capture now extend one candidate instead of immediately creating another.
+- A candidate stays mergeable through its requested post boundary plus its original pre-window and one segment interval. This captures later triggers whose pre-window reaches back into that footage; the candidate seals atomically before assembly.
+- The merged media interval is the exact UTC union of the event windows. The configured capture retention is the hard maximum duration for a merged candidate; windows that exceed that bound remain separate rather than creating an unbounded recording.
+- Newly included segments are pinned before the expanded interval is published. Segment pins are reference-counted, so overlapping candidate workers cannot release one another's source files.
+- Candidate snapshots expose a trigger count so the review data indicates when multiple triggers contributed to one highlight.
+- Targeted tests cover interval selection/validation, merging overlapping triggers, retaining separate disjoint triggers, and the retention-duration cap. These tests are added to the branch; they are not claimed passed until CI reports the result.

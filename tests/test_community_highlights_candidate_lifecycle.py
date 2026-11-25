@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from community_highlights.capture_sessions import CaptureSessionManager
@@ -219,3 +219,129 @@ def test_post_trigger_segments_are_pinned_as_soon_as_they_arrive(tmp_path, monke
 
     asyncio.run(manager.stop(started["session_id"]))
     session_worker.join(timeout=1)
+
+
+
+class BlockingCapture:
+    def __init__(self, _url, config):
+        self.config = config
+        self.stop_requested = threading.Event()
+        self.protected = []
+        self.released = []
+
+    def run(self, _stop_event, *, on_started=None):
+        if on_started:
+            on_started()
+        self.stop_requested.wait(5)
+
+    def read_segment_index(self):
+        return []
+
+    def protect_segments(self, paths):
+        self.protected.extend(paths)
+        return list(paths)
+
+    def release_segments(self, paths):
+        self.released.extend(paths)
+
+    def request_stop(self):
+        self.stop_requested.set()
+
+
+def _recording_manager(tmp_path):
+    manager = CaptureSessionManager(capture_factory=BlockingCapture, output_root=tmp_path)
+    started = manager.start("https://www.twitch.tv/merge-channel")
+    deadline = time.time() + 1
+    while manager.get(started["session_id"])["status"] != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+    assert manager.get(started["session_id"])["status"] == "recording"
+    return manager, started["session_id"]
+
+
+def test_overlapping_trigger_windows_merge_into_one_candidate(tmp_path):
+    manager, session_id = _recording_manager(tmp_path)
+    first_time = datetime.now(timezone.utc) + timedelta(seconds=5)
+
+    first = manager.trigger(
+        provider="twitch",
+        stream_id="merge-channel",
+        triggered_at=first_time,
+        pre_seconds=20,
+        post_seconds=20,
+        reason="phrase",
+    )
+    second = manager.trigger(
+        provider="twitch",
+        stream_id="merge-channel",
+        triggered_at=first_time + timedelta(seconds=30),
+        pre_seconds=20,
+        post_seconds=20,
+        reason="chat_volume",
+    )
+
+    assert second["candidate_id"] == first["candidate_id"]
+    assert second["trigger_count"] == 2
+    assert second["pre_seconds"] == 20
+    assert second["post_seconds"] == 50
+    assert len(manager.list_candidates(session_id)) == 1
+
+    assert asyncio.run(manager.stop(session_id)) is True
+    candidate_worker = manager._candidates[first["candidate_id"]].worker
+    candidate_worker.join(timeout=2)
+    assert not candidate_worker.is_alive()
+
+
+def test_disjoint_trigger_windows_remain_separate_candidates(tmp_path):
+    manager, session_id = _recording_manager(tmp_path)
+    first_time = datetime.now(timezone.utc) + timedelta(seconds=5)
+
+    first = manager.trigger(
+        provider="twitch",
+        stream_id="merge-channel",
+        triggered_at=first_time,
+        pre_seconds=10,
+        post_seconds=10,
+    )
+    second = manager.trigger(
+        provider="twitch",
+        stream_id="merge-channel",
+        triggered_at=first_time + timedelta(seconds=30),
+        pre_seconds=10,
+        post_seconds=10,
+    )
+
+    assert second["candidate_id"] != first["candidate_id"]
+    assert len(manager.list_candidates(session_id)) == 2
+
+    assert asyncio.run(manager.stop(session_id)) is True
+    for candidate in manager._candidates.values():
+        if candidate.capture_session_id == session_id and candidate.worker:
+            candidate.worker.join(timeout=2)
+
+
+def test_overlapping_trigger_union_is_bounded_by_capture_retention(tmp_path):
+    manager, session_id = _recording_manager(tmp_path)
+    first_time = datetime.now(timezone.utc) + timedelta(seconds=5)
+
+    first = manager.trigger(
+        provider="twitch",
+        stream_id="merge-channel",
+        triggered_at=first_time,
+        pre_seconds=60,
+        post_seconds=60,
+    )
+    second = manager.trigger(
+        provider="twitch",
+        stream_id="merge-channel",
+        triggered_at=first_time + timedelta(seconds=80),
+        pre_seconds=60,
+        post_seconds=60,
+    )
+
+    assert second["candidate_id"] != first["candidate_id"]
+    assert len(manager.list_candidates(session_id)) == 2
+
+    assert asyncio.run(manager.stop(session_id)) is True
+    for candidate in manager._candidates.values():
+        if candidate.capture_session_id == session_id and candidate.worker:
+            candidate.worker.join(timeout=2)

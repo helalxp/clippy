@@ -8,7 +8,9 @@ from community_highlights.extraction import assemble_segments
 from community_highlights.rolling_capture import SegmentRecord, RollingCaptureError
 from community_highlights.timeline import (
     segment_wall_interval,
+    select_segments_for_interval,
     select_segments_for_window,
+    validate_contiguous_interval,
     validate_contiguous_window,
 )
 
@@ -95,3 +97,30 @@ def test_assembly_rejects_mixed_capture_directories_and_non_mp4_output(tmp_path)
         assemble_segments([first, second], tmp_path / "candidate.mp4")
     with pytest.raises(RollingCaptureError, match=r"requires an \.mp4"):
         assemble_segments([first], tmp_path / "candidate.ts")
+
+
+
+def test_selects_and_validates_exact_merged_interval(tmp_path):
+    start = datetime.fromtimestamp(1000, timezone.utc)
+    end = datetime.fromtimestamp(1012, timezone.utc)
+    records = [
+        make_record(tmp_path / "before.ts", 0, 4, 1000),
+        make_record(tmp_path / "inside-a.ts", 4, 8, 1004),
+        make_record(tmp_path / "inside-b.ts", 8, 12, 1008),
+        make_record(tmp_path / "after.ts", 12, 16, 1016),
+    ]
+
+    selected = select_segments_for_interval(
+        records, window_start=start, window_end=end
+    )
+    assert [item.path.name for item in selected] == [
+        "before.ts", "inside-a.ts", "inside-b.ts"
+    ]
+    validate_contiguous_interval(
+        selected, window_start=start, window_end=end
+    )
+
+    with pytest.raises(ValueError, match="window_end must not precede"):
+        select_segments_for_interval(
+            records, window_start=end, window_end=start
+        )
