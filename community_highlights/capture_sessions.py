@@ -1070,6 +1070,16 @@ class CaptureSessionManager:
             candidate = self._candidates.get(candidate_id)
             if candidate is None or candidate.generation_job_id != job_id:
                 return None
+            if candidate.generation_status == "completed" and status != "completed":
+                log_event(
+                    "generation.status.stale_transition_ignored",
+                    level=logging.WARNING,
+                    candidate_id=candidate_id,
+                    job_id=job_id,
+                    current_status="completed",
+                    requested_status=status,
+                )
+                return candidate.snapshot()
             previous = (candidate.generation_status, candidate.generation_error)
             candidate.generation_status = status
             candidate.generation_error = (
@@ -1112,7 +1122,6 @@ class CaptureSessionManager:
                 candidate.review_status = previous_review_status
                 raise
 
-            log_event("candidate.reviewed", candidate_id=candidate_id, outcome="approved" if approved else "rejected")
             log_event("candidate.reviewed", candidate_id=candidate_id, outcome="approved" if approved else "rejected")
             if not approved and candidate.output_path is not None:
                 try:
