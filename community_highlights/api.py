@@ -150,10 +150,10 @@ async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
             else:
                 try:
                     confirmed = await revoker(bundle)
-                except Exception:
+                except Exception as error:
                     # Local disconnect must remain possible during provider outages.
-                    # Provider request details may contain credentials and are not
-                    # returned to the frontend or written to logs.
+                    # Request details may contain credentials; log only the exception type.
+                    log_event("provider.disconnect.revocation_failed", level=30, provider=provider, error_type=type(error).__name__)
                     confirmed = False
                 revocation_status = "revoked" if confirmed else "not_confirmed"
                 if provider == "youtube":
