@@ -372,13 +372,13 @@ async def delete_highlight_candidate(candidate_id: str):
             status_code=409,
             detail="The highlight file could not be deleted. Close any app using it and try again.",
         ) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the deletion to local storage.") from None
     except RuntimeError:
         raise HTTPException(
             status_code=500,
             detail="The highlight file failed its storage safety check.",
         ) from None
-    except StateStoreError:
-        raise HTTPException(status_code=503, detail="Community Highlights could not save the deletion to local storage.") from None
     if not deleted:
         raise HTTPException(status_code=404, detail="Highlight candidate not found.")
     return {"deleted": True}

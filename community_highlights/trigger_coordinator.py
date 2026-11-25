@@ -8,7 +8,7 @@ from typing import Any
 from .capture_sessions import capture_sessions
 from .rolling_capture import RollingCaptureError
 from .models import ChatMessage
-from .state_store import StateStoreError, get_state_store
+from .state_store import get_state_store
 from .triggers import TriggerEngine, TriggerRule
 
 
