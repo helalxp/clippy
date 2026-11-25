@@ -70,6 +70,7 @@ Describe "Assembled Clippy application payload contract" {
             "app.py",
             "community_highlights/__init__.py",
             "community_highlights/api.py",
+            "community_highlights/diagnostics.py",
             "community_highlights/state_store.py",
             "local_library.py",
             "render-service/dist/server.js",
@@ -152,6 +153,7 @@ Describe "Assembled Clippy application payload contract" {
         $smokeSource | Should -Match 'unexpectedly created a default data folder'
         $smokeSource | Should -Match 'community_highlights\\__init__\.py'
         $smokeSource | Should -Match 'community_highlights\\api\.py'
+        $smokeSource | Should -Match 'community_highlights\\diagnostics\.py'
         $smokeSource | Should -Match 'community_highlights\\state_store\.py'
     }
 
