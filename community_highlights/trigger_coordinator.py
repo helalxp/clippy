@@ -70,6 +70,8 @@ class TriggerCoordinator:
         pre_seconds: int,
         post_seconds: int,
     ) -> dict[str, Any]:
+        if not isinstance(phrases, (list, tuple)):
+            raise ValueError("Trigger phrases must be provided as a list.")
         normalized = tuple(dict.fromkeys(
             phrase.strip() for phrase in phrases
             if isinstance(phrase, str) and phrase.strip()

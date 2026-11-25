@@ -34,6 +34,7 @@ from .twitch_oauth import (
 )
 from .revocation import revoke_google_credentials, revoke_twitch_credentials
 from .credential_lifecycle import provider_disconnect_lock
+from .state_store import StateStoreError
 
 router = APIRouter()
 
@@ -84,6 +85,15 @@ def connection_status(store_factory=None) -> dict:
         "credential_storage_available": True,
         "providers": providers,
     }
+
+
+@router.on_event("startup")
+async def restore_community_highlights_state():
+    """Restore durable settings and candidate metadata before serving requests."""
+    # An unsupported newer schema or unavailable data directory must fail
+    # closed rather than silently starting an empty feature and overwriting it.
+    trigger_coordinator.restore()
+    capture_sessions.restore()
 
 
 @router.get("/api/community-highlights/connections")
@@ -329,6 +339,8 @@ async def update_trigger_settings(body: TriggerSettingsRequest):
         return trigger_coordinator.configure(**body.model_dump())
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights settings could not be saved to local storage.") from None
 
 
 @router.get("/api/community-highlights/candidates")

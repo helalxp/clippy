@@ -60,13 +60,13 @@ class CommunityHighlightsStateStore:
         }
 
     def _ensure_directory(self) -> None:
-        if self.data_root.exists() and (self.data_root.is_symlink() or not self.data_root.is_dir()):
+        if self.data_root.is_symlink() or (self.data_root.exists() and not self.data_root.is_dir()):
             raise StateStoreError("The Clippy data location is not a trusted directory.")
         self.data_root.mkdir(parents=True, exist_ok=True)
-        if self.directory.exists() and (self.directory.is_symlink() or not self.directory.is_dir()):
+        if self.directory.is_symlink() or (self.directory.exists() and not self.directory.is_dir()):
             raise StateStoreError("The Community Highlights data location is not a trusted directory.")
         self.directory.mkdir(parents=True, exist_ok=True)
-        if self.path.exists() and (self.path.is_symlink() or not self.path.is_file()):
+        if self.path.is_symlink() or (self.path.exists() and not self.path.is_file()):
             raise StateStoreError("The Community Highlights state file is not a regular file.")
 
     def _quarantine_corrupt_file(self) -> None:
