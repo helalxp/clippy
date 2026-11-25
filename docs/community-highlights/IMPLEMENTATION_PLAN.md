@@ -29,7 +29,7 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Add targeted backend diagnostics for failed Community Highlights requests. Logs record method, matched route template (or redacted unmatched path), and status only; they omit request bodies, query strings, opaque flow/candidate IDs, and authorization headers.
 - [x] Fix approved-candidate queue exhaustion with an explicit candidate DELETE API and dashboard control. Delete removes the candidate's local media before its metadata, refuses in-progress workers, validates the generated path remains under the capture root, and preserves metadata if Windows refuses to unlink a locked file. No candidate status is silently pruned when the queue reaches its cap.
 - [ ] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Mark interrupted captures explicitly on startup. Keep provider tokens in Windows Credential Manager, not SQLite.
-- [ ] Complete provider/capture lifecycle verification after the latest chat repair: test Twitch and YouTube monitoring on packaged Windows, verify chat messages continue after reconnect, verify provider-specific terminal/rate-limit errors, and verify stop/disconnect. The user has already confirmed Google connection/disconnection, stream recording, candidate extraction, and some pre/post segment behavior before this repair.
+- [ ] Complete provider/capture lifecycle verification after the latest chat repair. **YouTube:** packaged-Windows chat messages, one-message/one-viewer trigger, capture, candidate extraction, and inline preview are now user-verified; the account-level YouTube ban was the cause of the earlier access failure. **Still pending:** Twitch remains intentionally untested; long-running reconnect, provider-specific terminal/rate-limit recovery, and full stop/disconnect acceptance still need coverage.
 - [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger windows now use local receipt timestamps consistently; segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
 - [x] Merge overlapping or nearby trigger windows into one candidate while it is still collecting. Hold the candidate through the original pre-window plus one segment interval to catch a later overlapping pre-window; atomically seal before assembly. The union is bounded by the capture's configured retention, and newly included segments are pinned before the union is published.
 - [x] Add inline candidate preview using an MP4 remux and browser video controls. Frame-accurate trimming, analysis/suggested boundaries, and renderer handoff remain open.
@@ -217,7 +217,7 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [x] Implement connection lifecycle: start, stop, reconnect, bounded backoff, cancellation, clear status/error reporting, and reclamation/restart of terminal sessions.
 - [x] Parse supported Twitch channel and YouTube video/live URLs into provider-neutral stream references. Provider-specific live-chat ID resolution remains adapter work.
 - [x] Add focused unit tests for normalized message validation, URL parsing, phrase/volume triggers, duplicate suppression, cooldowns, and rule-window behavior. Provider lifecycle tests remain pending.
-- [ ] Add a small integration/smoke test path that can be run manually with a stream the developer can access; do not make live credentials a CI requirement.
+- [x] Manually smoke-test YouTube monitoring with an accessible packaged-Windows account; the user confirmed messages and trigger flow. Keep live credentials out of CI. Twitch smoke testing remains deferred.
 
 **Exit criteria:** Clippy can accept a Twitch or YouTube live URL, connect to its chat, display/emit normalized messages, survive a transient disconnect, and stop cleanly. No video capture is included in M1.
 
@@ -231,7 +231,7 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [x] Add a bounded capture-session manager with isolated output directories, immutable per-session settings snapshots, a two-session concurrency cap, safe status snapshots, and bounded worker shutdown.
 - [x] Expose protected API operations to start, list, inspect, and stop capture sessions; stop owned capture and chat workers during API shutdown.
 - [x] Add configurable pre-trigger/post-trigger window selection, incremental segment protection while the post-window is collected, and lossless MP4 remuxing. The initial clock bridge estimates completed segment wall intervals from file modification times and FFmpeg segment durations; real-stream accuracy is not yet proven.
-- [ ] Test capture and extraction with streams the developer is authorized to capture.
+- [x] Test capture and extraction with an authorized YouTube stream on packaged Windows; the user confirmed rolling capture, trigger-generated candidate extraction, and inline playback. Twitch capture is not yet tested.
 
 **Exit criteria:** an isolated backend proof of concept can capture a live stream from a URL, retain a bounded rolling buffer, and extract arbitrary configured time windows reliably. Code paths and mocked tests are in place; the live Windows proof remains outstanding.
 
@@ -241,12 +241,13 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [x] Add unique-user thresholds, provider-message deduplication, and per-rule cooldowns.
 - [x] Merge overlapping/nearby trigger windows to avoid duplicate candidates. Candidate workers use exact union intervals, reference-counted source pins, a bounded merge grace, and an atomic collecting-to-assembling transition.
 - [x] Use local chat receipt timestamps consistently for trigger windows and cooldowns; retain provider timestamps as message metadata.
-- [x] Coordinate chat receipt timestamps with completed rolling segments using a documented file-mtime/duration estimate. Validate drift on Windows before tightening accuracy guarantees.
+- [x] Coordinate chat receipt timestamps with completed rolling segments using a documented file-mtime/duration estimate.
+- [ ] Validate real-stream timeline drift on Windows before tightening pre/post boundary accuracy guarantees.
 - [x] Protect pre-trigger segments, incrementally protect completed post-trigger segments, wait for the configured post-trigger duration, validate coverage/gaps, and assemble the candidate without re-encoding.
 - [x] Log safe trigger-creation failures rather than silently dropping them; a structured user-visible monitor diagnostic remains pending.
 - [ ] Persist trigger/candidate state and recover interrupted work after backend restart.
 
-**Exit criteria:** a simulated or live chat trigger consistently produces the requested pre/post footage window. Mocked lifecycle coverage is authored; real Windows validation remains pending.
+**Exit criteria:** mocked lifecycle coverage is authored and a YouTube packaged-Windows trigger-to-preview path is user-verified. Twitch remains untested, and real-stream frame/timeline drift still needs measurement.
 
 ### M4 — Candidate analysis and review
 
@@ -720,7 +721,7 @@ The rolling capture originally represented protected segments as a set. Two conc
 
 ### Next planned implementation step
 
-Complete M3 by merging overlapping/nearby trigger windows into one candidate. The merge must preserve the exact union of requested media intervals, protect newly included segments before they can be pruned, have a bounded merge/maximum-duration policy, and seal the candidate atomically before assembly. Only after that should the feature take on durable candidate/settings persistence and restart reconciliation, then M4 trim/analysis/renderer handoff.
+M3 trigger-window merging is now implemented. The next planned milestone is **durable persistence and restart recovery**: persist trigger settings, capture/candidate metadata, review decisions, and interrupted-session state; reconcile orphaned files on startup without deleting recoverable candidate media. Keep provider tokens exclusively in Windows Credential Manager. Once that foundation is reliable, proceed with M4 trimming, analysis, and renderer handoff. Do not connect candidate approval to the main renderer before the durable candidate lifecycle and trim contract are in place.
 
 
 ### M3 trigger-window merge implementation — 2026-11-25
