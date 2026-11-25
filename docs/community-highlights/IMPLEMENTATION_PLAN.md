@@ -749,3 +749,20 @@ M3 trigger-window merging and the first durable metadata/restart-recovery implem
 1. Verify this persistence slice on the packaged Windows build: save trigger settings, create and approve a YouTube candidate, restart Clippy, confirm the settings/review state/candidate preview persist, and confirm interrupted work is clearly marked without resuming a dead stream.
 2. Keep the long-running live reconnect checks and Twitch acceptance as separate future provider validation; they are not blockers for the storage metadata model itself.
 3. Define the trim contract and accepted candidate handoff shape before connecting the existing renderer. Keep frame-accurate boundary claims and candidate media retention/disk budgets open until measured/implemented.
+
+
+## 2026-11-25 M4 renderer-handoff architecture review
+
+The normal Clippy generation boundary is `POST /api/process` in `app.py`. It validates/stages a source, creates the canonical UUID job directory, builds the `main.py -i <source> -o <job-output>` command and per-job environment, applies the existing reservation/ownership rules, writes the owner sidecar and resume manifest, reserves the Local Library project in self-host mode, then enqueues through the standard queue. The existing `thumbnail_session_id` and `upload_id` branches demonstrate supported on-disk source reuse; the clip editor and ResultCard expect the resulting ordinary job ID and clip index.
+
+### Recommended candidate handoff
+
+- Do not create a second renderer/job runner and do not treat candidate approval itself as a render request.
+- After a candidate is explicitly approved and trimmed, validate its candidate ID through `CaptureSessionManager.get_candidate()`; require `status=ready`, `review_status=approved`, a regular MP4 under the expected Community Highlights root, and a completed trim manifest/selection.
+- Stage a **copy or hardlink** of the candidate/trimmed derivative into the normal source upload area under a generated job UUID. Never move the candidate MP4: it remains the review/audit source and must survive a failed pipeline job.
+- Reuse the same normal job-creation/queue path as `/api/process` rather than duplicating reservation, owner, Library, resume-manifest, and queue behavior. The clean seam is a small shared source-staging/job-enqueue helper with explicit caller/source metadata; avoid fabricating a Thumbnail Studio session.
+- Persist the candidate's resulting `job_id` before/atomically with handoff so repeated clicks or a restart cannot enqueue duplicate jobs. Keep handoff states explicit (for example `approved`, `processing`, `handed_off`, `handoff_failed`) and reconcile against the normal job record on restart.
+- Define trimming first: store selected start/end in seconds plus source duration and preferably frame/timebase evidence; validate `0 <= start < end <= duration`; generate a separate trimmed derivative using the chosen accuracy/encoding policy. Do not overwrite the original candidate. Frame-accurate boundaries must be measured against the actual MP4 streams and not inferred from filesystem timestamps.
+- Keep this self-host/desktop path separate from managed cloud job ownership until Community Highlights has a deliberate cloud credential/media ownership design.
+
+No renderer/job integration or dashboard UI change is made in this architecture review. First complete the packaged-Windows persistence acceptance described above; then implement and test the trim contract and shared job-creation seam before exposing a candidate handoff action.
