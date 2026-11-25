@@ -698,3 +698,26 @@ The user chose to keep one shared OAuth configuration for development, friend te
 - The backend sends it only when configured, on both the authorization-code and refresh-token grant requests. PKCE S256, random state, loopback-only binding, exact redirect URI binding, narrow YouTube read scope, user consent, and Windows Credential Manager storage for per-user access/refresh tokens remain unchanged.
 - Automated tests cover form-body inclusion, omission when unset, no persistence alongside user tokens, and diagnostic redaction. CI cannot prove the Google authorization server will now accept the live exchange; packaged Windows sign-in and refresh remain mandatory acceptance tests.
 - Resolution recorded after the live retest: the generated credential for the matching Google Desktop client was added as the repository Actions Variable and included in the packaged payload. The user subsequently confirmed that the installed application could sign in and disconnect successfully. The earlier missing-client-credential failure is resolved; a later chat/preview acceptance remains separate from OAuth acceptance.
+
+
+
+## 2026-11-25 user acceptance update — YouTube monitoring and trigger-to-preview
+
+The user has now completed a packaged-Windows YouTube acceptance pass on the active branch:
+
+- Google account connection was successful.
+- YouTube chat messages appeared in the monitor.
+- Trigger detection was verified with a one-message threshold and one unique viewer.
+- A configured trigger phrase produced a highlight candidate.
+- The extracted candidate video played in the inline preview.
+- The earlier YouTube monitoring failure was traced to the Google account being banned from YouTube viewing/chat; changing to an eligible account resolved it. The diagnostic output helped identify the account issue.
+
+This confirms the YouTube monitor → trigger → rolling capture → candidate extraction → inline preview path for the tested account/stream. It does not establish provider-wide behavior, exact frame-accurate boundaries, long-running recovery, or Twitch functionality. Twitch is intentionally left untested for now.
+
+### Newly identified prerequisite for trigger-window merging
+
+The rolling capture originally represented protected segments as a set. Two concurrent candidate workers could pin the same file, then the first worker to finish could remove the shared pin while the second worker was still reading it. The rolling capture now reference-counts each segment pin per owner while charging the byte budget only once per physical file. A segment becomes eligible for pruning only after its final owner releases it. Targeted tests cover overlapping owners, staggered release, and non-duplicated byte accounting.
+
+### Next planned implementation step
+
+Complete M3 by merging overlapping/nearby trigger windows into one candidate. The merge must preserve the exact union of requested media intervals, protect newly included segments before they can be pruned, have a bounded merge/maximum-duration policy, and seal the candidate atomically before assembly. Only after that should the feature take on durable candidate/settings persistence and restart reconciliation, then M4 trim/analysis/renderer handoff.

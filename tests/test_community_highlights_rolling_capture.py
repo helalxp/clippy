@@ -324,3 +324,53 @@ def test_pruning_serializes_with_concurrent_segment_pinning(tmp_path, monkeypatc
     assert not pin_worker.is_alive()
     assert not stale.exists()
     assert pin_result == []
+
+
+
+def test_overlapping_candidate_pins_are_reference_counted_until_last_release(tmp_path):
+    now = [1000.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, retention_seconds=20),
+        clock=lambda: now[0],
+    )
+    shared = tmp_path / "segment-00000000.ts"
+    newest = tmp_path / "segment-00000001.ts"
+    shared.write_bytes(b"shared candidate footage")
+    newest.write_bytes(b"newest")
+    import os
+    os.utime(shared, (900, 900))
+    os.utime(newest, (995, 995))
+
+    first_owner = capture.protect_segments([shared])
+    second_owner = capture.protect_segments([shared, shared])
+
+    assert first_owner == [shared.resolve()]
+    assert second_owner == [shared.resolve()]
+    assert capture._protected_segments[shared.resolve()] == 2
+
+    capture.release_segments(first_owner)
+    assert capture._protected_segments[shared.resolve()] == 1
+    capture._prune_segments()
+    assert shared.exists(), "the second candidate still owns a pin"
+
+    capture.release_segments(second_owner)
+    assert shared.resolve() not in capture._protected_segments
+    capture._prune_segments()
+    assert not shared.exists(), "the file becomes prunable after its final owner releases it"
+
+
+def test_pin_budget_counts_shared_physical_segments_once(tmp_path):
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, max_buffer_size_mb=16),
+    )
+    shared = tmp_path / "segment-00000000.ts"
+    with shared.open("wb") as handle:
+        handle.truncate(8 * 1024 * 1024)
+
+    first = capture.protect_segments([shared])
+    second = capture.protect_segments([shared])
+
+    assert first == second == [shared.resolve()]
+    assert capture._protected_segments[shared.resolve()] == 2

@@ -105,7 +105,9 @@ class RollingCapture:
         self._stop_requested = threading.Event()
         self._started_at: float | None = None
         self._stopped = False
-        self._protected_segments: set[Path] = set()
+        # Each candidate owns one pin per segment. Reference counts prevent
+        # one overlapping candidate from unpinning footage another still reads.
+        self._protected_segments: dict[Path, int] = {}
         self._lock = threading.RLock()
 
     @property
@@ -155,34 +157,48 @@ class RollingCapture:
         return records
 
     def protect_segments(self, segments: list[Path]) -> list[Path]:
-        """Pin existing segments so retention cannot delete them during extraction."""
-        protected: list[Path] = []
+        """Acquire one pin per unique existing segment for this extraction owner."""
         root = self.segment_dir.resolve()
         with self._lock:
-            current = set(self._protected_segments)
-            additions: list[Path] = []
+            requested: list[Path] = []
+            seen: set[Path] = set()
             for candidate in segments:
                 path = Path(candidate).resolve()
+                if path in seen:
+                    continue
+                seen.add(path)
                 if path.parent != root or path.suffix.lower() != ".ts" or not path.is_file():
                     continue
-                if path not in current and path not in additions:
-                    additions.append(path)
-            protected_bytes = sum(path.stat().st_size for path in current if path.is_file())
+                requested.append(path)
+
+            current = set(self._protected_segments)
+            additions = [path for path in requested if path not in current]
+            protected_bytes = sum(
+                path.stat().st_size for path in current if path.is_file()
+            )
             requested_bytes = sum(path.stat().st_size for path in additions)
             budget = self.config.max_buffer_size_mb * 1024 * 1024
             if protected_bytes + requested_bytes > budget:
                 raise RollingCaptureError(
                     "The requested highlight window exceeds the configured protected-segment storage budget."
                 )
-            self._protected_segments.update(additions)
-            protected = [path for path in segments if Path(path).resolve() in self._protected_segments]
-        return protected
+
+            # Count each successful protect call as an independent owner. The
+            # byte budget still counts each physical file only once.
+            for path in requested:
+                self._protected_segments[path] = self._protected_segments.get(path, 0) + 1
+            return requested
 
     def release_segments(self, segments: list[Path]) -> None:
-        """Release previously pinned segments back to normal retention."""
+        """Release this owner's pins without unpinning concurrent readers."""
         with self._lock:
             for candidate in segments:
-                self._protected_segments.discard(Path(candidate).resolve())
+                path = Path(candidate).resolve()
+                owners = self._protected_segments.get(path, 0)
+                if owners <= 1:
+                    self._protected_segments.pop(path, None)
+                else:
+                    self._protected_segments[path] = owners - 1
 
     def _prune_segments(self) -> None:
         """Enforce age and byte budgets without racing a concurrent pin operation."""
