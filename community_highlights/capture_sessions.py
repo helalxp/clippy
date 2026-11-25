@@ -7,6 +7,7 @@ status reporting to the API.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import re
@@ -22,11 +23,14 @@ from .rolling_capture import RollingCapture, RollingCaptureConfig, RollingCaptur
 from .extraction import assemble_segments
 from .timeline import segment_wall_interval, select_segments_for_interval, validate_contiguous_interval
 from .urls import parse_stream_url
+from .state_store import StateStoreError, get_state_store
 
 
 MAX_CAPTURE_SESSIONS = 2
 STOP_JOIN_SECONDS = 45
 MAX_HIGHLIGHT_CANDIDATES = 20
+_LOG = logging.getLogger(__name__)
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
 @dataclass(frozen=True)
@@ -124,21 +128,262 @@ class CaptureSessionManager:
         capture_factory: Callable[..., Any] = RollingCapture,
         output_root: Path | None = None,
         max_sessions: int = MAX_CAPTURE_SESSIONS,
+        state_store=None,
     ) -> None:
         if not isinstance(max_sessions, int) or max_sessions < 1:
             raise ValueError("max_sessions must be a positive integer.")
         self._capture_factory = capture_factory
-        self._output_root = output_root or Path(
-            os.environ.get("CLIPPY_DATA_DIR", os.environ.get("OUTPUT_DIR", "output"))
-        ) / "community-highlights"
+        self._custom_output_root = output_root is not None
+        self._output_root = Path(output_root).expanduser().resolve() if output_root is not None else None
+        self._state_store = state_store
+        self._use_default_state_store = state_store is None and output_root is None
         self._max_sessions = max_sessions
         self._sessions: dict[str, CaptureSession] = {}
         self._candidates: dict[str, HighlightCandidate] = {}
         self._lock = threading.RLock()
+        self._restored = False
+
+    def _output_root_path(self) -> Path:
+        if self._output_root is None:
+            base = os.environ.get("CLIPPY_DATA_DIR", os.environ.get("OUTPUT_DIR", "output"))
+            self._output_root = (Path(base).expanduser() / "community-highlights").resolve()
+        return self._output_root
+
+    def _get_state_store(self):
+        if self._state_store is not None:
+            return self._state_store
+        if self._use_default_state_store:
+            self._state_store = get_state_store()
+        return self._state_store
+
+    @staticmethod
+    def _parse_saved_datetime(value: Any) -> datetime | None:
+        if not isinstance(value, str) or len(value) > 80:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+
+    def _persist_locked(self, *, strict: bool = False) -> None:
+        store = self._get_state_store()
+        if store is None:
+            return
+        sessions = [
+            {
+                "session_id": item.session_id,
+                "provider": item.provider.value,
+                "stream_id": item.stream_id,
+                "started_at": item.started_at.isoformat(),
+                "status": item.status,
+                "error": item.error,
+                "segment_seconds": item.config.segment_seconds,
+                "retention_seconds": item.config.retention_seconds,
+                "max_buffer_size_mb": item.config.max_buffer_size_mb,
+                "quality": item.config.quality,
+            }
+            for item in self._sessions.values()
+        ]
+        candidates = [
+            {
+                "candidate_id": item.candidate_id,
+                "capture_session_id": item.capture_session_id,
+                "triggered_at": item.triggered_at.isoformat(),
+                "pre_seconds": item.pre_seconds,
+                "post_seconds": item.post_seconds,
+                "reason": item.reason,
+                "status": item.status,
+                "review_status": item.review_status,
+                "error": item.error,
+                "segment_count": item.segment_count,
+                "trigger_count": item.trigger_count,
+            }
+            for item in self._candidates.values()
+        ]
+        try:
+            store.update_sections(capture_sessions=sessions, candidates=candidates)
+        except StateStoreError as error:
+            if strict:
+                raise
+            _LOG.warning(
+                "Community Highlights state snapshot could not be saved (error_type=%s)",
+                type(error).__name__,
+            )
+
+    def restore(self) -> None:
+        """Restore durable metadata and mark non-resumable work interrupted."""
+        with self._lock:
+            if self._restored:
+                return
+            if not self._custom_output_root:
+                self._output_root = None
+            store = self._get_state_store()
+            if store is None:
+                self._restored = True
+                return
+            state = store.read()
+            output_root = self._output_root_path().resolve()
+            restored_sessions: dict[str, CaptureSession] = {}
+            restored_candidates: dict[str, HighlightCandidate] = {}
+
+            for row in state.get("capture_sessions", [])[-128:]:
+                if not isinstance(row, dict):
+                    continue
+                session_id = row.get("session_id")
+                stream_id = row.get("stream_id")
+                if (
+                    not isinstance(session_id, str)
+                    or not _SESSION_ID_RE.fullmatch(session_id)
+                    or not isinstance(stream_id, str)
+                    or not stream_id
+                    or len(stream_id) > 256
+                    or any(ord(char) < 32 for char in stream_id)
+                ):
+                    continue
+                try:
+                    provider = ChatProvider(row.get("provider"))
+                except (TypeError, ValueError):
+                    continue
+                output_dir = output_root / session_id
+                if output_dir.is_symlink() or output_dir.resolve().parent != output_root:
+                    _LOG.warning("Skipped an unsafe Community Highlights capture directory during recovery.")
+                    continue
+
+                try:
+                    settings = CaptureSettings(
+                        segment_seconds=row.get("segment_seconds", 4),
+                        retention_seconds=row.get("retention_seconds", 180),
+                        max_buffer_size_mb=row.get("max_buffer_size_mb", 512),
+                        quality=row.get("quality", "best"),
+                    )
+                    config = settings.snapshot(output_dir)
+                except (TypeError, ValueError):
+                    config = CaptureSettings().snapshot(output_dir)
+                    saved_error = "Saved capture settings were invalid; start a new rolling buffer."
+                else:
+                    saved_error = row.get("error") if isinstance(row.get("error"), str) else None
+
+                started_at = self._parse_saved_datetime(row.get("started_at")) or datetime.now(timezone.utc)
+                saved_status = row.get("status")
+                if saved_status in {"starting", "recording", "stopping"}:
+                    status = "interrupted"
+                    error = "Clippy restarted while this rolling buffer was active. Start a new capture to continue."
+                elif saved_status in {"stopped", "ended", "error", "interrupted"}:
+                    status = saved_status
+                    error = saved_error
+                else:
+                    status = "error"
+                    error = "The saved capture status was invalid and could not be resumed."
+
+                restored_sessions[session_id] = CaptureSession(
+                    session_id=session_id,
+                    provider=provider,
+                    stream_id=stream_id,
+                    config=config,
+                    capture=None,
+                    started_at=started_at,
+                    status=status,
+                    error=error,
+                )
+
+            for row in state.get("candidates", [])[-MAX_HIGHLIGHT_CANDIDATES:]:
+                if not isinstance(row, dict):
+                    continue
+                candidate_id = row.get("candidate_id")
+                session_id = row.get("capture_session_id")
+                triggered_at = self._parse_saved_datetime(row.get("triggered_at"))
+                if (
+                    not isinstance(candidate_id, str)
+                    or not _SESSION_ID_RE.fullmatch(candidate_id)
+                    or not isinstance(session_id, str)
+                    or not _SESSION_ID_RE.fullmatch(session_id)
+                    or triggered_at is None
+                ):
+                    continue
+                reason = row.get("reason")
+                if not isinstance(reason, str) or not reason or len(reason) > 40:
+                    reason = "recovered"
+                review_status = row.get("review_status")
+                if review_status not in {"pending", "approved", "rejected"}:
+                    review_status = "pending"
+                saved_status = row.get("status")
+                error = row.get("error") if isinstance(row.get("error"), str) else None
+                candidate_dir = output_root / session_id
+                highlights_dir = candidate_dir / "highlights"
+                media_path = highlights_dir / f"{candidate_id}.mp4"
+                safe_media = (
+                    not candidate_dir.is_symlink()
+                    and not highlights_dir.is_symlink()
+                    and not media_path.is_symlink()
+                    and media_path.is_file()
+                    and media_path.stat().st_size > 0
+                    and media_path.resolve().parent == highlights_dir.resolve()
+                    and highlights_dir.resolve().parent == candidate_dir.resolve()
+                    and candidate_dir.resolve().parent == output_root
+                )
+                output_path = media_path if safe_media else None
+                if saved_status in {"capturing", "assembling"}:
+                    status = "error"
+                    error = "Clippy restarted before this highlight finished. The partial media was preserved for safe cleanup."
+                elif saved_status == "ready" and output_path is None and review_status != "rejected":
+                    status = "error"
+                    error = "The saved highlight video is missing or failed its storage safety check."
+                elif saved_status in {"ready", "error"}:
+                    status = saved_status
+                else:
+                    status = "error"
+                    error = "The saved highlight status was invalid and could not be resumed."
+
+                pre_seconds = row.get("pre_seconds", 0)
+                post_seconds = row.get("post_seconds", 0)
+                segment_count = row.get("segment_count", 0)
+                trigger_count = row.get("trigger_count", 1)
+                if type(pre_seconds) is not int or not 0 <= pre_seconds <= 300:
+                    pre_seconds = 0
+                if type(post_seconds) is not int or not 0 <= post_seconds <= 300:
+                    post_seconds = 0
+                if type(segment_count) is not int or segment_count < 0:
+                    segment_count = 0
+                if type(trigger_count) is not int or trigger_count < 1:
+                    trigger_count = 1
+                restored_candidates[candidate_id] = HighlightCandidate(
+                    candidate_id=candidate_id,
+                    capture_session_id=session_id,
+                    triggered_at=triggered_at,
+                    pre_seconds=pre_seconds,
+                    post_seconds=post_seconds,
+                    reason=reason,
+                    status=status,
+                    review_status=review_status,
+                    error=error,
+                    output_path=output_path,
+                    segment_count=segment_count,
+                    trigger_count=trigger_count,
+                )
+
+            self._sessions = restored_sessions
+            self._candidates = restored_candidates
+            self._restored = True
+            self._persist_locked()
+
+            # No capture or candidate worker survives a backend restart. The
+            # rolling source ring is therefore disposable; completed candidate
+            # MP4s and interrupted partial MP4s remain available for review/delete.
+            interrupted = [
+                item for item in self._sessions.values()
+                if item.status == "interrupted"
+            ]
+
+        for session in interrupted:
+            self._cleanup_rolling_segments_if_finished(session)
 
     def start(
         self, stream_url: str, settings: CaptureSettings | None = None
     ) -> dict[str, Any]:
+        self.restore()
         reference = parse_stream_url(stream_url)
         settings = settings or CaptureSettings()
         with self._lock:
@@ -161,7 +406,7 @@ class CaptureSessionManager:
                 raise ValueError(f"Clippy can record up to {self._max_sessions} live streams at a time.")
 
             session_id = secrets.token_urlsafe(18)
-            output_dir = (self._output_root / session_id).resolve()
+            output_dir = (self._output_root_path() / session_id).resolve()
             config = settings.snapshot(output_dir)
             capture = self._capture_factory(stream_url, config)
             session = CaptureSession(
@@ -180,9 +425,11 @@ class CaptureSessionManager:
             )
             session.worker = worker
             try:
+                self._persist_locked(strict=True)
                 worker.start()
             except Exception:
                 self._sessions.pop(session_id, None)
+                self._persist_locked()
                 raise
             return session.snapshot()
 
@@ -192,18 +439,22 @@ class CaptureSessionManager:
                 with self._lock:
                     if not session.stop_event.is_set():
                         session.status = "recording"
+                        self._persist_locked()
 
             session.capture.run(session.stop_event, on_started=mark_recording)
             with self._lock:
                 session.status = "stopped" if session.stop_event.is_set() else "ended"
+                self._persist_locked()
         except RollingCaptureError as error:
             with self._lock:
                 session.error = str(error)
                 session.status = "error"
+                self._persist_locked()
         except Exception:
             with self._lock:
                 session.error = "Live capture failed unexpectedly. Check the stream and FFmpeg installation."
                 session.status = "error"
+                self._persist_locked()
         finally:
             # A naturally ended/failed source cannot provide any more post-trigger
             # footage. Wake candidate workers so they fail promptly and release
@@ -219,7 +470,7 @@ class CaptureSessionManager:
         FFmpeg index are removed.
         """
         with self._lock:
-            if session.status not in {"stopped", "ended", "error"}:
+            if session.status not in {"stopped", "ended", "error", "interrupted"}:
                 return
             current = threading.current_thread()
             capture_worker = session.worker
@@ -271,17 +522,19 @@ class CaptureSessionManager:
             pass
 
     def get(self, session_id: str) -> dict[str, Any] | None:
+        self.restore()
         with self._lock:
             session = self._sessions.get(session_id)
             return session.snapshot() if session else None
 
     def list(self) -> list[dict[str, Any]]:
+        self.restore()
         with self._lock:
             return [session.snapshot() for session in self._sessions.values()]
 
     def _prune_finished_locked(self) -> None:
         for session_id, session in list(self._sessions.items()):
-            if session.status in {"stopped", "ended", "error"}:
+            if session.status in {"stopped", "ended", "error", "interrupted"}:
                 worker = session.worker
                 if worker is None or not worker.is_alive():
                     # Retain terminal sessions for inspection until capacity is
@@ -322,6 +575,7 @@ class CaptureSessionManager:
         post_seconds: int = 45,
         reason: str = "chat_trigger",
     ) -> dict[str, Any] | None:
+        self.restore()
         if triggered_at.tzinfo is None or triggered_at.utcoffset() is None:
             raise ValueError("Trigger timestamp must be timezone-aware.")
         if not 0 <= pre_seconds <= 300 or not 0 <= post_seconds <= 300:
@@ -383,6 +637,13 @@ class CaptureSessionManager:
                 _, candidate, merged_start, merged_end = min(
                     mergeable, key=lambda item: (item[0], item[1].triggered_at)
                 )
+                old_window_start = candidate.window_start
+                old_window_end = candidate.window_end
+                old_pre_seconds = candidate.pre_seconds
+                old_post_seconds = candidate.post_seconds
+                old_merge_until = candidate.merge_until
+                old_trigger_count = candidate.trigger_count
+                old_pin_count = len(candidate.protected_segments)
                 # Pin the exact expanded union before publishing it. Pruning
                 # uses the same RollingCapture lock, so newly included media
                 # cannot disappear between selection and protection.
@@ -408,6 +669,19 @@ class CaptureSessionManager:
                     merged_end + timedelta(seconds=merge_grace),
                 )
                 candidate.trigger_count += 1
+                try:
+                    self._persist_locked(strict=True)
+                except Exception:
+                    candidate.window_start = old_window_start
+                    candidate.window_end = old_window_end
+                    candidate.pre_seconds = old_pre_seconds
+                    candidate.post_seconds = old_post_seconds
+                    candidate.merge_until = old_merge_until
+                    candidate.trigger_count = old_trigger_count
+                    new_pins = candidate.protected_segments[old_pin_count:]
+                    del candidate.protected_segments[old_pin_count:]
+                    session.capture.release_segments(new_pins)
+                    raise
                 return candidate.snapshot()
 
             if len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES:
@@ -439,12 +713,14 @@ class CaptureSessionManager:
             )
             candidate.worker = worker
             try:
+                self._persist_locked(strict=True)
                 worker.start()
             except Exception:
                 self._candidates.pop(candidate_id, None)
                 protected = list(candidate.protected_segments)
                 candidate.protected_segments.clear()
                 session.capture.release_segments(protected)
+                self._persist_locked()
                 raise
             return candidate.snapshot()
 
@@ -494,6 +770,7 @@ class CaptureSessionManager:
                         # trigger can extend the window before this lock is
                         # acquired, but never while FFmpeg is assembling it.
                         candidate.status = "assembling"
+                        self._persist_locked()
                         sealed_start = window_start
                         sealed_end = window_end
                         indexed = current_index
@@ -524,14 +801,17 @@ class CaptureSessionManager:
                 candidate.output_path = output_path
                 candidate.segment_count = len(records)
                 candidate.status = "ready"
+                self._persist_locked()
         except (RollingCaptureError, ValueError, OSError) as error:
             with self._lock:
                 candidate.error = str(error)
                 candidate.status = "error"
+                self._persist_locked()
         except Exception:
             with self._lock:
                 candidate.error = "Clippy could not finish this highlight. Check the capture and FFmpeg logs."
                 candidate.status = "error"
+                self._persist_locked()
         finally:
             with self._lock:
                 protected = list(candidate.protected_segments)
@@ -540,6 +820,7 @@ class CaptureSessionManager:
             self._cleanup_rolling_segments_if_finished(session)
 
     def list_candidates(self, capture_session_id: str | None = None) -> list[dict[str, Any]]:
+        self.restore()
         with self._lock:
             items = list(self._candidates.values())
             if capture_session_id is not None:
@@ -563,6 +844,7 @@ class CaptureSessionManager:
                     candidate.output_path = None
                 except OSError:
                     candidate.error = "Rejected, but Windows could not remove the file because it is still in use."
+            self._persist_locked(strict=True)
             return candidate.snapshot()
 
     def delete_candidate(self, candidate_id: str) -> bool:
@@ -584,7 +866,7 @@ class CaptureSessionManager:
 
             output_path = candidate.output_path
             if output_path is not None:
-                root = self._output_root.resolve()
+                root = self._output_root_path().resolve()
                 expected_parent = root / candidate.capture_session_id / "highlights"
                 expected_file = expected_parent / f"{candidate.candidate_id}.mp4"
                 actual_file = Path(os.path.abspath(output_path))
@@ -598,9 +880,11 @@ class CaptureSessionManager:
                 output_path.unlink(missing_ok=True)
 
             del self._candidates[candidate_id]
+            self._persist_locked(strict=True)
             return True
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
+        self.restore()
         with self._lock:
             candidate = self._candidates.get(candidate_id)
             if candidate is None:
@@ -613,9 +897,13 @@ class CaptureSessionManager:
             session = self._sessions.get(session_id)
             if session is None:
                 return False
-            if session.status not in {"stopped", "ended", "error"}:
+            if session.status == "interrupted":
+                session.status = "stopped"
+                self._persist_locked()
+            elif session.status not in {"stopped", "ended", "error"}:
                 session.status = "stopping"
                 session.stop_event.set()
+                self._persist_locked()
                 request_stop = getattr(session.capture, "request_stop", None)
                 if callable(request_stop):
                     request_stop()
@@ -637,6 +925,7 @@ class CaptureSessionManager:
                 session.error = "Capture did not stop within the shutdown timeout."
             elif session.status == "stopping":
                 session.status = "stopped"
+            self._persist_locked()
         self._cleanup_rolling_segments_if_finished(session)
         return True
 
@@ -644,9 +933,10 @@ class CaptureSessionManager:
         with self._lock:
             sessions = list(self._sessions.values())
             for session in sessions:
-                if session.status not in {"stopped", "ended", "error"}:
+                if session.status not in {"stopped", "ended", "error", "interrupted"}:
                     session.status = "stopping"
                     session.stop_event.set()
+                    self._persist_locked()
                     request_stop = getattr(session.capture, "request_stop", None)
                     if callable(request_stop):
                         request_stop()
@@ -667,6 +957,7 @@ class CaptureSessionManager:
                     session.error = "Capture did not stop within the shutdown timeout."
                 elif session.status == "stopping":
                     session.status = "stopped"
+            self._persist_locked()
         for session in sessions:
             self._cleanup_rolling_segments_if_finished(session)
 
