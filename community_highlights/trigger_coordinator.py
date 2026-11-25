@@ -8,6 +8,7 @@ from typing import Any
 from .capture_sessions import capture_sessions
 from .models import ChatMessage
 from .state_store import get_state_store
+from .diagnostics import log_event
 from .triggers import TriggerEngine, TriggerRule
 
 
@@ -183,6 +184,13 @@ class TriggerCoordinator:
                     match.provider,
                     match.reason,
                     type(error).__name__,
+                )
+                log_event(
+                    "trigger.capture.failed",
+                    level=logging.WARNING,
+                    provider=match.provider,
+                    reason=match.reason,
+                    error_type=type(error).__name__,
                 )
 
 
