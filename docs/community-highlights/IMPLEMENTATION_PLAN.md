@@ -782,3 +782,64 @@ The post-persistence review hardened the candidate lifecycle without adding a da
 Regression tests were added for rejected previews, failed ready-state writes, deletion rollback and restart recovery, natural-end concurrent cleanup, actual merged-segment assembly, trigger storage diagnostics, and the default data-path symlink check. These tests must still run on the PR branch before merge.
 
 Remaining independent acceptance items: a candidate MP4 age/byte retention policy, measured Windows segment-boundary drift (the current wall-clock estimate is not frame-accurate), packaged restart/media playback, and the focused Twitch live smoke test once the account is connected. No renderer handoff is included in this stabilization pass.
+
+## 2026-11-25 M4 integration-first implementation plan
+
+**Decision:** Each approved Community Highlights candidate targets one finished vertical Short. This is a target of one, using the existing selector's normal best-effort contract; the integration must not promise an exact clip count when the source cannot produce a valid selection.
+
+The user has explicitly chosen to proceed with the essential integration before every earlier Community Highlights acceptance item is complete. The remaining capture/OAuth/provider issues stay visible as separate follow-up work; they are not silently marked complete or pulled into this implementation.
+
+### Product flow
+
+1. Continue using the existing chat monitor, rolling capture, trigger detection, candidate assembly, and preview.
+2. Replace the approval action with **Approve & Generate**. Reject remains a separate review action.
+3. Require an explicit content-rights acknowledgement for the generation request, consistent with the existing `/api/process` attestation.
+4. On approval, validate the completed candidate and atomically claim one generation attempt. A repeated request for an active or completed attempt returns the same normal Clippy job ID. A failed attempt may be retried.
+5. Stage a hardlink or copy of the candidate into the existing upload/source area under the new job UUID. Never move, overwrite, or consume the candidate MP4.
+6. Submit the candidate through the normal `POST /api/process` path, using the standard job directory, owner/attestation, Local Library, resume manifest, queue, worker, and result metadata. Do not create a second renderer, job queue, or generation pipeline.
+7. Set the existing generation target to one clip and the output format to vertical. Retain the ordinary pipeline's current transcription, selection, caption, hook, render, and delivery behavior rather than introducing a Community Highlights-specific renderer path.
+8. Show queued/processing/failed/completed state on the candidate. A completed job opens through the existing dashboard job poller and ordinary ResultCard/publishing workflow. Generation never automatically publishes.
+
+### State and failure contract
+
+- Keep review state separate from generation state. Persist `generation_status`, `generation_job_id`, and a bounded, safe `generation_error` with the candidate metadata.
+- Generation states: `not_started`, `staging`, `queued`, `processing`, `completed`, and `failed`.
+- Persist the candidate-to-job association before enqueue. Persist the association in the normal resume manifest as well, so startup can reconcile candidate state with the existing job.
+- A restart before manifest creation makes the stale `staging` attempt retryable. A restart after manifest creation relies on the normal job-resume mechanism. A completed job recovered from disk reconciles to `completed`.
+- A failed attempt leaves the approved candidate MP4 intact and may be retried with a new job ID. Repeated active/completed requests must never enqueue duplicate jobs.
+- Do not permit rejecting or deleting a candidate while its source is being staged or its generation job is active.
+- Keep this first handoff local desktop/self-host only. Managed cloud support requires a separate credential, media-ownership, and entitlement design.
+- Validate the candidate file through the existing capture manager's trusted-root/symlink checks; stage only a regular, non-empty MP4. Never trust a caller-supplied path.
+- Diagnostics must include UTC timestamps and safe event identifiers, but never provider tokens, OAuth codes, chat message contents, full stream URLs, or raw opaque IDs.
+
+### Implementation slices
+
+**M4.1 — Backend source handoff**
+- Extend the existing `/api/process` input contract with a Community Highlights candidate source.
+- Add an atomic candidate generation claim and durable generation state.
+- Stage the source without consuming the original, enforce the normal input size/duration checks, and reuse the existing queue/job setup.
+- Carry candidate linkage in the resume manifest; update generation status at queue, processing, completion, failure, and restart reconciliation boundaries.
+- Add focused tests for candidate validation, idempotency, source preservation, manifest/restart linkage, failure retry, and one-clip/vertical job options.
+
+**M4.2 — Dashboard flow**
+- Change approval to **Approve & Generate**, with an explicit rights confirmation.
+- Display generation state and a retry action only after failure.
+- Open completed output through the normal job status poller and ResultCard. Do not add a second results/editor/publishing experience.
+
+**M4.3 — Timestamped diagnostics**
+- Add structured UTC-timestamped Community Highlights backend events for capture start/stop/failure, stream resolution, FFmpeg lifecycle, chat connect/reconnect/terminal errors, trigger/candidate assembly, review/generation transitions, persistence failures, OAuth terminal outcomes, and handoff/job reconciliation.
+- Redact credentials, raw channel/stream identifiers, chat text, and opaque IDs. Log failure types and stable hashed references only.
+
+### Verification and explicitly deferred acceptance
+
+Automated tests must cover the integration contract before it is considered stable. Packaged Windows end-to-end acceptance follows when the installer is available: generate one real YouTube candidate, use Approve & Generate, verify one ordinary vertical ResultCard job, inspect the final MP4/captions/metadata, retry a deliberately failed attempt, and restart during and after generation.
+
+The following are **not** claimed complete by this integration:
+- Twitch live authorization/chat/capture acceptance.
+- Long-running provider reconnect behavior.
+- Packaged Windows restart/media playback acceptance for the existing capture feature.
+- Measured frame-accurate capture-window boundaries; current wall-clock segment estimates remain approximate.
+- Candidate MP4 age/byte retention policy and resulting disk-budget measurements.
+- Full managed-cloud integration.
+- Exact-one output guarantee; one is the selector target, while the normal selector may return fewer when it cannot find a valid clip.
+
