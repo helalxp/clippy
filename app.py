@@ -38,7 +38,10 @@ import watermarked
 import media_auth
 import reference_templates
 from platform_compat import job_subprocess_options
-from community_highlights.api import router as community_highlights_router
+from community_highlights.api import (
+    router as community_highlights_router,
+    restore_community_highlights_state,
+)
 
 load_dotenv()
 
@@ -2507,6 +2510,9 @@ def _purge_local_jobs_for_user(user_id) -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Restore Community Highlights metadata using this app's actual lifespan.
+    # Legacy router startup events are not run when FastAPI receives a custom lifespan.
+    restore_community_highlights_state()
     # Rehydrate finished jobs from disk before serving (survives restarts).
     _recover_jobs_from_disk()
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their

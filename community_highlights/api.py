@@ -87,8 +87,7 @@ def connection_status(store_factory=None) -> dict:
     }
 
 
-@router.on_event("startup")
-async def restore_community_highlights_state():
+def restore_community_highlights_state() -> None:
     """Restore durable settings and candidate metadata before serving requests."""
     # An unsupported newer schema or unavailable data directory must fail
     # closed rather than silently starting an empty feature and overwriting it.
