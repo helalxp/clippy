@@ -201,3 +201,44 @@ def test_rejected_candidate_media_is_not_deleted_when_review_state_cannot_be_sav
     assert restored is not None
     assert restored[0]["review_status"] == "pending"
     assert video.read_bytes() == b"approved-candidate"
+
+
+
+def test_lifespan_restore_helper_restores_settings_before_capture_metadata(monkeypatch):
+    from community_highlights import api
+
+    calls = []
+    monkeypatch.setattr(api.trigger_coordinator, "restore", lambda: calls.append("settings"))
+    monkeypatch.setattr(api.capture_sessions, "restore", lambda: calls.append("capture"))
+
+    api.restore_community_highlights_state()
+
+    assert calls == ["settings", "capture"]
+
+
+def test_lifespan_shutdown_helper_stops_capture_then_chat(monkeypatch):
+    from community_highlights import api
+
+    calls = []
+
+    async def stop_captures():
+        calls.append("captures")
+
+    async def list_chats():
+        calls.append("list_chats")
+        return [{"session_id": "chat-session"}]
+
+    async def stop_chat(session_id):
+        calls.append(("stop_chat", session_id))
+
+    monkeypatch.setattr(api.capture_sessions, "stop_all", stop_captures)
+    monkeypatch.setattr(api.chat_sessions, "list", list_chats)
+    monkeypatch.setattr(api.chat_sessions, "stop", stop_chat)
+
+    asyncio.run(api.stop_community_highlights_workers())
+
+    assert calls == [
+        "captures",
+        "list_chats",
+        ("stop_chat", "chat-session"),
+    ]
