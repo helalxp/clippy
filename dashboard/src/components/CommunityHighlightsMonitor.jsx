@@ -477,6 +477,11 @@ export default function CommunityHighlightsMonitor({ connections }) {
                 </div>
                 <p className="text-xs text-muted mt-1 break-all">{session.stream_id}</p>
                 {session.error && <p className="text-xs text-warn mt-2">{session.error}</p>}
+                {session.diagnostic && (
+                  <p className="text-[11px] text-muted mt-1 break-words">
+                    API diagnostic: {session.diagnostic.operation} · HTTP {session.diagnostic.http_status} · reason {session.diagnostic.reason}
+                  </p>
+                )}
               </div>
               <button type="button" onClick={() => stopMonitoring(session.session_id)}
                 disabled={!!sessionActionBusy}

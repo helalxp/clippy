@@ -434,3 +434,75 @@ def test_youtube_rate_limit_retries_the_same_chat_without_resolving_video_again(
         assert [message.text for message in session.messages] == ["hello"]
 
     asyncio.run(scenario())
+
+
+
+def test_youtube_api_rejection_exposes_safe_endpoint_and_reason_diagnostic(monkeypatch, caplog):
+    async def scenario():
+        import httpx
+        import logging
+        from community_highlights import chat as chat_module
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, url, **_kwargs):
+                if url.endswith("/videos"):
+                    return httpx.Response(200, json={
+                        "items": [{
+                            "liveStreamingDetails": {"activeLiveChatId": "private-chat-id"},
+                        }],
+                    })
+                return httpx.Response(403, json={
+                    "error": {
+                        "code": 403,
+                        "status": "PERMISSION_DENIED",
+                        "message": "private provider response refresh_token=must-not-escape",
+                        "errors": [{
+                            "reason": "accessNotConfigured",
+                            "message": "private detail containing the stream identifier",
+                        }],
+                    },
+                })
+
+        async def token_provider(*_args, **_kwargs):
+            return "test-access-token"
+
+        monkeypatch.setattr(chat_module.httpx, "AsyncClient", FakeClient)
+        session = ChatSession(
+            session_id="youtube-diagnostic",
+            reference=StreamReference(ChatProvider.YOUTUBE, "private-video-id"),
+        )
+        manager = ChatSessionManager(token_provider=token_provider)
+
+        caplog.set_level(logging.WARNING, logger="community_highlights.chat")
+        await manager._run(session)
+
+        assert session.status == "error"
+        assert session.error == (
+            "YouTube rejected this live-chat request. "
+            "Check that the video is live and chat is enabled."
+        )
+        assert session.diagnostic == {
+            "operation": "liveChatMessages.list",
+            "http_status": 403,
+            "reason": "accessNotConfigured",
+        }
+        assert session.snapshot()["diagnostic"] == session.diagnostic
+        assert "operation=liveChatMessages.list" in caplog.text
+        assert "http_status=403" in caplog.text
+        assert "reason=accessNotConfigured" in caplog.text
+        assert "refresh_token" not in caplog.text
+        assert "test-access-token" not in caplog.text
+        assert "private-chat-id" not in caplog.text
+        assert "private-video-id" not in caplog.text
+        assert "private provider response" not in caplog.text
+
+    asyncio.run(scenario())

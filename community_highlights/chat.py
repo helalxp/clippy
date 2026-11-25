@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from collections import deque
 from dataclasses import dataclass, field
@@ -20,14 +21,22 @@ YOUTUBE_API = "https://www.googleapis.com/youtube/v3"
 TWITCH_IRC = "wss://irc-ws.chat.twitch.tv:443"
 MAX_CHAT_SESSIONS = 2
 MAX_SESSION_MESSAGES = 250
+_LOG = logging.getLogger(__name__)
 
 
 class ChatTerminalError(RuntimeError):
     """A provider refusal that will not be repaired by reconnecting the same grant."""
 
-    def __init__(self, message: str, *, status: str = "error") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: str = "error",
+        diagnostic: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status = status
+        self.diagnostic = diagnostic
 
 
 def _split_twitch_irc_frame(frame: str | bytes) -> list[str]:
@@ -47,29 +56,84 @@ def _youtube_api_error_reason(response: httpx.Response) -> str:
     if isinstance(errors, list):
         for item in errors:
             reason = item.get("reason") if isinstance(item, dict) else None
-            if isinstance(reason, str) and reason.isascii() and reason.replace("_", "").isalnum():
+            if (
+                isinstance(reason, str)
+                and len(reason) <= 80
+                and reason.isascii()
+                and reason.replace("_", "").replace("-", "").isalnum()
+            ):
                 return reason
     return ""
 
 
-def _check_youtube_response(response: httpx.Response) -> None:
+def _youtube_response_diagnostic(response: httpx.Response, operation: str) -> dict[str, Any]:
+    """Build safe support metadata without copying provider messages or request identifiers."""
+    return {
+        "operation": operation,
+        "http_status": int(response.status_code),
+        "reason": _youtube_api_error_reason(response) or "unreported",
+    }
+
+
+def _youtube_operation_for_response(response: httpx.Response) -> str:
+    """Map known API paths to fixed labels; never expose the request URL or query string."""
+    try:
+        path = response.request.url.path
+    except RuntimeError:
+        path = ""
+    if path.endswith("/videos"):
+        return "videos.list"
+    if path.endswith("/liveChat/messages"):
+        return "liveChatMessages.list"
+    return "youtube_api_request"
+
+
+def _check_youtube_response(
+    response: httpx.Response,
+    *,
+    operation: str = "youtube_api_request",
+) -> None:
     if response.is_success:
         return
     reason = _youtube_api_error_reason(response)
+    diagnostic = _youtube_response_diagnostic(response, operation)
     if response.status_code == 401:
-        raise ChatTerminalError("Google authorization was rejected. Reconnect your Google account.")
+        raise ChatTerminalError(
+            "Google authorization was rejected. Reconnect your Google account.",
+            diagnostic=diagnostic,
+        )
     if reason == "liveChatDisabled":
-        raise ChatTerminalError("Live chat is disabled for this YouTube broadcast.", status="ended")
+        raise ChatTerminalError(
+            "Live chat is disabled for this YouTube broadcast.",
+            status="ended",
+            diagnostic=diagnostic,
+        )
     if reason == "liveChatEnded":
-        raise ChatTerminalError("This YouTube live chat has ended.", status="ended")
+        raise ChatTerminalError(
+            "This YouTube live chat has ended.",
+            status="ended",
+            diagnostic=diagnostic,
+        )
     if reason == "liveChatNotFound":
-        raise ChatTerminalError("YouTube could not find an active live chat for this video.")
+        raise ChatTerminalError(
+            "YouTube could not find an active live chat for this video.",
+            diagnostic=diagnostic,
+        )
     if reason == "forbidden":
-        raise ChatTerminalError("The connected Google account is not permitted to read this live chat.")
+        raise ChatTerminalError(
+            "The connected Google account is not permitted to read this live chat.",
+            diagnostic=diagnostic,
+        )
     if reason in {"quotaExceeded", "dailyLimitExceeded", "dailyLimitExceededUnreg"}:
-        raise ChatTerminalError("YouTube API quota is exhausted. Try monitoring again after the quota resets.")
+        raise ChatTerminalError(
+            "YouTube API quota is exhausted. Try monitoring again after the quota resets.",
+            diagnostic=diagnostic,
+        )
     if response.status_code in {400, 403, 404} and reason != "rateLimitExceeded":
-        raise ChatTerminalError("YouTube rejected this live-chat request. Check that the video is live and chat is enabled.")
+        raise ChatTerminalError(
+            "YouTube rejected this live-chat request. Check that the video is live and chat is enabled.",
+            diagnostic=diagnostic,
+        )
     response.raise_for_status()
 
 
@@ -79,6 +143,7 @@ class ChatSession:
     reference: StreamReference
     status: str = "connecting"
     error: str | None = None
+    diagnostic: dict[str, Any] | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     messages: deque[ChatMessage] = field(default_factory=lambda: deque(maxlen=MAX_SESSION_MESSAGES))
     task: asyncio.Task | None = None
@@ -91,6 +156,7 @@ class ChatSession:
             "stream_id": self.reference.stream_id,
             "status": self.status,
             "error": self.error,
+            "diagnostic": dict(self.diagnostic) if self.diagnostic else None,
             "started_at": self.started_at.isoformat(),
             "message_count": len(self.messages),
             "messages": [
@@ -280,14 +346,34 @@ class ChatSessionManager:
             except ChatTerminalError as error:
                 session.status = error.status
                 session.error = str(error)
+                session.diagnostic = error.diagnostic
+                if error.diagnostic:
+                    _LOG.warning(
+                        "YouTube chat API request rejected (operation=%s, http_status=%s, reason=%s)",
+                        error.diagnostic["operation"],
+                        error.diagnostic["http_status"],
+                        error.diagnostic["reason"],
+                    )
                 break
             except httpx.HTTPStatusError as error:
                 # YouTube reports rateLimitExceeded as HTTP 403. This is
                 # recoverable; permanent permission/chat/quota failures are
                 # classified before raise_for_status() in _run_youtube().
+                diagnostic = _youtube_response_diagnostic(
+                    error.response,
+                    _youtube_operation_for_response(error.response),
+                )
+                session.diagnostic = diagnostic
+                if diagnostic["reason"] != "rateLimitExceeded":
+                    _LOG.warning(
+                        "YouTube chat API request failed (operation=%s, http_status=%s, reason=%s)",
+                        diagnostic["operation"],
+                        diagnostic["http_status"],
+                        diagnostic["reason"],
+                    )
                 session.status = "reconnecting"
                 session.error = "Chat connection interrupted. Clippy is retrying."
-                if error.response.status_code == 403 and _youtube_api_error_reason(error.response) == "rateLimitExceeded":
+                if error.response.status_code == 403 and diagnostic["reason"] == "rateLimitExceeded":
                     delay = max(delay, 5)
             except Exception:
                 session.status = "reconnecting"
@@ -381,6 +467,7 @@ class ChatSessionManager:
                                 pass
 
     async def _run_youtube(self, session: ChatSession) -> None:
+        session.diagnostic = None
         video_id = session.reference.stream_id
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
             token = await self._token_provider("youtube")
@@ -398,7 +485,7 @@ class ChatSessionManager:
                     params={"part": "liveStreamingDetails", "id": video_id},
                     headers=headers,
                 )
-            _check_youtube_response(video)
+            _check_youtube_response(video, operation="videos.list")
             items = video.json().get("items") or []
             if not items:
                 raise ValueError("YouTube video was not found or is unavailable.")
@@ -453,8 +540,9 @@ class ChatSessionManager:
                     await asyncio.sleep(min(30.0, max(1.0, delay)))
                     rate_limit_delay = min(rate_limit_delay * 2, 30)
                     continue
-                _check_youtube_response(response)
+                _check_youtube_response(response, operation="liveChatMessages.list")
                 rate_limit_delay = 5
+                session.diagnostic = None
                 payload = response.json()
                 for item in payload.get("items") or []:
                     message = _parse_youtube_message(item, video_id)
