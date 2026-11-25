@@ -507,6 +507,7 @@ class CaptureSessionManager:
                 None,
             )
             if existing is not None:
+                log_event("capture.start.idempotent", provider=reference.provider.value, session_id=existing.session_id)
                 return existing.snapshot()
             if len(self._sessions) >= self._max_sessions:
                 raise ValueError(f"Clippy can record up to {self._max_sessions} live streams at a time.")
@@ -533,10 +534,12 @@ class CaptureSessionManager:
             try:
                 self._persist_locked(strict=True)
                 worker.start()
-            except Exception:
+            except Exception as error:
                 self._sessions.pop(session_id, None)
                 self._persist_locked()
+                log_event("capture.start.failed", level=logging.ERROR, provider=reference.provider.value, session_id=session_id, error_type=type(error).__name__)
                 raise
+            log_event("capture.start.accepted", provider=reference.provider.value, session_id=session_id, segment_seconds=config.segment_seconds, retention_seconds=config.retention_seconds, quality=config.quality)
             return session.snapshot()
 
     def _run(self, session: CaptureSession) -> None:
@@ -546,21 +549,25 @@ class CaptureSessionManager:
                     if not session.stop_event.is_set():
                         session.status = "recording"
                         self._persist_locked()
+                        log_event("capture.recording", provider=session.provider.value, session_id=session.session_id)
 
             session.capture.run(session.stop_event, on_started=mark_recording)
             with self._lock:
                 session.status = "stopped" if session.stop_event.is_set() else "ended"
                 self._persist_locked()
+            log_event("capture.finished", provider=session.provider.value, session_id=session.session_id, outcome=session.status)
         except RollingCaptureError as error:
             with self._lock:
                 session.error = str(error)
                 session.status = "error"
                 self._persist_locked()
-        except Exception:
+            log_event("capture.failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, error_type=type(error).__name__)
+        except Exception as error:
             with self._lock:
                 session.error = "Live capture failed unexpectedly. Check the stream and FFmpeg installation."
                 session.status = "error"
                 self._persist_locked()
+            log_event("capture.failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, error_type=type(error).__name__)
         finally:
             # A naturally ended/failed source cannot provide any more post-trigger
             # footage. Wake candidate workers so they fail promptly and release
@@ -711,8 +718,10 @@ class CaptureSessionManager:
                 None,
             )
             if session is None:
+                log_event("candidate.trigger.ignored", level=logging.WARNING, provider=provider, outcome="no_active_capture")
                 return None
             if session.config.retention_seconds < pre_seconds + post_seconds + session.config.segment_seconds:
+                log_event("candidate.trigger.rejected", level=logging.WARNING, provider=provider, session_id=session.session_id, reason=reason, outcome="retention_too_short")
                 raise ValueError("Increase rolling-buffer retention to cover the requested highlight window.")
 
             indexed = session.capture.read_segment_index()
@@ -796,6 +805,7 @@ class CaptureSessionManager:
                     del candidate.protected_segments[old_pin_count:]
                     session.capture.release_segments(new_pins)
                     raise
+                log_event("candidate.trigger.merged", provider=provider, session_id=session.session_id, candidate_id=candidate.candidate_id, reason=reason, trigger_count=candidate.trigger_count)
                 return candidate.snapshot()
 
             if len(self._candidates) >= MAX_HIGHLIGHT_CANDIDATES:
@@ -836,6 +846,7 @@ class CaptureSessionManager:
                 session.capture.release_segments(protected)
                 self._persist_locked()
                 raise
+            log_event("candidate.created", provider=provider, session_id=session.session_id, candidate_id=candidate_id, reason=reason, segment_count=len(candidate.protected_segments))
             return candidate.snapshot()
 
     def _finish_candidate(
@@ -844,6 +855,7 @@ class CaptureSessionManager:
         candidate: HighlightCandidate,
     ) -> None:
         try:
+            log_event("candidate.assembly.waiting_for_window", provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id)
             flush_timeout = max(30, session.config.segment_seconds * 4)
             sealed_start = None
             sealed_end = None
@@ -885,6 +897,7 @@ class CaptureSessionManager:
                         # acquired, but never while FFmpeg is assembling it.
                         candidate.status = "assembling"
                         self._persist_locked()
+                        log_event("candidate.assembly.started", provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, segment_count=len(current_index))
                         sealed_start = window_start
                         sealed_end = window_end
                         indexed = current_index
@@ -919,7 +932,8 @@ class CaptureSessionManager:
                 # durable. A crash after a best-effort write would restore this
                 # completed MP4 as an interrupted assembly.
                 self._persist_locked(strict=True)
-        except StateStoreError:
+            log_event("candidate.ready", provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, segment_count=len(records))
+        except StateStoreError as error:
             with self._lock:
                 candidate.error = (
                     "The highlight video was created, but Clippy could not save its ready status. "
@@ -927,16 +941,19 @@ class CaptureSessionManager:
                 )
                 candidate.status = "error"
                 self._persist_locked()
+            log_event("candidate.ready_persist_failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, error_type=type(error).__name__)
         except (RollingCaptureError, ValueError, OSError) as error:
             with self._lock:
                 candidate.error = str(error)
                 candidate.status = "error"
                 self._persist_locked()
-        except Exception:
+            log_event("candidate.assembly.failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, error_type=type(error).__name__)
+        except Exception as error:
             with self._lock:
                 candidate.error = "Clippy could not finish this highlight. Check the capture and FFmpeg logs."
                 candidate.status = "error"
                 self._persist_locked()
+            log_event("candidate.assembly.failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, error_type=type(error).__name__)
         finally:
             with self._lock:
                 protected = list(candidate.protected_segments)
@@ -1096,6 +1113,7 @@ class CaptureSessionManager:
                 raise
 
             log_event("candidate.reviewed", candidate_id=candidate_id, outcome="approved" if approved else "rejected")
+            log_event("candidate.reviewed", candidate_id=candidate_id, outcome="approved" if approved else "rejected")
             if not approved and candidate.output_path is not None:
                 try:
                     candidate.output_path.unlink(missing_ok=True)
@@ -1183,6 +1201,7 @@ class CaptureSessionManager:
                         "A committed Community Highlights deletion needs filesystem cleanup (error_type=%s)",
                         type(error).__name__,
                     )
+            log_event("candidate.deleted", candidate_id=candidate_id)
             log_event("candidate.deleted", candidate_id=candidate_id)
             return True
 
