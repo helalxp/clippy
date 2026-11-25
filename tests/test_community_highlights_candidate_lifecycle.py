@@ -251,7 +251,7 @@ class BlockingCapture:
 
 def _recording_manager(tmp_path):
     manager = CaptureSessionManager(capture_factory=BlockingCapture, output_root=tmp_path)
-    started = manager.start("https://www.twitch.tv/merge-channel")
+    started = manager.start("https://www.twitch.tv/merge_channel")
     deadline = time.time() + 1
     while manager.get(started["session_id"])["status"] != "recording" and time.time() < deadline:
         time.sleep(0.01)
@@ -265,7 +265,7 @@ def test_overlapping_trigger_windows_merge_into_one_candidate(tmp_path):
 
     first = manager.trigger(
         provider="twitch",
-        stream_id="merge-channel",
+        stream_id="merge_channel",
         triggered_at=first_time,
         pre_seconds=20,
         post_seconds=20,
@@ -273,7 +273,7 @@ def test_overlapping_trigger_windows_merge_into_one_candidate(tmp_path):
     )
     second = manager.trigger(
         provider="twitch",
-        stream_id="merge-channel",
+        stream_id="merge_channel",
         triggered_at=first_time + timedelta(seconds=30),
         pre_seconds=20,
         post_seconds=20,
@@ -298,14 +298,14 @@ def test_disjoint_trigger_windows_remain_separate_candidates(tmp_path):
 
     first = manager.trigger(
         provider="twitch",
-        stream_id="merge-channel",
+        stream_id="merge_channel",
         triggered_at=first_time,
         pre_seconds=10,
         post_seconds=10,
     )
     second = manager.trigger(
         provider="twitch",
-        stream_id="merge-channel",
+        stream_id="merge_channel",
         triggered_at=first_time + timedelta(seconds=30),
         pre_seconds=10,
         post_seconds=10,
@@ -326,14 +326,14 @@ def test_overlapping_trigger_union_is_bounded_by_capture_retention(tmp_path):
 
     first = manager.trigger(
         provider="twitch",
-        stream_id="merge-channel",
+        stream_id="merge_channel",
         triggered_at=first_time,
         pre_seconds=60,
         post_seconds=60,
     )
     second = manager.trigger(
         provider="twitch",
-        stream_id="merge-channel",
+        stream_id="merge_channel",
         triggered_at=first_time + timedelta(seconds=80),
         pre_seconds=60,
         post_seconds=60,
@@ -404,7 +404,7 @@ def test_merged_window_selects_and_assembles_exact_union_once_and_seals(tmp_path
 
     monkeypatch.setattr("community_highlights.capture_sessions.assemble_segments", assemble)
     manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path / "captures")
-    started = manager.start("https://www.twitch.tv/merge-e2e")
+    started = manager.start("https://www.twitch.tv/merge_e2e")
     session_id = started["session_id"]
     deadline = time.time() + 1
     while manager.get(session_id)["status"] != "recording" and time.time() < deadline:
@@ -413,7 +413,7 @@ def test_merged_window_selects_and_assembles_exact_union_once_and_seals(tmp_path
 
     first = manager.trigger(
         provider="twitch",
-        stream_id="merge-e2e",
+        stream_id="merge_e2e",
         triggered_at=origin,
         pre_seconds=4,
         post_seconds=4,
@@ -421,7 +421,7 @@ def test_merged_window_selects_and_assembles_exact_union_once_and_seals(tmp_path
     )
     merged = manager.trigger(
         provider="twitch",
-        stream_id="merge-e2e",
+        stream_id="merge_e2e",
         triggered_at=origin + timedelta(seconds=6),
         pre_seconds=4,
         post_seconds=4,
@@ -443,7 +443,7 @@ def test_merged_window_selects_and_assembles_exact_union_once_and_seals(tmp_path
 
     later = manager.trigger(
         provider="twitch",
-        stream_id="merge-e2e",
+        stream_id="merge_e2e",
         triggered_at=origin + timedelta(seconds=30),
         pre_seconds=0,
         post_seconds=0,
@@ -486,7 +486,7 @@ def test_candidate_is_not_ready_when_durable_ready_transition_fails(tmp_path, mo
             self.state.update(sections)
 
     stamp = time.time()
-    segment = tmp_path / "ready-durability.ts"
+    segment = tmp_path / "ready_durability.ts"
     segment.write_bytes(b"mpeg-ts")
     os.utime(segment, (stamp, stamp))
     record = SegmentRecord(segment.resolve(), 0, 4)
@@ -506,7 +506,7 @@ def test_candidate_is_not_ready_when_durable_ready_transition_fails(tmp_path, mo
         output_root=tmp_path / "captures",
         state_store=store,
     )
-    started = manager.start("https://www.twitch.tv/ready-durability")
+    started = manager.start("https://www.twitch.tv/ready_durability")
     session_id = started["session_id"]
     deadline = time.time() + 1
     while manager.get(session_id)["status"] != "recording" and time.time() < deadline:
@@ -514,7 +514,7 @@ def test_candidate_is_not_ready_when_durable_ready_transition_fails(tmp_path, mo
 
     candidate = manager.trigger(
         provider="twitch",
-        stream_id="ready-durability",
+        stream_id="ready_durability",
         triggered_at=datetime.fromtimestamp(stamp, timezone.utc),
         pre_seconds=0,
         post_seconds=0,

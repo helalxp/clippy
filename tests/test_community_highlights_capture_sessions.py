@@ -424,7 +424,7 @@ def test_natural_end_cleans_rolling_sources_after_simultaneous_candidate_workers
         return capture
 
     manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path)
-    started = manager.start("https://www.twitch.tv/natural-cleanup")
+    started = manager.start("https://www.twitch.tv/natural_cleanup")
     session = manager._sessions[started["session_id"]]
     deadline = time.time() + 1
     while session.status != "recording" and time.time() < deadline:
