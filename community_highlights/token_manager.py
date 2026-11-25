@@ -65,7 +65,9 @@ async def _ensure_access_token_locked(
                 TWITCH_VALIDATE_URL,
                 headers={"Authorization": f"OAuth {bundle['access_token']}"},
             )
-            if validation.status_code != 401:
+            if validation.status_code == 401:
+                log_event("oauth.token.validation_rejected", level=30, provider=provider, outcome="refresh_fallback")
+            else:
                 validation.raise_for_status()
                 identity = validation.json()
                 if not isinstance(identity, dict) or not isinstance(identity.get("scopes"), list):
