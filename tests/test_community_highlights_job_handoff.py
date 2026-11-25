@@ -288,6 +288,8 @@ def test_timestamped_diagnostics_hash_ids_and_drop_secret_fields(caplog):
         log_event(
             "generation.test",
             candidate_id=opaque_id,
+            stream_id="private-channel-id",
+            user_id="private-viewer-id",
             outcome="failed",
             oauth_token="never-log-this-token",
             chat_text="private chat contents",
@@ -299,6 +301,8 @@ def test_timestamped_diagnostics_hash_ids_and_drop_secret_fields(caplog):
     assert "generation.test" in caplog.text
     assert "candidate_id_ref" in caplog.text
     assert opaque_id not in caplog.text
+    assert "private-channel-id" not in caplog.text
+    assert "private-viewer-id" not in caplog.text
     assert "never-log-this-token" not in caplog.text
     assert "private chat contents" not in caplog.text
     assert "a user supplied trigger phrase" not in caplog.text
