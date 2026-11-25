@@ -24,6 +24,7 @@ from .extraction import assemble_segments
 from .timeline import segment_wall_interval, select_segments_for_interval, validate_contiguous_interval
 from .urls import parse_stream_url
 from .state_store import StateStoreError, get_state_store
+from .diagnostics import log_event
 
 
 MAX_CAPTURE_SESSIONS = 2
@@ -31,6 +32,8 @@ STOP_JOIN_SECONDS = 45
 MAX_HIGHLIGHT_CANDIDATES = 20
 _LOG = logging.getLogger(__name__)
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+_GENERATION_JOB_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
+_GENERATION_STATES = {"not_started", "staging", "queued", "processing", "completed", "failed"}
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,9 @@ class HighlightCandidate:
     window_end: datetime | None = None
     merge_until: datetime | None = None
     trigger_count: int = 1
+    generation_status: str = "not_started"
+    generation_job_id: str | None = None
+    generation_error: str | None = None
     protected_segments: list[Path] = field(default_factory=list, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
@@ -88,6 +94,9 @@ class HighlightCandidate:
             "file_name": self.output_path.name if self.output_path else None,
             "segment_count": self.segment_count,
             "trigger_count": self.trigger_count,
+            "generation_status": self.generation_status,
+            "generation_job_id": self.generation_job_id,
+            "generation_error": self.generation_error,
         }
 
 
@@ -202,6 +211,9 @@ class CaptureSessionManager:
                 "error": item.error,
                 "segment_count": item.segment_count,
                 "trigger_count": item.trigger_count,
+                "generation_status": item.generation_status,
+                "generation_job_id": item.generation_job_id,
+                "generation_error": item.generation_error,
             }
             for item in self._candidates.values()
         ]
@@ -413,6 +425,26 @@ class CaptureSessionManager:
                 post_seconds = row.get("post_seconds", 0)
                 segment_count = row.get("segment_count", 0)
                 trigger_count = row.get("trigger_count", 1)
+                generation_status = row.get("generation_status", "not_started")
+                generation_job_id = row.get("generation_job_id")
+                generation_error = row.get("generation_error")
+                if generation_status not in _GENERATION_STATES:
+                    generation_status = "failed" if generation_job_id else "not_started"
+                    generation_error = "Saved generation state was invalid and must be retried."
+                if generation_job_id is not None and (
+                    not isinstance(generation_job_id, str)
+                    or not _GENERATION_JOB_ID_RE.fullmatch(generation_job_id)
+                ):
+                    generation_job_id = None
+                    generation_status = "failed"
+                    generation_error = "Saved generation job reference was invalid and must be retried."
+                if generation_job_id is None and generation_status in {"staging", "queued", "processing", "completed"}:
+                    generation_status = "failed"
+                    generation_error = "The saved generation job reference is missing."
+                if not isinstance(generation_error, str):
+                    generation_error = None
+                else:
+                    generation_error = generation_error.replace("\r", "").replace("\n", " ")[:500]
                 if type(pre_seconds) is not int or not 0 <= pre_seconds <= 300:
                     pre_seconds = 0
                 if type(post_seconds) is not int or not 0 <= post_seconds <= 300:
@@ -434,6 +466,9 @@ class CaptureSessionManager:
                     output_path=output_path,
                     segment_count=segment_count,
                     trigger_count=trigger_count,
+                    generation_status=generation_status,
+                    generation_job_id=generation_job_id,
+                    generation_error=generation_error,
                 )
 
             self._sessions = restored_sessions
@@ -918,6 +953,126 @@ class CaptureSessionManager:
             return [item.snapshot() for item in items]
 
 
+    def get_candidate_generation(self, candidate_id: str) -> dict[str, Any] | None:
+        """Return durable generation/review state without exposing a media path."""
+        self.restore()
+        with self._lock:
+            candidate = self._candidates.get(candidate_id)
+            return candidate.snapshot() if candidate is not None else None
+
+    def _candidate_media_path_locked(self, candidate: HighlightCandidate) -> Path | None:
+        if candidate.status != "ready" or candidate.review_status == "rejected" or candidate.output_path is None:
+            return None
+        try:
+            root = self._output_root_path().resolve()
+            expected_parent = root / candidate.capture_session_id / "highlights"
+            expected_file = expected_parent / f"{candidate.candidate_id}.mp4"
+            actual_file = Path(os.path.abspath(candidate.output_path))
+            resolved_parent = expected_parent.resolve()
+            if (
+                actual_file == expected_file
+                and expected_parent.is_dir()
+                and not expected_parent.is_symlink()
+                and resolved_parent == expected_parent
+                and resolved_parent.is_relative_to(root)
+                and not expected_file.is_symlink()
+                and expected_file.is_file()
+                and expected_file.resolve().parent == resolved_parent
+                and expected_file.stat().st_size > 0
+            ):
+                return expected_file
+        except OSError:
+            return None
+        return None
+
+    def claim_candidate_generation(
+        self, candidate_id: str, job_id: str
+    ) -> tuple[dict[str, Any], Path | None, bool]:
+        """Approve and atomically claim one normal Clippy job.
+
+        Active/completed claims are idempotent. A failed attempt can be retried
+        with a new job ID. Returns (snapshot, source_path, created).
+        """
+        self.restore()
+        if not isinstance(job_id, str) or not _GENERATION_JOB_ID_RE.fullmatch(job_id):
+            raise ValueError("The generation job identifier is invalid.")
+        with self._lock:
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None:
+                raise KeyError("Highlight candidate not found.")
+            if candidate.status != "ready":
+                raise ValueError("Only completed highlight candidates can be generated.")
+            if candidate.review_status == "rejected":
+                raise ValueError("Rejected highlight candidates cannot be generated.")
+            if candidate.generation_job_id and candidate.generation_status in {
+                "staging", "queued", "processing", "completed"
+            }:
+                return candidate.snapshot(), None, False
+
+            media_path = self._candidate_media_path_locked(candidate)
+            if media_path is None:
+                raise ValueError("The highlight MP4 is missing or failed its storage safety check.")
+
+            previous = (
+                candidate.review_status,
+                candidate.generation_status,
+                candidate.generation_job_id,
+                candidate.generation_error,
+            )
+            candidate.review_status = "approved"
+            candidate.generation_status = "staging"
+            candidate.generation_job_id = job_id
+            candidate.generation_error = None
+            try:
+                self._persist_locked(strict=True)
+            except Exception:
+                (
+                    candidate.review_status,
+                    candidate.generation_status,
+                    candidate.generation_job_id,
+                    candidate.generation_error,
+                ) = previous
+                raise
+
+            log_event("generation.claimed", candidate_id=candidate_id, job_id=job_id, outcome="staging")
+            return candidate.snapshot(), media_path, True
+
+    def update_candidate_generation(
+        self,
+        candidate_id: str,
+        job_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist a generation transition only for the candidate's claimed job."""
+        if status not in _GENERATION_STATES - {"not_started"}:
+            raise ValueError("The candidate generation status is invalid.")
+        self.restore()
+        with self._lock:
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None or candidate.generation_job_id != job_id:
+                return None
+            previous = (candidate.generation_status, candidate.generation_error)
+            candidate.generation_status = status
+            candidate.generation_error = (
+                error.replace("\r", "").replace("\n", " ")[:500]
+                if isinstance(error, str) and error else None
+            )
+            try:
+                self._persist_locked(strict=True)
+            except Exception:
+                candidate.generation_status, candidate.generation_error = previous
+                raise
+            log_event(
+                "generation.status",
+                candidate_id=candidate_id,
+                job_id=job_id,
+                status=status,
+                error_type="GenerationError" if error else None,
+            )
+            return candidate.snapshot()
+
     def decide_candidate(self, candidate_id: str, *, approved: bool) -> dict[str, Any] | None:
         with self._lock:
             candidate = self._candidates.get(candidate_id)
@@ -927,6 +1082,8 @@ class CaptureSessionManager:
                 raise ValueError("Only completed highlight candidates can be reviewed.")
             if candidate.review_status == "rejected" and approved:
                 raise ValueError("Rejected candidate media has been deleted and cannot be re-approved.")
+            if not approved and candidate.generation_status in {"staging", "queued", "processing"}:
+                raise ValueError("A candidate cannot be rejected while its generation job is active.")
             previous_review_status = candidate.review_status
             candidate.review_status = "approved" if approved else "rejected"
             try:
@@ -938,6 +1095,7 @@ class CaptureSessionManager:
                 candidate.review_status = previous_review_status
                 raise
 
+            log_event("candidate.reviewed", candidate_id=candidate_id, outcome="approved" if approved else "rejected")
             if not approved and candidate.output_path is not None:
                 try:
                     candidate.output_path.unlink(missing_ok=True)
@@ -960,7 +1118,7 @@ class CaptureSessionManager:
                 return False
             if candidate.status in {"capturing", "assembling"} or (
                 candidate.worker is not None and candidate.worker.is_alive()
-            ):
+            ) or candidate.generation_status in {"staging", "queued", "processing"}:
                 raise ValueError("This highlight is still being created. Try deleting it when processing finishes.")
 
             pending_path: Path | None = None
@@ -1025,6 +1183,7 @@ class CaptureSessionManager:
                         "A committed Community Highlights deletion needs filesystem cleanup (error_type=%s)",
                         type(error).__name__,
                     )
+            log_event("candidate.deleted", candidate_id=candidate_id)
             return True
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
@@ -1034,35 +1193,7 @@ class CaptureSessionManager:
             if candidate is None:
                 return None
 
-            path: Path | None = None
-            if (
-                candidate.status == "ready"
-                and candidate.review_status != "rejected"
-                and candidate.output_path is not None
-            ):
-                try:
-                    root = self._output_root_path().resolve()
-                    expected_parent = root / candidate.capture_session_id / "highlights"
-                    expected_file = expected_parent / f"{candidate.candidate_id}.mp4"
-                    actual_file = Path(os.path.abspath(candidate.output_path))
-                    resolved_parent = expected_parent.resolve()
-                    if (
-                        actual_file == expected_file
-                        and expected_parent.is_dir()
-                        and not expected_parent.is_symlink()
-                        and resolved_parent == expected_parent
-                        and resolved_parent.is_relative_to(root)
-                        and not expected_file.is_symlink()
-                        and expected_file.is_file()
-                        and expected_file.resolve().parent == resolved_parent
-                        and expected_file.stat().st_size > 0
-                    ):
-                        path = expected_file
-                except OSError:
-                    # The metadata remains readable, but never serve media whose
-                    # path cannot be revalidated against the managed capture root.
-                    path = None
-            return candidate.snapshot(), path
+            return candidate.snapshot(), self._candidate_media_path_locked(candidate)
 
     async def stop(self, session_id: str) -> bool:
         with self._lock:
