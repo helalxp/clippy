@@ -840,14 +840,24 @@ class CaptureSessionManager:
                 raise ValueError("Only completed highlight candidates can be reviewed.")
             if candidate.review_status == "rejected" and approved:
                 raise ValueError("Rejected candidate media has been deleted and cannot be re-approved.")
+            previous_review_status = candidate.review_status
             candidate.review_status = "approved" if approved else "rejected"
+            try:
+                # Commit the user decision before destructive media cleanup.
+                # A failed state write must never delete media while leaving a
+                # stale pending decision on disk.
+                self._persist_locked(strict=True)
+            except Exception:
+                candidate.review_status = previous_review_status
+                raise
+
             if not approved and candidate.output_path is not None:
                 try:
                     candidate.output_path.unlink(missing_ok=True)
                     candidate.output_path = None
                 except OSError:
                     candidate.error = "Rejected, but Windows could not remove the file because it is still in use."
-            self._persist_locked(strict=True)
+                self._persist_locked()
             return candidate.snapshot()
 
     def delete_candidate(self, candidate_id: str) -> bool:

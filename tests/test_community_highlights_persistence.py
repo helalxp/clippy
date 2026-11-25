@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 from datetime import datetime, timezone
 
 from community_highlights.capture_sessions import CaptureSessionManager
@@ -148,3 +149,55 @@ def test_restart_marks_active_capture_and_partial_candidate_and_preserves_approv
     assert manager.delete_candidate(PARTIAL_ID) is True
     assert not partial_video.exists()
     assert manager.get_candidate(PARTIAL_ID) is None
+
+
+
+def test_rejected_candidate_media_is_not_deleted_when_review_state_cannot_be_saved(tmp_path):
+    class BrokenStore:
+        def update_sections(self, **_sections):
+            raise StateStoreError("disk unavailable")
+
+    output_root = tmp_path / "community-highlights"
+    session_dir = output_root / SESSION_ID
+    highlights_dir = session_dir / "highlights"
+    highlights_dir.mkdir(parents=True)
+    video = highlights_dir / f"{READY_ID}.mp4"
+    video.write_bytes(b"approved-candidate")
+    store = CommunityHighlightsStateStore(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    store.update_sections(
+        capture_sessions=[{
+            "session_id": SESSION_ID,
+            "provider": "youtube",
+            "stream_id": "abcdefghijk",
+            "started_at": now,
+            "status": "ended",
+            "segment_seconds": 4,
+            "retention_seconds": 180,
+            "max_buffer_size_mb": 512,
+            "quality": "best",
+        }],
+        candidates=[{
+            "candidate_id": READY_ID,
+            "capture_session_id": SESSION_ID,
+            "triggered_at": now,
+            "pre_seconds": 30,
+            "post_seconds": 25,
+            "reason": "phrase",
+            "status": "ready",
+            "review_status": "pending",
+            "segment_count": 8,
+            "trigger_count": 1,
+        }],
+    )
+    manager = CaptureSessionManager(output_root=output_root, state_store=store)
+    manager.restore()
+    manager._state_store = BrokenStore()
+
+    with pytest.raises(StateStoreError):
+        manager.decide_candidate(READY_ID, approved=False)
+
+    restored = manager.get_candidate(READY_ID)
+    assert restored is not None
+    assert restored[0]["review_status"] == "pending"
+    assert video.read_bytes() == b"approved-candidate"

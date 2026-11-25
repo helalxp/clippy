@@ -42,7 +42,7 @@ class CommunityHighlightsStateStore:
 
     def __init__(self, data_root: str | Path) -> None:
         raw_root = Path(data_root).expanduser()
-        if raw_root.exists() and raw_root.is_symlink():
+        if raw_root.is_symlink():
             raise StateStoreError("The Clippy data directory cannot be a symbolic link.")
         self.data_root = raw_root.resolve()
         self.directory = self.data_root / "community-highlights"

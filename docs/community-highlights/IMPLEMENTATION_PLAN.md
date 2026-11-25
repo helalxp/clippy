@@ -732,3 +732,19 @@ M3 trigger-window merging is now implemented. The next planned milestone is **du
 - Newly included segments are pinned before the expanded interval is published. Segment pins are reference-counted, so overlapping candidate workers cannot release one another's source files.
 - Candidate snapshots expose a trigger count so the review data indicates when multiple triggers contributed to one highlight.
 - Targeted tests cover interval selection/validation, merging overlapping triggers, retaining separate disjoint triggers, and the retention-duration cap. These tests are added to the branch; they are not claimed passed until CI reports the result.
+
+
+## 2026-11-25 persistence and restart-recovery implementation
+
+- A schema-versioned JSON state file lives under the existing movable `CLIPPY_DATA_DIR/community-highlights` data root. It uses a same-directory temporary file, flush/fsync, and atomic replacement; it introduces no database or new runtime dependency.
+- Persisted state is deliberately metadata-only: validated trigger settings; provider/stream identifiers and capture settings/status; candidate trigger windows, status, counts, and review decisions. It does not persist provider tokens, chat message text/history, full stream URLs, or credentials. Provider credentials remain exclusively in Windows Credential Manager.
+- Backend startup restores settings and candidate/session metadata before serving Community Highlights routes. A live capture cannot resume after its Streamlink/FFmpeg worker has died; it is marked `interrupted`, and its disposable TS ring/index/concat manifests are cleaned. Completed MP4s and review decisions survive. A candidate that was capturing/assembling is marked failed; any partial MP4 is preserved for explicit deletion.
+- State corruption is quarantined rather than silently overwritten; an unsupported newer schema fails closed. Session and candidate IDs and derived media paths are revalidated during restore; symlinked state paths/media paths are rejected.
+- Capture/candidate creation is not started unless its initial metadata can be written. Trigger settings are persisted before in-memory mutation. Candidate review state is persisted before reject cleanup deletes the MP4.
+- Recovery and state-store regression tests have been added. They are authored but not yet reported as passing by CI. Twitch remains intentionally untested; no renderer handoff or UI redesign has been done.
+
+### Remaining before M4 renderer handoff
+
+1. Verify this persistence slice on the packaged Windows build: save trigger settings, create and approve a YouTube candidate, restart Clippy, confirm the settings/review state/candidate preview persist, and confirm interrupted work is clearly marked without resuming a dead stream.
+2. Keep the long-running live reconnect checks and Twitch acceptance as separate future provider validation; they are not blockers for the storage metadata model itself.
+3. Define the trim contract and accepted candidate handoff shape before connecting the existing renderer. Keep frame-accurate boundary claims and candidate media retention/disk budgets open until measured/implemented.
