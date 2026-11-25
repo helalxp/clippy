@@ -1704,12 +1704,39 @@ def _cleanup_orphaned_community_candidate_stage(job_id: str) -> None:
     if normalized_job_id != job_id.lower():
         return
 
-    job_dir = Path(OUTPUT_DIR).resolve() / normalized_job_id
+    job_root = Path(OUTPUT_DIR).resolve()
+    job_dir = job_root / normalized_job_id
+    if job_dir.is_symlink():
+        community_log_event(
+            "generation.orphan_cleanup.skipped",
+            level=logging.WARNING,
+            job_id=normalized_job_id,
+            outcome="job_directory_is_symlink",
+        )
+        return
+    try:
+        resolved_job_dir = job_dir.resolve()
+    except (OSError, RuntimeError) as error:
+        community_log_event(
+            "generation.orphan_cleanup.skipped",
+            level=logging.WARNING,
+            job_id=normalized_job_id,
+            error_type=type(error).__name__,
+        )
+        return
+    if resolved_job_dir.parent != job_root:
+        community_log_event(
+            "generation.orphan_cleanup.skipped",
+            level=logging.WARNING,
+            job_id=normalized_job_id,
+            outcome="job_directory_outside_output_root",
+        )
+        return
+
     manifest_path = job_dir / _RESUME_FILE
     if manifest_path.exists() or any(job_dir.glob("*_metadata.json")):
         community_log_event(
             "generation.orphan_cleanup.skipped",
-            candidate_id=None,
             job_id=normalized_job_id,
             outcome="manifest_or_result_present",
         )
