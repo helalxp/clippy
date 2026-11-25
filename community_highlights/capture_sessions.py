@@ -399,9 +399,13 @@ class CaptureSessionManager:
                     candidate.post_seconds,
                     math.ceil((merged_end - candidate.triggered_at.astimezone(timezone.utc)).total_seconds()),
                 )
+                merge_pre_seconds = max(candidate.pre_seconds, pre_seconds)
+                merge_grace = merge_pre_seconds + (
+                    session.config.segment_seconds if merge_pre_seconds else 0
+                )
                 candidate.merge_until = max(
                     candidate.merge_until,
-                    merged_end + timedelta(seconds=pre_seconds + session.config.segment_seconds),
+                    merged_end + timedelta(seconds=merge_grace),
                 )
                 candidate.trigger_count += 1
                 return candidate.snapshot()
@@ -419,7 +423,9 @@ class CaptureSessionManager:
                 reason=reason,
                 window_start=window_start,
                 window_end=window_end,
-                merge_until=window_end + timedelta(seconds=pre_seconds + session.config.segment_seconds),
+                merge_until=window_end + timedelta(
+                    seconds=pre_seconds + (session.config.segment_seconds if pre_seconds else 0)
+                ),
             )
             self._protect_candidate_window_locked(
                 session, candidate, indexed, window_start, window_end
