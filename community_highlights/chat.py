@@ -143,11 +143,11 @@ class ChatSession:
     reference: StreamReference
     status: str = "connecting"
     error: str | None = None
-    diagnostic: dict[str, Any] | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     messages: deque[ChatMessage] = field(default_factory=lambda: deque(maxlen=MAX_SESSION_MESSAGES))
     task: asyncio.Task | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    diagnostic: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
