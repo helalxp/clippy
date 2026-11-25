@@ -245,14 +245,14 @@ This plan is deliberately incremental. Implement and verify one working slice at
 - [ ] Validate real-stream timeline drift on Windows before tightening pre/post boundary accuracy guarantees.
 - [x] Protect pre-trigger segments, incrementally protect completed post-trigger segments, wait for the configured post-trigger duration, validate coverage/gaps, and assemble the candidate without re-encoding.
 - [x] Log safe trigger-creation failures rather than silently dropping them; a structured user-visible monitor diagnostic remains pending.
-- [ ] Persist trigger/candidate state and recover interrupted work after backend restart.
+- [x] Persist trigger settings, capture/candidate metadata, and review decisions; restore them on backend startup, mark active capture/extraction work interrupted, and reconcile disposable rolling files while preserving candidate MP4s.
 
 **Exit criteria:** mocked lifecycle coverage is authored and a YouTube packaged-Windows trigger-to-preview path is user-verified. Twitch remains untested, and real-stream frame/timeline drift still needs measurement.
 
 ### M4 — Candidate analysis and review
 
 - [ ] Analyze triggered footage and propose clip boundaries.
-- [x] Create an in-memory candidate lifecycle with capture status, processing status, segment count, and error reporting. Durable persistence remains pending.
+- [x] Maintain a candidate lifecycle with capture/processing status, segment counts, trigger counts, error reporting, and durable review/candidate metadata across backend restarts.
 - [x] Add Community Highlights UI for candidate status, file download, approve, and reject.
 - [x] Add inline MP4 preview and download for completed candidates.
 - [ ] Add frame-accurate start/end trimming.
@@ -265,9 +265,10 @@ This plan is deliberately incremental. Implement and verify one working slice at
 
 - [ ] Add review-only, automatic, and hybrid processing modes.
 - [x] Enforce bounded rolling-buffer age/byte retention and clean rolling TS/index/concat temp files after normal capture termination and candidate-worker completion.
-- [ ] Add a total candidate-media byte/age budget, startup reconciliation after crash, and explicit disk-pressure policy.
+- [ ] Add a total candidate-media byte/age budget and explicit disk-pressure policy.
+- [x] Reconcile persisted metadata and disposable rolling files after backend restart; mark active workers interrupted and preserve completed/partial candidate MP4s for review or explicit deletion.
 - [ ] Add structured diagnostics for provider, capture, synchronization, analysis, and rendering failures.
-- [ ] Verify long-running sessions and recovery from backend restart.
+- [ ] Verify long-running sessions and manually validate the new packaged-Windows restart recovery behavior. Automated recovery coverage is authored; live acceptance remains pending.
 - [ ] Document user-facing setup and troubleshooting.
 
 **Exit criteria:** the feature can run unattended within configured resource limits and does not silently lose or duplicate candidates.
@@ -721,7 +722,7 @@ The rolling capture originally represented protected segments as a set. Two conc
 
 ### Next planned implementation step
 
-M3 trigger-window merging is now implemented. The next planned milestone is **durable persistence and restart recovery**: persist trigger settings, capture/candidate metadata, review decisions, and interrupted-session state; reconcile orphaned files on startup without deleting recoverable candidate media. Keep provider tokens exclusively in Windows Credential Manager. Once that foundation is reliable, proceed with M4 trimming, analysis, and renderer handoff. Do not connect candidate approval to the main renderer before the durable candidate lifecycle and trim contract are in place.
+M3 trigger-window merging and the first durable metadata/restart-recovery implementation are now in place. The next gate is packaged-Windows restart acceptance: verify settings, approved candidate preview, review status, and interrupted-work handling across a real restart. After that, define and test the trim contract, then wire approved candidates into the existing renderer. Keep renderer integration out of this slice until the trim contract is explicit.
 
 
 ### M3 trigger-window merge implementation — 2026-11-25
@@ -738,7 +739,7 @@ M3 trigger-window merging is now implemented. The next planned milestone is **du
 
 - A schema-versioned JSON state file lives under the existing movable `CLIPPY_DATA_DIR/community-highlights` data root. It uses a same-directory temporary file, flush/fsync, and atomic replacement; it introduces no database or new runtime dependency.
 - Persisted state is deliberately metadata-only: validated trigger settings; provider/stream identifiers and capture settings/status; candidate trigger windows, status, counts, and review decisions. It does not persist provider tokens, chat message text/history, full stream URLs, or credentials. Provider credentials remain exclusively in Windows Credential Manager.
-- Backend startup restores settings and candidate/session metadata before serving Community Highlights routes. A live capture cannot resume after its Streamlink/FFmpeg worker has died; it is marked `interrupted`, and its disposable TS ring/index/concat manifests are cleaned. Completed MP4s and review decisions survive. A candidate that was capturing/assembling is marked failed; any partial MP4 is preserved for explicit deletion.
+- The real Clippy FastAPI lifespan restores Community Highlights state before serving requests and stops capture/chat workers during shutdown. A live capture cannot resume after its Streamlink/FFmpeg worker has died; it is marked `interrupted`, and its disposable TS ring/index/concat manifests are cleaned. Completed MP4s and review decisions survive. A candidate that was capturing/assembling is marked failed; any partial MP4 is preserved for explicit deletion.
 - State corruption is quarantined rather than silently overwritten; an unsupported newer schema fails closed. Session and candidate IDs and derived media paths are revalidated during restore; symlinked state paths/media paths are rejected.
 - Capture/candidate creation is not started unless its initial metadata can be written. Trigger settings are persisted before in-memory mutation. Candidate review state is persisted before reject cleanup deletes the MP4.
 - Recovery and state-store regression tests have been added. They are authored but not yet reported as passing by CI. Twitch remains intentionally untested; no renderer handoff or UI redesign has been done.
