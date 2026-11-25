@@ -291,6 +291,8 @@ def test_timestamped_diagnostics_hash_ids_and_drop_secret_fields(caplog):
             outcome="failed",
             oauth_token="never-log-this-token",
             chat_text="private chat contents",
+            reason="a user supplied trigger phrase",
+            custom_detail="potentially sensitive free-form text",
         )
 
     assert "timestamp" in caplog.text
@@ -299,6 +301,8 @@ def test_timestamped_diagnostics_hash_ids_and_drop_secret_fields(caplog):
     assert opaque_id not in caplog.text
     assert "never-log-this-token" not in caplog.text
     assert "private chat contents" not in caplog.text
+    assert "a user supplied trigger phrase" not in caplog.text
+    assert "potentially sensitive free-form text" not in caplog.text
 
 
 
