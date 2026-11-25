@@ -398,7 +398,7 @@ class ChatSessionManager:
             session.status = "stopped"
         log_event("chat.worker.finished", provider=session.reference.provider.value, session_id=session.session_id, outcome=session.status)
 
-    async def _run_twitch(self, session: ChatSession) -> None
+    async def _run_twitch(self, session: ChatSession) -> None:
         channel = session.reference.stream_id
         store = WindowsCredentialStore()
         bundle = store.load("twitch") or {}
