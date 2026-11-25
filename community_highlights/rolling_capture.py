@@ -150,7 +150,8 @@ class RollingCapture:
                     if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
                         continue
                     records.append(SegmentRecord(path, start, end))
-        except OSError:
+        except OSError as error:
+            log_event("capture.segment_index.read_failed", level=30, error_type=type(error).__name__)
             return []
         return records
 
@@ -294,6 +295,9 @@ class RollingCapture:
             self._finish_process(process)
             return_code = process.poll()
             process = None
+            if return_code != 0:
+                log_event("capture.ffmpeg.exit_nonzero", level=40, return_code=return_code)
+                raise RollingCaptureError("FFmpeg could not finalize the rolling capture successfully.")
             self._prune_segments()
             log_event("capture.ffmpeg.finished", outcome="stopped", return_code=return_code)
         except RollingCaptureError as error:
@@ -314,15 +318,15 @@ class RollingCapture:
             if reader is not None:
                 try:
                     reader.close()
-                except Exception:
-                    pass
+                except Exception as error:
+                    log_event("capture.stream_reader.close_failed", level=30, error_type=type(error).__name__)
             if resolved is not None:
                 close = getattr(resolved.stream, "close", None)
                 if callable(close):
                     try:
                         close()
-                    except Exception:
-                        pass
+                    except Exception as error:
+                        log_event("capture.stream_session.close_failed", level=30, error_type=type(error).__name__)
 
     @staticmethod
     def _write_all(pipe: Any, chunk: bytes) -> None:
