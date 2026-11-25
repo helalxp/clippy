@@ -3843,7 +3843,12 @@ async def process_endpoint(
     if "application/json" in content_type:
         body = await request.json()
         url = body.get("url")
-        ack_flag = bool(body.get("acknowledged"))
+        raw_acknowledgement = body.get("acknowledged")
+        ack_flag = (
+            raw_acknowledgement is True
+            or (type(raw_acknowledgement) is int and raw_acknowledgement == 1)
+            or (isinstance(raw_acknowledgement, str) and raw_acknowledgement.strip().lower() in ("1", "true", "yes"))
+        )
         force_low = bool(body.get("force_low_quality"))
         output_format = body.get("output_format")
         layouts = body.get("layouts")
@@ -3867,6 +3872,14 @@ async def process_endpoint(
     if community_candidate_id:
         if BILLING_ENABLED:
             raise HTTPException(status_code=403, detail="Community Highlights generation is currently available only in the Clippy desktop app.")
+        supplied_desktop_token = request.headers.get("X-Clippy-Token", "")
+        if (
+            not _DESKTOP_API_TOKEN
+            or not supplied_desktop_token
+            or not hmac.compare_digest(supplied_desktop_token, _DESKTOP_API_TOKEN)
+        ):
+            community_log_event("generation.auth.rejected", level=logging.WARNING, outcome="missing_or_invalid_desktop_token")
+            raise HTTPException(status_code=401, detail="This local Clippy API requires its active desktop session token.")
         if not isinstance(community_candidate_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", community_candidate_id):
             raise HTTPException(status_code=400, detail="The highlight candidate identifier is invalid.")
         if url or file or thumbnail_session_id or upload_id:
