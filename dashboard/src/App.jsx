@@ -1274,6 +1274,25 @@ function App() {
     handleProcessRef.current(pending.data);
   }, [billingEnabled, isSignedIn]);
 
+  const openCommunityHighlightJob = (targetJobId) => {
+    if (!targetJobId) return;
+    flushClipState();
+    setJobId(targetJobId);
+    setStatus('processing');
+    setResults(null);
+    setLogs([]);
+    setLogTimes([]);
+    setQueueInfo(null);
+    setJobError('');
+    setPartialJob(null);
+    setFirstVideoJob(false);
+    setProcessingMedia({ type: 'server', payload: `/api/source/${targetJobId}` });
+    setProjectState(null);
+    setNoSource(false);
+    setActiveTab('dashboard');
+    localStorage.removeItem(SESSION_KEY);
+  };
+
   const handleReset = async () => {
     // Save the latest local rendered versions before clearing the active job.
     // If the sync fails, keep the project open so the user can retry safely.
@@ -1682,11 +1701,11 @@ function App() {
                   <p className="eyebrow flex items-center gap-2"><MessageCircle size={12} /> 12 · COMMUNITY HIGHLIGHTS</p>
                   <h1 className="font-display lowercase text-3xl md:text-4xl text-ink">Community Highlights</h1>
                   <p className="text-sm sm:text-base text-muted leading-relaxed max-w-2xl">
-                    Turn live-chat reactions into downloadable highlight clips. Connect the Twitch or Google account for the stream, then start chat monitoring and rolling recording together. Highlights can be reviewed and downloaded as .ts files; trimming and MP4 export are not available yet.
+                    Turn live-chat reactions into finished vertical Shorts. Connect the Twitch or Google account for the stream, then start chat monitoring and rolling recording together. Review each generated highlight, approve it, and let Clippy prepare one Short through the regular clip pipeline.
                   </p>
                 </div>
                 <CommunityHighlightsConnections onConnectionsChange={setCommunityProviderConnections} />
-                <CommunityHighlightsMonitor connections={communityProviderConnections} />
+                <CommunityHighlightsMonitor connections={communityProviderConnections} onOpenJob={openCommunityHighlightJob} />
                 <div className="rounded-card border border-rule bg-paper2 p-5 sm:p-6">
                   <div className="flex items-center gap-2 mb-2 text-ink2">
                     <Activity size={16} className="text-brass" />
@@ -1696,9 +1715,9 @@ function App() {
                     <li>Connect the Twitch or Google account that has access to the stream’s live chat.</li>
                     <li>Paste that stream’s Twitch channel or YouTube live/video URL. Start chat monitoring and rolling recording for the same stream.</li>
                     <li>Choose trigger phrases and chat-activity thresholds. Matching reactions create candidates while the corresponding buffer is recording.</li>
-                    <li>Review each completed candidate, then approve, reject, delete, or download its MPEG-TS file.</li>
+                    <li>Preview each completed candidate. Approve & Generate targets one vertical Short using Clippy’s existing transcription, selection, captions, hooks, and rendering pipeline.</li>
                   </ol>
-                  <p className="text-xs text-muted mt-3">Fine trimming and MP4 export are not available yet.</p>
+                  <p className="text-xs text-muted mt-3">Generated Shorts open in the normal Clippy results screen. Publishing remains a separate action; nothing is posted automatically.</p>
                 </div>
               </div>
             </div>
