@@ -464,3 +464,18 @@ def test_manifest_failure_marks_candidate_and_local_library_retryable(handoff, m
     assert not (output_root / manager.snapshot["generation_job_id"]).exists()
     assert library_statuses == [(manager.snapshot["generation_job_id"], "failed")]
     assert queued == []
+
+
+def test_candidate_generation_is_disabled_in_managed_cloud_mode(handoff, monkeypatch):
+    _output_root, _upload_root, _original, manager, queued = handoff
+    monkeypatch.setattr(app_module, "BILLING_ENABLED", True)
+
+    response = _post_process({
+        "community_candidate_id": manager.snapshot["candidate_id"],
+        "acknowledged": True,
+    })
+
+    assert response.status_code == 403
+    assert manager.snapshot["generation_status"] == "not_started"
+    assert manager.snapshot["generation_job_id"] is None
+    assert queued == []
