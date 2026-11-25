@@ -43,6 +43,8 @@ from community_highlights.api import (
     restore_community_highlights_state,
     stop_community_highlights_workers,
 )
+from community_highlights.capture_sessions import capture_sessions
+from community_highlights.diagnostics import log_event as community_log_event
 
 load_dotenv()
 
@@ -720,6 +722,77 @@ def queue_snapshot(job_id):
 
 def _enqueue_job(job_id: str, priority: int = 2):
     job_queue.put_nowait((priority, next(_job_seq), job_id))
+
+
+def _update_community_candidate_generation(job_id: str, status: str, error: str | None = None) -> None:
+    """Mirror normal Clippy job lifecycle transitions onto the source candidate."""
+    job = jobs.get(job_id) or {}
+    candidate_id = job.get("community_candidate_id")
+    if not candidate_id:
+        return
+    try:
+        capture_sessions.update_candidate_generation(candidate_id, job_id, status=status, error=error)
+    except Exception as update_error:
+        community_log_event(
+            "generation.state_sync_failed",
+            level=logging.ERROR,
+            candidate_id=candidate_id,
+            job_id=job_id,
+            status=status,
+            error_type=type(update_error).__name__,
+        )
+
+
+def _stage_community_candidate_source(candidate_path: str | Path, candidate_id: str, job_id: str) -> str:
+    """Stage a validated candidate without moving or modifying its review MP4."""
+    source = Path(candidate_path)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("The approved highlight MP4 is not a regular file.")
+    source_size = source.stat().st_size
+    if source_size <= 0:
+        raise ValueError("The approved highlight MP4 is empty.")
+    if source_size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise ValueError(f"The approved highlight exceeds Clippy's {MAX_FILE_SIZE_MB} MB source limit.")
+
+    upload_root = Path(UPLOAD_DIR)
+    upload_root.mkdir(parents=True, exist_ok=True)
+    destination = upload_root / f"{job_id}_community-highlight.mp4"
+    temporary = upload_root / f".{job_id}_community-highlight.staging"
+    if destination.exists() or destination.is_symlink() or temporary.exists() or temporary.is_symlink():
+        raise FileExistsError("A staged source already exists for this generation job.")
+    try:
+        try:
+            os.link(source, destination)
+            outcome = "hardlink"
+        except OSError:
+            shutil.copyfile(source, temporary)
+            with temporary.open("rb+") as staged:
+                staged.flush()
+                os.fsync(staged.fileno())
+            if temporary.stat().st_size != source_size:
+                raise OSError("The staged highlight copy failed its size check.")
+            os.replace(temporary, destination)
+            outcome = "copy"
+        if destination.is_symlink() or not destination.is_file() or destination.stat().st_size != source_size:
+            raise OSError("The staged highlight source failed validation.")
+        community_log_event(
+            "generation.source_staged",
+            candidate_id=candidate_id,
+            job_id=job_id,
+            size_bytes=source_size,
+            outcome=outcome,
+        )
+        return str(destination)
+    except Exception:
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     """
@@ -1455,7 +1528,7 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False):
+                           via_api_key=False, community_candidate_id=None):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         with open(path, "w") as f:
@@ -1480,9 +1553,12 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 # The probe's "statics bot-checked for this video" verdict.
                 "skip_statics": bool(skip_statics),
                 "via_api_key": bool(via_api_key),
+                "community_candidate_id": community_candidate_id,
             }, f)
+        return True
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
+        return False
 
 
 def _clear_resume_manifest(job_id):
@@ -1605,6 +1681,7 @@ def _resume_interrupted_jobs() -> set:
             'webhook_secret': m.get("webhook_secret"),
             'base_url': m.get("base_url"),
             'via_api_key': bool(m.get("via_api_key")),
+            'community_candidate_id': m.get("community_candidate_id"),
         }
         _enqueue_job(job_id, int(m.get("priority", 2)))
         resumed += 1
@@ -1988,6 +2065,7 @@ async def run_job_wrapper(job_id):
                 except Exception:
                     pass
             _schedule_auto_retry(job_id, job)
+            _update_community_candidate_generation(job_id, "queued")
             _running_jobs.discard(job_id)
             concurrency_semaphore.release()
             job_queue.task_done()
@@ -1997,6 +2075,14 @@ async def run_job_wrapper(job_id):
         # state, so drop the resume manifest. It only survives if the container
         # was killed mid-run, which is exactly when we want to resume.
         _clear_resume_manifest(job_id)
+        final_status = (job or {}).get("status")
+        if final_status in {"completed", "failed"}:
+            _update_community_candidate_generation(
+                job_id,
+                final_status,
+                "The Clippy generation job failed. The approved candidate is safe to retry."
+                if final_status == "failed" else None,
+            )
         # Settle the minute reservation (managed jobs only): commit on success,
         # release otherwise so the minutes go back to the user.
         await _settle_reservation(job_id, job)
@@ -2519,6 +2605,7 @@ async def lifespan(app: FastAPI):
     # Re-enqueue jobs that were mid-processing when we stopped (redeploy). Their
     # reservations must survive the orphan sweep so the resumed run can settle them.
     _resumed_reservation_ids = _resume_interrupted_jobs()
+    _reconcile_community_candidate_generations()
     if not BILLING_ENABLED:
         active_library_jobs = {
             job_id for job_id, job in jobs.items()
@@ -2945,6 +3032,7 @@ async def run_job(job_id, job_data):
     output_dir = job_data['output_dir']
     
     jobs[job_id]['status'] = 'processing'
+    _update_community_candidate_generation(job_id, "processing")
     if not BILLING_ENABLED:
         try:
             local_library.update_project_status(job_id, "processing")
@@ -3657,6 +3745,7 @@ async def process_endpoint(
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
+    community_candidate_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
@@ -3664,14 +3753,6 @@ async def process_endpoint(
     hook_spec: Optional[str] = Form(None),
 ):
     _assert_data_storage_available()
-    api_key = await resolve_gemini(request)
-    if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
-        # Self-host with an OpenAI-compatible server configured needs no
-        # Google key for the core pipeline: the moment picker runs there and
-        # the frame-based stages degrade on their own (layout_picker returns
-        # "none", silent videos fail with a message that says why).
-        raise gemini_missing_error()
-
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
     # May be lowered by the paid-proxy budget check in the metering block
     # below; self-host never runs that block, so it must default here.
@@ -3695,14 +3776,43 @@ async def process_endpoint(
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
+        community_candidate_id = body.get("community_candidate_id")
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
         caption_spec = body.get("caption_spec")
         hook_spec = body.get("hook_spec")
 
+    # Community Highlights is a local desktop-only source until its managed-cloud
+    # credential and media ownership model is deliberately designed.
+    if community_candidate_id:
+        if BILLING_ENABLED:
+            raise HTTPException(status_code=403, detail="Community Highlights generation is currently available only in the Clippy desktop app.")
+        if not isinstance(community_candidate_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", community_candidate_id):
+            raise HTTPException(status_code=400, detail="The highlight candidate identifier is invalid.")
+        if url or file or thumbnail_session_id or upload_id:
+            raise HTTPException(status_code=400, detail="A Community Highlights candidate must be the only generation source.")
+        if not ack_flag:
+            raise HTTPException(status_code=400, detail="You must confirm you own the content or have rights to process it.")
+        existing_candidate = capture_sessions.get_candidate_generation(community_candidate_id)
+        if existing_candidate is None:
+            raise HTTPException(status_code=404, detail="Highlight candidate not found.")
+        if existing_candidate.get("status") != "ready" or existing_candidate.get("review_status") == "rejected":
+            raise HTTPException(status_code=409, detail="Only a completed, non-rejected highlight can be generated.")
+        existing_job_id = existing_candidate.get("generation_job_id")
+        if existing_job_id and existing_candidate.get("generation_status") in {"staging", "queued", "processing", "completed"}:
+            community_log_event("generation.request.idempotent", candidate_id=community_candidate_id, job_id=existing_job_id, status=existing_candidate.get("generation_status"))
+            return {"job_id": existing_job_id, "status": existing_candidate.get("generation_status"), "partial": None, "idempotent": True}
+
+    api_key = await resolve_gemini(request)
+    if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
+        raise gemini_missing_error()
+
     # Normalize output format (auto = keep pipeline default).
-    if output_format not in ("vertical", "horizontal", "square"):
+    if community_candidate_id:
+        output_format = "vertical"
+        target_clips = "1"
+    elif output_format not in ("vertical", "horizontal", "square"):
         output_format = "auto"
 
     # Accepts a JSON list or a comma-separated form field.
@@ -3729,7 +3839,7 @@ async def process_endpoint(
     if upload_id and not url and not file and not thumb_session:
         upload_slot = _take_pending_upload(upload_id, await _owner_id(request))
 
-    if not url and not file and not thumb_session and not upload_slot:
+    if not url and not file and not thumb_session and not upload_slot and not community_candidate_id:
         raise HTTPException(status_code=400, detail="Must provide URL, File or upload_id")
 
     # Completion callback: reject unsafe targets NOW (clear 400) — delivery
@@ -3765,7 +3875,8 @@ async def process_endpoint(
         "ip": client_ip,
         "user_agent": user_agent,
         "timestamp": time.time(),
-        "source": ("thumbnail_session" if thumb_session else "upload_id" if upload_slot
+        "source": ("community_highlights" if community_candidate_id else
+                   "thumbnail_session" if thumb_session else "upload_id" if upload_slot
                    else "url" if url else "file"),
     }
 
@@ -3774,7 +3885,26 @@ async def process_endpoint(
     job_output_dir = os.path.join(OUTPUT_DIR, job_id)
     os.makedirs(job_output_dir, exist_ok=True)
 
-
+    community_candidate_source = None
+    community_candidate_claimed = False
+    if community_candidate_id:
+        try:
+            _candidate, community_candidate_source, community_candidate_claimed = capture_sessions.claim_candidate_generation(community_candidate_id, job_id)
+        except KeyError:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=404, detail="Highlight candidate not found.") from None
+        except ValueError as error:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        except Exception as error:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            community_log_event("generation.claim.failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
+            raise HTTPException(status_code=503, detail="Clippy could not safely reserve this highlight for generation.") from None
+        if not community_candidate_claimed:
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            latest = capture_sessions.get_candidate_generation(community_candidate_id) or {}
+            return {"job_id": latest.get("generation_job_id"), "status": latest.get("generation_status", "queued"), "partial": None, "idempotent": True}
+        community_log_event("generation.source_claimed", candidate_id=community_candidate_id, job_id=job_id, outcome="staging")
 
     # Prepare Command
     # sys.executable, not "python": bare "python" resolves against PATH, which
@@ -3949,6 +4079,32 @@ async def process_endpoint(
         os.replace(src, input_path)
         pending_uploads.pop(upload_id, None)
         cmd.extend(["-i", input_path])
+    elif community_candidate_source is not None:
+        input_path = None
+        try:
+            input_path = _stage_community_candidate_source(community_candidate_source, community_candidate_id, job_id)
+            source_duration = _media_duration_seconds(input_path)
+            if source_duration <= 0:
+                raise HTTPException(status_code=400, detail="The approved highlight is not a readable MP4.")
+            if MIN_SOURCE_SECONDS > 0 and source_duration < MIN_SOURCE_SECONDS:
+                _reject_short_source(source_duration)
+            cmd.extend(["-i", input_path])
+            community_log_event("generation.source_validated", candidate_id=community_candidate_id, job_id=job_id, duration_seconds=source_duration, size_bytes=os.path.getsize(input_path))
+        except Exception as error:
+            if input_path:
+                try:
+                    os.remove(input_path)
+                except OSError:
+                    pass
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            try:
+                capture_sessions.update_candidate_generation(community_candidate_id, job_id, status="failed", error="Clippy could not stage or validate the approved highlight source. Retry generation.")
+            except Exception as state_error:
+                community_log_event("generation.failure_state_write_failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(state_error).__name__)
+            community_log_event("generation.source_stage_failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
+            if isinstance(error, HTTPException):
+                raise
+            raise HTTPException(status_code=400, detail="Clippy could not safely stage the approved highlight source.") from None
     else:
         # Save uploaded file with size limit check.
         # basename() strips any path components from the client-supplied
@@ -3984,8 +4140,23 @@ async def process_endpoint(
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
-    user_id, priority, reservation_id, user_plan, partial = await reserve_process_minutes(
-        request, url, input_path, job_id, max_minutes=max_minutes)
+    try:
+        user_id, priority, reservation_id, user_plan, partial = await reserve_process_minutes(
+            request, url, input_path, job_id, max_minutes=max_minutes)
+    except Exception as error:
+        if community_candidate_claimed:
+            try:
+                capture_sessions.update_candidate_generation(community_candidate_id, job_id, status="failed", error="Clippy could not reserve the generation job. Retry this approved candidate.")
+            except Exception:
+                pass
+            if input_path:
+                try:
+                    os.remove(input_path)
+                except OSError:
+                    pass
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            community_log_event("generation.reservation.failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
+        raise
 
     # Pre-flight quality gate: probe the offered resolution BEFORE starting, so
     # the user can abort (refresh cookies / update yt-dlp) instead of burning
@@ -4065,6 +4236,7 @@ async def process_endpoint(
         # API callers poll or get the webhook; the clips-ready email is for
         # people who left the dashboard tab.
         'via_api_key': request_uses_api_key(request),
+        'community_candidate_id': community_candidate_id,
     }
 
     # Persist the owner so recovered jobs keep their multi-tenant guard after a
@@ -4079,17 +4251,50 @@ async def process_endpoint(
 
     # Resume manifest: enough to re-run this job if the container dies mid-flight
     # (a redeploy). No secrets — the env is rebuilt from os.environ on resume.
-    _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id,
-                           watermark=jobs[job_id]['watermark'],
-                           webhook_url=webhook_url, webhook_secret=webhook_secret,
-                           base_url=api_base, partial=partial,
-                           source_cap_minutes=source_cap, skip_statics=skip_statics,
-                           via_api_key=jobs[job_id]['via_api_key'])
-
+    manifest_written = _write_resume_manifest(
+        job_id, cmd, priority, user_id, reservation_id,
+        watermark=jobs[job_id]['watermark'],
+        webhook_url=webhook_url, webhook_secret=webhook_secret,
+        base_url=api_base, partial=partial,
+        source_cap_minutes=source_cap, skip_statics=skip_statics,
+        via_api_key=jobs[job_id]['via_api_key'],
+        community_candidate_id=community_candidate_id,
+    )
+    if community_candidate_claimed:
+        if not manifest_written:
+            jobs.pop(job_id, None)
+            _clear_resume_manifest(job_id)
+            if input_path:
+                try:
+                    os.remove(input_path)
+                except OSError:
+                    pass
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            try:
+                capture_sessions.update_candidate_generation(community_candidate_id, job_id, status="failed", error="Clippy could not save the resumable generation job. Retry this approved candidate.")
+            except Exception:
+                pass
+            raise HTTPException(status_code=503, detail="Clippy could not safely queue this highlight for generation.")
+        try:
+            capture_sessions.update_candidate_generation(community_candidate_id, job_id, status="queued")
+        except Exception as error:
+            jobs.pop(job_id, None)
+            _clear_resume_manifest(job_id)
+            if input_path:
+                try:
+                    os.remove(input_path)
+                except OSError:
+                    pass
+            shutil.rmtree(job_output_dir, ignore_errors=True)
+            community_log_event("generation.queue_state_failed", level=logging.ERROR, candidate_id=community_candidate_id, job_id=job_id, error_type=type(error).__name__)
+            raise HTTPException(status_code=503, detail="Clippy could not safely save the generation state. Retry this approved candidate.") from None
     _enqueue_job(job_id, priority)
+    if community_candidate_id:
+        community_log_event("generation.queued", candidate_id=community_candidate_id, job_id=job_id, target_clips=1, output_format="vertical")
 
     return {"job_id": job_id, "status": "queued", "partial": partial,
-            "first_video": bool(getattr(request.state, "first_video", False))}
+            "first_video": bool(getattr(request.state, "first_video", False)),
+            "community_highlight": bool(community_candidate_id)}
 
 def _job_view_from_disk(job_id):
     """What the disk says about a job this instance does not hold in memory.
