@@ -374,3 +374,65 @@ def test_pin_budget_counts_shared_physical_segments_once(tmp_path):
 
     assert first == second == [shared.resolve()]
     assert capture._protected_segments[shared.resolve()] == 2
+
+
+def test_run_rejects_nonzero_ffmpeg_exit_and_logs_it(tmp_path, monkeypatch, caplog):
+    class FakeReader:
+        def read(self, _size):
+            return b""
+
+        def close(self):
+            pass
+
+    class FakeStream:
+        def open(self):
+            return FakeReader()
+
+        def close(self):
+            pass
+
+    class FakeResolved:
+        stream = FakeStream()
+
+        def open(self):
+            return self.stream.open()
+
+    class FakeStdin:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 7
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+    process = FakeProcess()
+    monkeypatch.setattr("community_highlights.rolling_capture.shutil.which", lambda _name: "C:/ffmpeg.exe")
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path),
+        resolver=lambda *_args, **_kwargs: FakeResolved(),
+        popen=lambda *_args, **_kwargs: process,
+    )
+
+    with caplog.at_level(40, logger="clippy.community_highlights"):
+        with pytest.raises(RollingCaptureError, match="could not finalize"):
+            capture.run()
+
+    assert "capture.ffmpeg.exit_nonzero" in caplog.text
+    assert '"return_code":7' in caplog.text
