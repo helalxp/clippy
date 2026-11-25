@@ -34,6 +34,8 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
   const [startingAction, setStartingAction] = useState('');
   const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
+  const requestedGenerationJobs = useRef(new Set());
+  const openedGenerationJobs = useRef(new Set());
 
   useEffect(() => () => {
     previewAbort.current?.abort();
@@ -95,6 +97,22 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
       closeCandidatePreview();
     }
   }, [candidates, previewCandidateId, closeCandidatePreview]);
+
+  useEffect(() => {
+    for (const candidate of candidates) {
+      const jobId = candidate.generation_job_id;
+      if (
+        candidate.generation_status === 'completed'
+        && jobId
+        && requestedGenerationJobs.current.has(jobId)
+        && !openedGenerationJobs.current.has(jobId)
+      ) {
+        openedGenerationJobs.current.add(jobId);
+        onOpenJob?.(jobId);
+        break;
+      }
+    }
+  }, [candidates, onOpenJob]);
 
   const streamReference = parseCommunityHighlightsStreamUrl(streamUrl);
   const providerConnection = streamReference ? connections?.[streamReference.provider] : null;
@@ -320,6 +338,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
           }),
         });
         if (!result?.job_id) throw new Error('Clippy did not return a generation job.');
+        requestedGenerationJobs.current.add(result.job_id);
       } else {
         await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/decision`, {
           method: 'POST',
@@ -652,7 +671,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
                           className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Retry Short</button>
                       )}
                       {candidate.generation_status === 'completed' && candidate.generation_job_id && (
-                        <button type="button" onClick={() => onOpenJob?.(candidate.generation_job_id)}
+                        <button type="button" onClick={() => { openedGenerationJobs.current.add(candidate.generation_job_id); onOpenJob?.(candidate.generation_job_id); }}
                           className="rounded-input border border-rule px-3 py-2 text-xs text-ink">Open Short</button>
                       )}
                     </>
