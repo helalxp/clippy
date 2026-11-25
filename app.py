@@ -1690,6 +1690,75 @@ def _resume_interrupted_jobs() -> set:
     return keep_reservations
 
 
+def _cleanup_orphaned_community_candidate_stage(job_id: str) -> None:
+    """Remove only our exact staged filenames when no resumable job manifest exists."""
+    try:
+        normalized_job_id = str(uuid.UUID(job_id))
+    except (TypeError, ValueError, AttributeError):
+        community_log_event(
+            "generation.orphan_cleanup.skipped",
+            level=logging.WARNING,
+            outcome="invalid_job_id",
+        )
+        return
+    if normalized_job_id != job_id.lower():
+        return
+
+    job_dir = Path(OUTPUT_DIR).resolve() / normalized_job_id
+    manifest_path = job_dir / _RESUME_FILE
+    if manifest_path.exists() or any(job_dir.glob("*_metadata.json")):
+        community_log_event(
+            "generation.orphan_cleanup.skipped",
+            candidate_id=None,
+            job_id=normalized_job_id,
+            outcome="manifest_or_result_present",
+        )
+        return
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    for name in (
+        f"{normalized_job_id}_community-highlight.mp4",
+        f".{normalized_job_id}_community-highlight.staging",
+    ):
+        staged = upload_root / name
+        try:
+            if staged.is_symlink():
+                community_log_event(
+                    "generation.orphan_cleanup.skipped",
+                    level=logging.WARNING,
+                    job_id=normalized_job_id,
+                    outcome="staged_path_is_symlink",
+                )
+                continue
+            if staged.is_file() and staged.resolve().parent == upload_root:
+                staged.unlink()
+        except OSError as error:
+            community_log_event(
+                "generation.orphan_cleanup.failed",
+                level=logging.ERROR,
+                job_id=normalized_job_id,
+                error_type=type(error).__name__,
+            )
+
+    try:
+        if job_dir.is_symlink():
+            return
+        if job_dir.is_dir() and job_dir.resolve().parent == Path(OUTPUT_DIR).resolve():
+            shutil.rmtree(job_dir)
+    except OSError as error:
+        community_log_event(
+            "generation.orphan_cleanup.failed",
+            level=logging.ERROR,
+            job_id=normalized_job_id,
+            error_type=type(error).__name__,
+        )
+    community_log_event(
+        "generation.orphan_cleanup.completed",
+        job_id=normalized_job_id,
+        outcome="staged_files_only",
+    )
+
+
 def _reconcile_community_candidate_generations() -> None:
     """Reconcile candidate links with completed and resumed normal Clippy jobs."""
     for candidate in capture_sessions.list_candidates():
@@ -1746,6 +1815,7 @@ def _reconcile_community_candidate_generations() -> None:
                 status="failed",
                 error="The generation job could not be recovered. The approved candidate is safe to retry.",
             )
+            _cleanup_orphaned_community_candidate_stage(job_id)
             community_log_event(
                 "generation.recovery.missing_job",
                 level=logging.ERROR,
