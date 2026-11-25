@@ -393,3 +393,39 @@ def test_startup_removes_orphaned_staging_copy_without_touching_candidate(handof
     assert not job_dir.exists()
     assert original.is_file()
     assert original.read_bytes() == b"original-highlight-mp4"
+
+
+def test_completed_generation_state_cannot_be_downgraded_by_stale_recovery(tmp_path):
+    root = tmp_path / "captures"
+    store = MemoryStateStore()
+    manager = CaptureSessionManager(output_root=root, state_store=store)
+    manager.restore()
+
+    session_id = "session_12345678901234567890"
+    candidate_id = "candidate_12345678901234567890"
+    source = root / session_id / "highlights" / f"{candidate_id}.mp4"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"highlight")
+    job_id = str(uuid.uuid4())
+    candidate = HighlightCandidate(
+        candidate_id=candidate_id,
+        capture_session_id=session_id,
+        triggered_at=datetime.now(timezone.utc),
+        pre_seconds=45,
+        post_seconds=45,
+        reason="phrase",
+        status="ready",
+        output_path=source,
+        review_status="approved",
+        generation_status="completed",
+        generation_job_id=job_id,
+    )
+    manager._candidates[candidate_id] = candidate
+    manager._persist_locked(strict=True)
+
+    result = manager.update_candidate_generation(
+        candidate_id, job_id, status="queued",
+    )
+
+    assert result["generation_status"] == "completed"
+    assert manager.get_candidate_generation(candidate_id)["generation_status"] == "completed"
