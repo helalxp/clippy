@@ -14,6 +14,7 @@ import httpx
 
 from .credentials import CredentialStoreError, WindowsCredentialStore
 from .credential_lifecycle import provider_credential_lock, provider_is_disconnecting, provider_operation_generation
+from .diagnostics import log_event
 
 TWITCH_DEVICE_URL = "https://id.twitch.tv/oauth2/device"
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
@@ -59,6 +60,7 @@ def _safe_activation_url(value: Any) -> str:
 async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str, Any]:
     client_id = twitch_client_id()
     if not client_id:
+        log_event("oauth.start.unavailable", level=30, provider="twitch", outcome="missing_client_id")
         raise TwitchOAuthError("Twitch sign-in is not configured in this Clippy build.")
     if provider_is_disconnecting("twitch"):
         raise TwitchOAuthError("Twitch is being disconnected. Try again shortly.")
@@ -77,7 +79,8 @@ async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str
         payload = response.json()
         if not isinstance(payload, dict):
             raise TwitchOAuthError("Twitch returned an invalid authorization response.")
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError) as error:
+        log_event("oauth.start.failed", level=40, provider="twitch", error_type=type(error).__name__)
         raise TwitchOAuthError("Could not reach Twitch. Check your connection and try again.") from None
     finally:
         if owned_client:
@@ -118,6 +121,7 @@ async def start_twitch_flow(client: httpx.AsyncClient | None = None) -> dict[str
             "status": "pending",
             "message": "Waiting for Twitch authorization.",
         }
+    log_event("oauth.flow.started", provider="twitch", outcome="pending")
     return {
         "flow_id": flow_id,
         "verification_url": activation_url,
@@ -169,7 +173,8 @@ async def poll_twitch_flow(
                 payload = response.json()
                 if not isinstance(payload, dict):
                     return _finish(flow_id, "error", "Twitch returned an invalid authorization response.")
-            except (httpx.HTTPError, ValueError):
+            except (httpx.HTTPError, ValueError) as error:
+                log_event("oauth.poll.transient_failure", level=30, provider="twitch", error_type=type(error).__name__)
                 return {"status": "pending", "message": "Can't reach Twitch right now. Retrying shortly."}
 
             error = payload.get("message") or payload.get("error")
@@ -222,8 +227,10 @@ async def poll_twitch_flow(
                 })
                 flow.pop("device_code", None)
                 flow.update(status="connected", message="Twitch is connected.")
-            except (httpx.HTTPError, ValueError, CredentialStoreError, TwitchOAuthError):
+            except (httpx.HTTPError, ValueError, CredentialStoreError, TwitchOAuthError) as error:
+                log_event("oauth.flow.failed", level=40, provider="twitch", outcome="validation_or_storage_failed", error_type=type(error).__name__)
                 return _finish(flow_id, "error", "Clippy could not verify or securely save Twitch access. Please try again.")
+            log_event("oauth.flow.connected", provider="twitch", outcome="success")
             return {"status": "connected", "message": "Twitch is connected."}
     finally:
         if owned_client and client is not None:
@@ -233,6 +240,7 @@ async def poll_twitch_flow(
 
 def _finish(flow_id: str, status: str, message: str) -> dict[str, str]:
     with_status = {"status": status, "message": message}
+    log_event("oauth.flow.finished", provider="twitch", outcome=status)
     # Device codes are one-time and must not remain in memory after completion.
     flow = _flows.get(flow_id)
     if flow is not None:
