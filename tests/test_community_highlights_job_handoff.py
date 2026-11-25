@@ -295,3 +295,41 @@ def test_timestamped_diagnostics_hash_ids_and_drop_secret_fields(caplog):
     assert opaque_id not in caplog.text
     assert "never-log-this-token" not in caplog.text
     assert "private chat contents" not in caplog.text
+
+
+
+def test_startup_reconciles_recovered_completed_job_to_candidate(handoff, monkeypatch):
+    _output_root, _upload_root, _original, manager, _queued = handoff
+    job_id = str(uuid.uuid4())
+    manager.snapshot.update(
+        review_status="approved",
+        generation_status="queued",
+        generation_job_id=job_id,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "jobs",
+        {job_id: {"status": "completed", "result": {"clips": []}}},
+    )
+
+    app_module._reconcile_community_candidate_generations()
+
+    assert manager.snapshot["generation_status"] == "completed"
+    assert manager.snapshot["generation_error"] is None
+
+
+def test_startup_marks_missing_generation_job_retryable(handoff, monkeypatch):
+    _output_root, _upload_root, _original, manager, _queued = handoff
+    job_id = str(uuid.uuid4())
+    manager.snapshot.update(
+        review_status="approved",
+        generation_status="processing",
+        generation_job_id=job_id,
+    )
+    monkeypatch.setattr(app_module, "jobs", {})
+    monkeypatch.setattr(app_module, "_read_manifest", lambda _job_id: None)
+
+    app_module._reconcile_community_candidate_generations()
+
+    assert manager.snapshot["generation_status"] == "failed"
+    assert manager.snapshot["generation_error"]
