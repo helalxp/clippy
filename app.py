@@ -41,6 +41,7 @@ from platform_compat import job_subprocess_options
 from community_highlights.api import (
     router as community_highlights_router,
     restore_community_highlights_state,
+    stop_community_highlights_workers,
 )
 
 load_dotenv()
@@ -2552,8 +2553,12 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
-    yield
-    # Cleanup (optional: cancel worker)
+    try:
+        yield
+    finally:
+        # The router's legacy shutdown event is bypassed by this custom lifespan.
+        # Stop provider/capture workers explicitly so their final state is saved.
+        await stop_community_highlights_workers()
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(community_highlights_router)

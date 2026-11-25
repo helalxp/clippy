@@ -324,7 +324,6 @@ async def stop_capture_session(session_id: str):
     return {"stopped": True}
 
 
-@router.on_event("shutdown")
 async def stop_community_highlights_workers():
     """Stop owned background work before the backend process exits."""
     await capture_sessions.stop_all()
