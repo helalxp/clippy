@@ -366,3 +366,30 @@ def test_candidate_generation_requires_active_desktop_session_token(handoff):
     assert manager.snapshot["generation_status"] == "not_started"
     assert manager.snapshot["generation_job_id"] is None
     assert queued == []
+
+
+def test_startup_removes_orphaned_staging_copy_without_touching_candidate(handoff, monkeypatch):
+    output_root, upload_root, original, manager, _queued = handoff
+    job_id = str(uuid.uuid4())
+    manager.snapshot.update(
+        review_status="approved",
+        generation_status="staging",
+        generation_job_id=job_id,
+    )
+    upload_root.mkdir(parents=True, exist_ok=True)
+    staged = upload_root / f"{job_id}_community-highlight.mp4"
+    staged.write_bytes(b"staged-hardlink-or-copy")
+    job_dir = output_root / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / ".owner").write_text("local-owner", encoding="utf-8")
+
+    monkeypatch.setattr(app_module, "jobs", {})
+    monkeypatch.setattr(app_module, "_read_manifest", lambda _job_id: None)
+
+    app_module._reconcile_community_candidate_generations()
+
+    assert manager.snapshot["generation_status"] == "failed"
+    assert not staged.exists()
+    assert not job_dir.exists()
+    assert original.is_file()
+    assert original.read_bytes() == b"original-highlight-mp4"
