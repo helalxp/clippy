@@ -124,6 +124,7 @@ async def stop_twitch_authorization(flow_id: str):
     if len(flow_id) < 32 or len(flow_id) > 128:
         raise HTTPException(status_code=404, detail="Sign-in attempt not found.")
     cancelled = await cancel_twitch_flow(flow_id)
+    log_event("oauth.cancel", provider="twitch", outcome="cancelled" if cancelled else "already_completed_or_missing")
     return {"cancelled": cancelled}
 
 
@@ -218,6 +219,7 @@ async def stop_google_authorization(flow_id: str):
     if len(flow_id) < 32 or len(flow_id) > 128:
         raise HTTPException(status_code=404, detail="Sign-in attempt not found.")
     cancelled = await cancel_google_flow(flow_id)
+    log_event("oauth.cancel", provider="google", outcome="cancelled" if cancelled else "already_completed_or_missing")
     return {"cancelled": cancelled}
 
 
@@ -325,6 +327,7 @@ async def stop_capture_session(session_id: str):
         raise HTTPException(status_code=503, detail="Community Highlights could not save the stop status to local storage.") from None
     if not stopped:
         raise HTTPException(status_code=404, detail="Capture session not found.")
+    log_event("capture.stop.completed", session_id=session_id)
     return {"stopped": True}
 
 
