@@ -17,7 +17,7 @@ const statusLabel = (status) => ({
   stopped: 'Stopped',
 }[status] || status || 'Unknown');
 
-export default function CommunityHighlightsMonitor({ connections }) {
+export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
@@ -301,18 +301,37 @@ export default function CommunityHighlightsMonitor({ connections }) {
   };
 
   const decideCandidate = async (candidateId, approved) => {
+    if (approved && !window.confirm(
+      'Approve this highlight and generate one vertical Short? Confirm that you own this content or have permission to process it.'
+    )) return;
+
     setReviewBusy(candidateId);
     setError('');
     try {
-      await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/decision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved }),
-      });
+      if (approved) {
+        const result = await apiJson('/api/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            community_candidate_id: candidateId,
+            acknowledged: true,
+            output_format: 'vertical',
+            target_clips: 1,
+          }),
+        });
+        if (!result?.job_id) throw new Error('Clippy did not return a generation job.');
+      } else {
+        await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/decision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: false }),
+        });
+      }
       if (previewCandidateId === candidateId) closeCandidatePreview();
       await refreshSessions();
     } catch (requestError) {
-      setError(requestError?.detail || 'Could not save the candidate decision.');
+      setError(requestError?.detail || requestError.message || (approved ? 'Could not generate a Short from this candidate.' : 'Could not reject the candidate.'));
+      await refreshSessions().catch(() => {});
     } finally {
       setReviewBusy('');
     }
@@ -593,6 +612,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
                   </div>
                   <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments · {candidate.review_status || 'pending review'}</p>
                   {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
+                  {candidate.generation_error && <p className="text-xs text-warn mt-1">{candidate.generation_error}</p>}
                 </div>
                 <div className="flex gap-2 shrink-0">
                   {candidate.status === 'ready' && (
@@ -610,15 +630,30 @@ export default function CommunityHighlightsMonitor({ connections }) {
                           </button>
                         </>
                       )}
-                      {candidate.review_status === 'pending' ? (
+                      {candidate.review_status === 'pending' && (
                         <>
                           <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Approve</button>
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                            {reviewBusy === candidate.candidate_id ? 'Starting…' : 'Approve & Generate'}
+                          </button>
                           <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
                             className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
                         </>
-                      ) : (
-                        <span className="text-xs text-muted capitalize">{candidate.review_status}</span>
+                      )}
+                      {candidate.review_status === 'approved' && candidate.generation_status === 'not_started' && (
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Generate Short</button>
+                      )}
+                      {['staging', 'queued', 'processing'].includes(candidate.generation_status) && (
+                        <span className="text-xs text-muted">{candidate.generation_status === 'staging' ? 'Preparing source…' : 'Generating Short…'}</span>
+                      )}
+                      {candidate.generation_status === 'failed' && (
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Retry Short</button>
+                      )}
+                      {candidate.generation_status === 'completed' && candidate.generation_job_id && (
+                        <button type="button" onClick={() => onOpenJob?.(candidate.generation_job_id)}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink">Open Short</button>
                       )}
                     </>
                   )}
