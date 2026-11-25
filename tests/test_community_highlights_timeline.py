@@ -9,9 +9,7 @@ from community_highlights.rolling_capture import SegmentRecord, RollingCaptureEr
 from community_highlights.timeline import (
     segment_wall_interval,
     select_segments_for_interval,
-    select_segments_for_window,
     validate_contiguous_interval,
-    validate_contiguous_window,
 )
 
 
@@ -22,8 +20,7 @@ def make_record(path: Path, start: float, end: float, wall_end: float) -> Segmen
     return SegmentRecord(path.resolve(), start, end)
 
 
-def test_selects_segments_overlapping_pre_and_post_trigger_window(tmp_path):
-    trigger = datetime.fromtimestamp(1_000, timezone.utc)
+def test_selects_segments_overlapping_exact_utc_interval(tmp_path):
     records = [
         make_record(tmp_path / "s0.ts", 0, 4, 984),
         make_record(tmp_path / "s1.ts", 4, 8, 988),
@@ -33,11 +30,23 @@ def test_selects_segments_overlapping_pre_and_post_trigger_window(tmp_path):
         make_record(tmp_path / "s5.ts", 20, 24, 1_004),
     ]
 
-    selected = select_segments_for_window(
-        records, triggered_at=trigger, pre_seconds=10, post_seconds=3
+    selected = select_segments_for_interval(
+        records,
+        window_start=datetime.fromtimestamp(990, timezone.utc),
+        window_end=datetime.fromtimestamp(1_003, timezone.utc),
     )
 
     assert [item.path.name for item in selected] == ["s2.ts", "s3.ts", "s4.ts", "s5.ts"]
+
+
+def test_interval_selection_rejects_naive_boundaries(tmp_path):
+    record = make_record(tmp_path / "segment.ts", 0, 4, 1000)
+    with pytest.raises(ValueError, match="window_start must be timezone-aware"):
+        select_segments_for_interval(
+            [record],
+            window_start=datetime.now(),
+            window_end=datetime.now(timezone.utc),
+        )
 
 
 def test_segment_wall_interval_uses_file_mtime_and_media_duration(tmp_path):
@@ -47,25 +56,22 @@ def test_segment_wall_interval_uses_file_mtime_and_media_duration(tmp_path):
     assert end.timestamp() == pytest.approx(1000)
 
 
-def test_rejects_naive_trigger_and_negative_windows(tmp_path):
-    record = make_record(tmp_path / "segment.ts", 0, 4, 1000)
-    with pytest.raises(ValueError, match="timezone-aware"):
-        select_segments_for_window([record], triggered_at=datetime.now(), pre_seconds=1, post_seconds=1)
-    with pytest.raises(ValueError, match="cannot be negative"):
-        select_segments_for_window([record], triggered_at=datetime.now(timezone.utc), pre_seconds=-1, post_seconds=1)
-
-
-def test_validates_window_coverage_and_gaps(tmp_path):
-    trigger = datetime.fromtimestamp(1000, timezone.utc)
+def test_validates_exact_interval_coverage(tmp_path):
     complete = [
         make_record(tmp_path / "a.ts", 0, 4, 996),
         make_record(tmp_path / "b.ts", 4, 8, 1000),
         make_record(tmp_path / "c.ts", 8, 12, 1004),
     ]
-    validate_contiguous_window(complete, triggered_at=trigger, pre_seconds=4, post_seconds=4)
+    window_start = datetime.fromtimestamp(996, timezone.utc)
+    window_end = datetime.fromtimestamp(1004, timezone.utc)
+    validate_contiguous_interval(
+        complete, window_start=window_start, window_end=window_end
+    )
 
     with pytest.raises(ValueError, match="full pre-trigger"):
-        validate_contiguous_window(complete[2:], triggered_at=trigger, pre_seconds=4, post_seconds=4)
+        validate_contiguous_interval(
+            complete[2:], window_start=window_start, window_end=window_end
+        )
 
 
 def test_assembles_selected_segments_without_reencoding(tmp_path):

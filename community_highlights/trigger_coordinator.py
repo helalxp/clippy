@@ -6,7 +6,6 @@ import threading
 from typing import Any
 
 from .capture_sessions import capture_sessions
-from .rolling_capture import RollingCaptureError
 from .models import ChatMessage
 from .state_store import get_state_store
 from .triggers import TriggerEngine, TriggerRule
@@ -174,10 +173,11 @@ class TriggerCoordinator:
                     post_seconds=post_seconds,
                     reason=match.reason,
                 )
-            except (ValueError, RollingCaptureError) as error:
-                # A failed trigger must not tear down chat, but it must leave a
-                # safe diagnostic instead of disappearing silently. Avoid logging
-                # message text, stream URLs, provider IDs, or credential data.
+            except Exception as error:
+                # A failed trigger must not tear down chat, regardless of whether
+                # it came from validation, capture I/O, or durable-state storage.
+                # Log only fixed labels and the exception type, never chat content,
+                # stream identifiers/URLs, or credential data.
                 _LOG.warning(
                     "Community Highlights trigger was not captured (provider=%s, reason=%s, error_type=%s)",
                     match.provider,

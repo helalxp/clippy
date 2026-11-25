@@ -100,11 +100,8 @@ class RollingCapture:
         self._resolver = resolver
         self._popen = popen
         self._clock = clock
-        self._process: Any | None = None
-        self._reader: Any | None = None
         self._stop_requested = threading.Event()
         self._started_at: float | None = None
-        self._stopped = False
         # Each candidate owns one pin per segment. Reference counts prevent
         # one overlapping candidate from unpinning footage another still reads.
         self._protected_segments: dict[Path, int] = {}
@@ -248,7 +245,7 @@ class RollingCapture:
     ) -> None:
         """Run until stopped or the source ends; call from a worker thread."""
         with self._lock:
-            if self._process is not None or self._started_at is not None:
+            if self._started_at is not None:
                 raise RollingCaptureError("This capture instance can only be run once.")
             self._started_at = self._clock()
 
@@ -280,9 +277,6 @@ class RollingCapture:
             except OSError:
                 raise RollingCaptureError("Clippy could not start FFmpeg. Check the configured FFmpeg executable.") from None
 
-            with self._lock:
-                self._process = process
-                self._reader = reader
             if on_started is not None:
                 on_started()
 
@@ -323,10 +317,6 @@ class RollingCapture:
                         close()
                     except Exception:
                         pass
-            with self._lock:
-                self._process = None
-                self._reader = None
-                self._stopped = True
 
     @staticmethod
     def _write_all(pipe: Any, chunk: bytes) -> None:

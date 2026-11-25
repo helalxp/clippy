@@ -6,6 +6,7 @@ from pathlib import Path
 
 from community_highlights.capture_sessions import CaptureSessionManager
 from community_highlights.rolling_capture import SegmentRecord
+from community_highlights.state_store import StateStoreError
 
 
 class FakeIndexedCapture:
@@ -345,3 +346,189 @@ def test_overlapping_trigger_union_is_bounded_by_capture_retention(tmp_path):
     for candidate in manager._candidates.values():
         if candidate.capture_session_id == session_id and candidate.worker:
             candidate.worker.join(timeout=2)
+
+def test_merged_window_selects_and_assembles_exact_union_once_and_seals(tmp_path, monkeypatch):
+    import os
+
+    origin = datetime.now(timezone.utc) - timedelta(seconds=8)
+    records = []
+    for index, end_offset in enumerate((0, 4, 8, 12)):
+        path = tmp_path / f"merge-segment-{index:02d}.ts"
+        path.write_bytes(b"mpeg-ts")
+        end_time = origin + timedelta(seconds=end_offset)
+        os.utime(path, (end_time.timestamp(), end_time.timestamp()))
+        records.append(SegmentRecord(path.resolve(), 0, 4))
+
+    class IndexedCapture:
+        def __init__(self, _url, _config):
+            self.protected = []
+            self.released = []
+            self.stop_requested = threading.Event()
+
+        def run(self, _stop_event, *, on_started=None):
+            if on_started:
+                on_started()
+            self.stop_requested.wait(5)
+
+        def read_segment_index(self):
+            return list(records)
+
+        def protect_segments(self, paths):
+            self.protected.extend(paths)
+            return list(paths)
+
+        def release_segments(self, paths):
+            self.released.extend(paths)
+
+        def request_stop(self):
+            self.stop_requested.set()
+
+    made = []
+
+    def factory(url, config):
+        capture = IndexedCapture(url, config)
+        made.append(capture)
+        return capture
+
+    assembly_started = threading.Event()
+    allow_assembly = threading.Event()
+    assembled = []
+
+    def assemble(selected, output_path, **_kwargs):
+        assembled.append(list(selected))
+        assembly_started.set()
+        assert allow_assembly.wait(4), "test did not release the candidate assembler"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"merged candidate")
+        return output_path
+
+    monkeypatch.setattr("community_highlights.capture_sessions.assemble_segments", assemble)
+    manager = CaptureSessionManager(capture_factory=factory, output_root=tmp_path / "captures")
+    started = manager.start("https://www.twitch.tv/merge-e2e")
+    session_id = started["session_id"]
+    deadline = time.time() + 1
+    while manager.get(session_id)["status"] != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+    assert manager.get(session_id)["status"] == "recording"
+
+    first = manager.trigger(
+        provider="twitch",
+        stream_id="merge-e2e",
+        triggered_at=origin,
+        pre_seconds=4,
+        post_seconds=4,
+        reason="phrase",
+    )
+    merged = manager.trigger(
+        provider="twitch",
+        stream_id="merge-e2e",
+        triggered_at=origin + timedelta(seconds=6),
+        pre_seconds=4,
+        post_seconds=4,
+        reason="chat_volume",
+    )
+    assert merged["candidate_id"] == first["candidate_id"]
+    assert merged["trigger_count"] == 2
+
+    # Expedite only this test's merge-grace boundary. Production still uses
+    # the same locked capturing -> assembling transition.
+    with manager._lock:
+        manager._candidates[first["candidate_id"]].merge_until = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+
+    assert assembly_started.wait(3), "merged candidate did not reach assembly"
+    sealed = manager._candidates[first["candidate_id"]]
+    assert sealed.status == "assembling"
+
+    later = manager.trigger(
+        provider="twitch",
+        stream_id="merge-e2e",
+        triggered_at=origin + timedelta(seconds=30),
+        pre_seconds=0,
+        post_seconds=0,
+        reason="manual",
+    )
+    assert later["candidate_id"] != first["candidate_id"]
+    assert sealed.trigger_count == 2
+
+    allow_assembly.set()
+    sealed.worker.join(timeout=3)
+    assert not sealed.worker.is_alive()
+    assert sealed.status == "ready"
+    assert assembled == [records]
+    assert made[0].protected == [record.path for record in records]
+    assert made[0].released == [record.path for record in records]
+
+    assert asyncio.run(manager.stop(session_id)) is True
+    later_worker = manager._candidates[later["candidate_id"]].worker
+    if later_worker:
+        later_worker.join(timeout=3)
+
+def test_candidate_is_not_ready_when_durable_ready_transition_fails(tmp_path, monkeypatch):
+    import os
+
+    class ReadyFailingStore:
+        def __init__(self):
+            self.state = {
+                "trigger_settings": None,
+                "capture_sessions": [],
+                "candidates": [],
+            }
+
+        def read(self):
+            return dict(self.state)
+
+        def update_sections(self, **sections):
+            candidates = sections.get("candidates")
+            if candidates is not None and any(row.get("status") == "ready" for row in candidates):
+                raise StateStoreError("disk unavailable")
+            self.state.update(sections)
+
+    stamp = time.time()
+    segment = tmp_path / "ready-durability.ts"
+    segment.write_bytes(b"mpeg-ts")
+    os.utime(segment, (stamp, stamp))
+    record = SegmentRecord(segment.resolve(), 0, 4)
+
+    def factory(url, config):
+        return FakeIndexedCapture(url, config, record)
+
+    def assemble(_records, output_path, **_kwargs):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"completed mp4")
+        return output_path
+
+    monkeypatch.setattr("community_highlights.capture_sessions.assemble_segments", assemble)
+    store = ReadyFailingStore()
+    manager = CaptureSessionManager(
+        capture_factory=factory,
+        output_root=tmp_path / "captures",
+        state_store=store,
+    )
+    started = manager.start("https://www.twitch.tv/ready-durability")
+    session_id = started["session_id"]
+    deadline = time.time() + 1
+    while manager.get(session_id)["status"] != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+
+    candidate = manager.trigger(
+        provider="twitch",
+        stream_id="ready-durability",
+        triggered_at=datetime.fromtimestamp(stamp, timezone.utc),
+        pre_seconds=0,
+        post_seconds=0,
+        reason="manual",
+    )
+    candidate_id = candidate["candidate_id"]
+    worker = manager._candidates[candidate_id].worker
+    worker.join(timeout=3)
+
+    snapshot, preview_path = manager.get_candidate(candidate_id)
+    assert snapshot["status"] == "error"
+    assert "could not save its ready status" in snapshot["error"]
+    assert preview_path is None
+    assert manager._candidates[candidate_id].output_path.is_file()
+    assert store.state["candidates"][0]["status"] == "error"
+
+    assert asyncio.run(manager.stop(session_id)) is True

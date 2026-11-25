@@ -8,7 +8,6 @@ therefore bounded to completed segments and may trim at segment/keyframe edges.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Iterable
 
 from .rolling_capture import SegmentRecord
@@ -82,45 +81,3 @@ def validate_contiguous_interval(
     for previous, current in zip(intervals, intervals[1:]):
         if current[0] - previous[1] > tolerance:
             raise ValueError("The selected rolling segments contain a recording gap.")
-
-
-def select_segments_for_window(
-    records: Iterable[SegmentRecord],
-    *,
-    triggered_at: datetime,
-    pre_seconds: float,
-    post_seconds: float,
-) -> list[SegmentRecord]:
-    """Select completed segments overlapping [trigger-pre, trigger+post]."""
-    if triggered_at.tzinfo is None or triggered_at.utcoffset() is None:
-        raise ValueError("triggered_at must be timezone-aware.")
-    if pre_seconds < 0 or post_seconds < 0:
-        raise ValueError("Pre-trigger and post-trigger durations cannot be negative.")
-    trigger_utc = triggered_at.astimezone(timezone.utc)
-    return select_segments_for_interval(
-        records,
-        window_start=trigger_utc - timedelta(seconds=pre_seconds),
-        window_end=trigger_utc + timedelta(seconds=post_seconds),
-    )
-
-
-def validate_contiguous_window(
-    records: list[SegmentRecord],
-    *,
-    triggered_at: datetime,
-    pre_seconds: float,
-    post_seconds: float,
-    max_gap_seconds: float = 2.0,
-) -> None:
-    """Validate coverage for a trigger-relative pre/post window."""
-    if triggered_at.tzinfo is None or triggered_at.utcoffset() is None:
-        raise ValueError("triggered_at must be timezone-aware.")
-    if pre_seconds < 0 or post_seconds < 0:
-        raise ValueError("Pre-trigger and post-trigger durations cannot be negative.")
-    trigger_utc = triggered_at.astimezone(timezone.utc)
-    validate_contiguous_interval(
-        records,
-        window_start=trigger_utc - timedelta(seconds=pre_seconds),
-        window_end=trigger_utc + timedelta(seconds=post_seconds),
-        max_gap_seconds=max_gap_seconds,
-    )

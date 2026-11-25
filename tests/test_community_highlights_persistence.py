@@ -293,3 +293,61 @@ def test_restart_cleans_rolling_files_for_already_stopped_sessions(tmp_path):
     assert not index.exists()
     assert ready_video.exists()
     assert manager.get_candidate(READY_ID)[0]["review_status"] == "approved"
+
+def test_restart_rolls_back_pending_delete_when_candidate_metadata_remains(tmp_path):
+    output_root = tmp_path / "community-highlights"
+    highlights_dir = output_root / SESSION_ID / "highlights"
+    highlights_dir.mkdir(parents=True)
+    pending = highlights_dir / f".{READY_ID}.delete-pending.mp4"
+    pending.write_bytes(b"candidate media")
+    store = CommunityHighlightsStateStore(tmp_path)
+    now = datetime.now(timezone.utc).isoformat()
+    store.update_sections(
+        capture_sessions=[{
+            "session_id": SESSION_ID,
+            "provider": "youtube",
+            "stream_id": "abcdefghijk",
+            "started_at": now,
+            "status": "ended",
+            "segment_seconds": 4,
+            "retention_seconds": 180,
+            "max_buffer_size_mb": 512,
+            "quality": "best",
+        }],
+        candidates=[{
+            "candidate_id": READY_ID,
+            "capture_session_id": SESSION_ID,
+            "triggered_at": now,
+            "pre_seconds": 30,
+            "post_seconds": 25,
+            "reason": "phrase",
+            "status": "ready",
+            "review_status": "approved",
+            "segment_count": 8,
+            "trigger_count": 1,
+        }],
+    )
+
+    manager = CaptureSessionManager(output_root=output_root, state_store=store)
+    manager.restore()
+
+    media = highlights_dir / f"{READY_ID}.mp4"
+    candidate = manager.get_candidate(READY_ID)
+    assert media.read_bytes() == b"candidate media"
+    assert not pending.exists()
+    assert candidate is not None and candidate[1] == media
+
+
+def test_restart_finishes_pending_delete_when_candidate_metadata_was_removed(tmp_path):
+    output_root = tmp_path / "community-highlights"
+    highlights_dir = output_root / SESSION_ID / "highlights"
+    highlights_dir.mkdir(parents=True)
+    pending = highlights_dir / f".{READY_ID}.delete-pending.mp4"
+    pending.write_bytes(b"candidate media")
+    store = CommunityHighlightsStateStore(tmp_path)
+    store.update_sections(capture_sessions=[], candidates=[])
+
+    manager = CaptureSessionManager(output_root=output_root, state_store=store)
+    manager.restore()
+
+    assert not pending.exists()

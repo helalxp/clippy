@@ -217,6 +217,7 @@ $requiredPayloadFiles = @(
     "app.py",
     "community_highlights\__init__.py",
     "community_highlights\api.py",
+    "community_highlights\state_store.py",
     "community-highlights-oauth.json",
     "local_library.py",
     "requirements.txt",

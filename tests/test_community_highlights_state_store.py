@@ -1,4 +1,5 @@
 import json
+import community_highlights.state_store as state_store_module
 
 import pytest
 
@@ -76,3 +77,18 @@ def test_state_store_rejects_symlinked_state_file(tmp_path):
         store.read()
 
     assert outside.read_text(encoding="utf-8") == "{}"
+
+def test_default_state_store_rejects_symlinked_data_directory(tmp_path, monkeypatch):
+    real_root = tmp_path / "real-data"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked-data"
+    try:
+        linked_root.symlink_to(real_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("This Windows environment does not grant symlink creation.")
+
+    monkeypatch.setenv("CLIPPY_DATA_DIR", str(linked_root))
+    monkeypatch.setattr(state_store_module, "_DEFAULT_STORE", None)
+
+    with pytest.raises(StateStoreError, match="symbolic link"):
+        state_store_module.get_state_store()

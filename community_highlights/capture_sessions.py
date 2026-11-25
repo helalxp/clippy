@@ -103,6 +103,8 @@ class CaptureSession:
     error: str | None = None
     worker: threading.Thread | None = None
     stop_event: threading.Event = field(default_factory=threading.Event)
+    # Set only after RollingCapture.run() has closed Streamlink and FFmpeg.
+    capture_finished: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -213,6 +215,69 @@ class CaptureSessionManager:
                 type(error).__name__,
             )
 
+    def _recover_pending_candidate_deletes(self, output_root: Path, state: dict[str, Any]) -> None:
+        """Roll back an uncommitted media rename or finish a committed deletion."""
+        saved_candidates = {
+            (row.get("capture_session_id"), row.get("candidate_id"))
+            for row in state.get("candidates", [])
+            if isinstance(row, dict)
+            and isinstance(row.get("capture_session_id"), str)
+            and _SESSION_ID_RE.fullmatch(row["capture_session_id"])
+            and isinstance(row.get("candidate_id"), str)
+            and _SESSION_ID_RE.fullmatch(row["candidate_id"])
+        }
+        if not output_root.is_dir():
+            return
+        try:
+            session_dirs = list(output_root.iterdir())
+        except OSError:
+            return
+
+        suffix = ".delete-pending.mp4"
+        for session_dir in session_dirs:
+            if (
+                session_dir.is_symlink()
+                or not session_dir.is_dir()
+                or not _SESSION_ID_RE.fullmatch(session_dir.name)
+                or session_dir.resolve().parent != output_root
+            ):
+                continue
+            highlights_dir = session_dir / "highlights"
+            if (
+                highlights_dir.is_symlink()
+                or not highlights_dir.is_dir()
+                or highlights_dir.resolve().parent != session_dir.resolve()
+            ):
+                continue
+            for pending_path in highlights_dir.glob(f".*{suffix}"):
+                if pending_path.is_symlink() or not pending_path.is_file():
+                    continue
+                candidate_id = pending_path.name[1:-len(suffix)]
+                if not _SESSION_ID_RE.fullmatch(candidate_id):
+                    continue
+                media_path = highlights_dir / f"{candidate_id}.mp4"
+                try:
+                    if (session_dir.name, candidate_id) in saved_candidates:
+                        # The metadata removal did not commit. Restore the
+                        # original name so the candidate remains recoverable.
+                        if media_path.is_symlink():
+                            raise OSError("candidate media path is a symbolic link")
+                        if media_path.exists():
+                            if not media_path.is_file():
+                                raise OSError("candidate media path is not a regular file")
+                            pending_path.unlink(missing_ok=True)
+                        else:
+                            pending_path.replace(media_path)
+                    else:
+                        # Metadata removal committed. The remaining hidden file
+                        # is only the second half of the completed deletion.
+                        pending_path.unlink(missing_ok=True)
+                except OSError as error:
+                    _LOG.warning(
+                        "A pending Community Highlights media deletion could not be reconciled (error_type=%s)",
+                        type(error).__name__,
+                    )
+
     def restore(self) -> None:
         """Restore durable metadata and mark non-resumable work interrupted."""
         with self._lock:
@@ -226,6 +291,7 @@ class CaptureSessionManager:
                 return
             state = store.read()
             output_root = self._output_root_path().resolve()
+            self._recover_pending_candidate_deletes(output_root, state)
             restored_sessions: dict[str, CaptureSession] = {}
             restored_candidates: dict[str, HighlightCandidate] = {}
 
@@ -278,7 +344,7 @@ class CaptureSessionManager:
                     status = "error"
                     error = "The saved capture status was invalid and could not be resumed."
 
-                restored_sessions[session_id] = CaptureSession(
+                restored_session = CaptureSession(
                     session_id=session_id,
                     provider=provider,
                     stream_id=stream_id,
@@ -288,6 +354,9 @@ class CaptureSessionManager:
                     status=status,
                     error=error,
                 )
+                # No worker or external media reader survives a backend restart.
+                restored_session.capture_finished.set()
+                restored_sessions[session_id] = restored_session
 
             for row in state.get("candidates", [])[-MAX_HIGHLIGHT_CANDIDATES:]:
                 if not isinstance(row, dict):
@@ -375,9 +444,8 @@ class CaptureSessionManager:
             # No capture or candidate worker survives a backend restart. The
             # rolling source ring is therefore disposable; completed candidate
             # MP4s and interrupted partial MP4s remain available for review/delete.
-            # No capture or candidate worker survives a backend restart.
-            # Every restored session is terminal at this point, even if it had
-            # already saved stopped/ended/error before the process died.
+            # Every restored session is terminal, even if it was already marked
+            # stopped/ended/error before the process exited.
             cleanup_sessions = list(self._sessions.values())
 
         for session in cleanup_sessions:
@@ -462,6 +530,10 @@ class CaptureSessionManager:
             # A naturally ended/failed source cannot provide any more post-trigger
             # footage. Wake candidate workers so they fail promptly and release
             # their pins instead of leaving this session's ring on disk forever.
+            # run() returns only after RollingCapture has closed its reader,
+            # FFmpeg process, and resolved stream. Publish that fact before
+            # waking candidate workers so cleanup has an unambiguous owner.
+            session.capture_finished.set()
             session.stop_event.set()
             self._cleanup_rolling_segments_if_finished(session)
 
@@ -477,17 +549,21 @@ class CaptureSessionManager:
                 return
             current = threading.current_thread()
             capture_worker = session.worker
-            if capture_worker is not None and capture_worker is not current and capture_worker.is_alive():
+            if capture_worker is not None and capture_worker is not current and not session.capture_finished.is_set():
                 # A stop request can time out while Streamlink/FFmpeg is still
-                # closing. Never unlink its source files from the API thread.
-                # The capture worker's own finally block retries cleanup after
-                # its process and reader have been closed.
+                # closing. Never unlink its source files until run() has closed
+                # the reader and process, even if the session is marked terminal.
                 return
             for candidate in self._candidates.values():
-                if candidate.capture_session_id != session.session_id:
-                    continue
-                worker = candidate.worker
-                if worker is not None and worker is not current and worker.is_alive():
+                if (
+                    candidate.capture_session_id == session.session_id
+                    and candidate.status in {"capturing", "assembling"}
+                ):
+                    # Candidate status becomes terminal only after it has
+                    # finished reading/assembling source segments. Thread
+                    # liveness is not a safe cleanup signal: two finishing
+                    # workers can otherwise observe each other alive and both
+                    # skip the final cleanup pass.
                     return
             output_dir = session.config.output_dir
 
@@ -804,6 +880,17 @@ class CaptureSessionManager:
                 candidate.output_path = output_path
                 candidate.segment_count = len(records)
                 candidate.status = "ready"
+                # The preview must not become visible until its ready state is
+                # durable. A crash after a best-effort write would restore this
+                # completed MP4 as an interrupted assembly.
+                self._persist_locked(strict=True)
+        except StateStoreError:
+            with self._lock:
+                candidate.error = (
+                    "The highlight video was created, but Clippy could not save its ready status. "
+                    "It is unavailable until local storage is working again."
+                )
+                candidate.status = "error"
                 self._persist_locked()
         except (RollingCaptureError, ValueError, OSError) as error:
             with self._lock:
@@ -861,39 +948,83 @@ class CaptureSessionManager:
             return candidate.snapshot()
 
     def delete_candidate(self, candidate_id: str) -> bool:
-        """Delete one completed candidate and its media on explicit user request.
+        """Delete a completed candidate using a recoverable same-directory rename.
 
-        Candidate output paths are generated internally. Re-derive the only
-        permitted location and verify its parent has not been redirected by a
-        symlink before unlinking. Never remove a candidate while its worker is
-        still writing or releasing capture segments.
+        Stage the media under a hidden pending-delete name, commit metadata
+        removal, then unlink the staged file. Startup can distinguish a rename
+        whose metadata commit failed from a deletion whose final unlink failed.
         """
         with self._lock:
             candidate = self._candidates.get(candidate_id)
             if candidate is None:
                 return False
-            if candidate.status == "capturing" or (
+            if candidate.status in {"capturing", "assembling"} or (
                 candidate.worker is not None and candidate.worker.is_alive()
             ):
                 raise ValueError("This highlight is still being created. Try deleting it when processing finishes.")
 
+            pending_path: Path | None = None
             output_path = candidate.output_path
             if output_path is not None:
                 root = self._output_root_path().resolve()
                 expected_parent = root / candidate.capture_session_id / "highlights"
                 expected_file = expected_parent / f"{candidate.candidate_id}.mp4"
+                pending_path = expected_parent / f".{candidate.candidate_id}.delete-pending.mp4"
                 actual_file = Path(os.path.abspath(output_path))
                 resolved_parent = expected_parent.resolve()
-                if actual_file != expected_file or not resolved_parent.is_relative_to(root):
+                if actual_file not in {expected_file, pending_path} or not resolved_parent.is_relative_to(root):
                     raise RuntimeError("Candidate output path failed its storage-boundary check.")
-                if resolved_parent != expected_parent:
+                if resolved_parent != expected_parent or expected_parent.is_symlink():
                     raise RuntimeError("Candidate output directory is not a trusted directory.")
-                # If another process has the file open on Windows, unlink raises
-                # and metadata remains available for a safe retry.
-                output_path.unlink(missing_ok=True)
+                if output_path.is_symlink() or pending_path.is_symlink():
+                    raise RuntimeError("Candidate output path failed its storage-boundary check.")
+                if output_path.exists() and not output_path.is_file():
+                    raise RuntimeError("Candidate output path is not a regular file.")
+                if pending_path.exists() and not pending_path.is_file():
+                    raise RuntimeError("Pending candidate deletion path is not a regular file.")
+
+                if actual_file == expected_file:
+                    if pending_path.exists():
+                        if expected_file.exists() or expected_file.is_symlink():
+                            raise RuntimeError("A pending candidate deletion already exists.")
+                        # A previous rollback could not restore the original
+                        # name. Reuse its staged file and complete the retry.
+                    elif output_path.exists():
+                        # Same-directory replace is atomic. If Windows refuses
+                        # it because the preview is open, metadata is untouched.
+                        output_path.replace(pending_path)
+                elif expected_file.exists() or expected_file.is_symlink():
+                    raise RuntimeError("A pending candidate deletion conflicts with the original media path.")
 
             del self._candidates[candidate_id]
-            self._persist_locked(strict=True)
+            try:
+                self._persist_locked(strict=True)
+            except Exception:
+                self._candidates[candidate_id] = candidate
+                if (
+                    pending_path is not None
+                    and pending_path.exists()
+                    and not (root / candidate.capture_session_id / "highlights" / f"{candidate.candidate_id}.mp4").exists()
+                ):
+                    try:
+                        pending_path.replace(root / candidate.capture_session_id / "highlights" / f"{candidate.candidate_id}.mp4")
+                    except OSError as rollback_error:
+                        _LOG.warning(
+                            "Candidate media rename rollback is pending (error_type=%s)",
+                            type(rollback_error).__name__,
+                        )
+                raise
+
+            if pending_path is not None and pending_path.exists():
+                try:
+                    pending_path.unlink(missing_ok=True)
+                except OSError as error:
+                    # The candidate is already durably removed. Leave only the
+                    # hidden tombstone; startup retries this final unlink.
+                    _LOG.warning(
+                        "A committed Community Highlights deletion needs filesystem cleanup (error_type=%s)",
+                        type(error).__name__,
+                    )
             return True
 
     def get_candidate(self, candidate_id: str) -> tuple[dict[str, Any], Path | None] | None:
@@ -902,7 +1033,35 @@ class CaptureSessionManager:
             candidate = self._candidates.get(candidate_id)
             if candidate is None:
                 return None
-            path = candidate.output_path if candidate.status == "ready" else None
+
+            path: Path | None = None
+            if (
+                candidate.status == "ready"
+                and candidate.review_status != "rejected"
+                and candidate.output_path is not None
+            ):
+                try:
+                    root = self._output_root_path().resolve()
+                    expected_parent = root / candidate.capture_session_id / "highlights"
+                    expected_file = expected_parent / f"{candidate.candidate_id}.mp4"
+                    actual_file = Path(os.path.abspath(candidate.output_path))
+                    resolved_parent = expected_parent.resolve()
+                    if (
+                        actual_file == expected_file
+                        and expected_parent.is_dir()
+                        and not expected_parent.is_symlink()
+                        and resolved_parent == expected_parent
+                        and resolved_parent.is_relative_to(root)
+                        and not expected_file.is_symlink()
+                        and expected_file.is_file()
+                        and expected_file.resolve().parent == resolved_parent
+                        and expected_file.stat().st_size > 0
+                    ):
+                        path = expected_file
+                except OSError:
+                    # The metadata remains readable, but never serve media whose
+                    # path cannot be revalidated against the managed capture root.
+                    path = None
             return candidate.snapshot(), path
 
     async def stop(self, session_id: str) -> bool:

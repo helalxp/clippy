@@ -358,3 +358,26 @@ def test_candidate_file_route_serves_browser_preview_mp4(monkeypatch, tmp_path):
     assert response.headers["content-type"].startswith("video/mp4")
     assert response.headers["content-disposition"].endswith('.mp4"')
     assert response.content == b"browser-preview"
+
+def test_rejected_candidate_file_route_returns_not_found_when_media_is_retained(monkeypatch):
+    candidate_id = "candidate-rejected-123"
+    monkeypatch.setattr(
+        community_api.capture_sessions,
+        "get_candidate",
+        lambda requested_id: (
+            {
+                "candidate_id": requested_id,
+                "status": "ready",
+                "review_status": "rejected",
+            },
+            None,
+        ) if requested_id == candidate_id else None,
+    )
+    client = _client(monkeypatch)
+
+    response = client.get(
+        f"/api/community-highlights/candidates/{candidate_id}/file",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 404

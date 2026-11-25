@@ -766,3 +766,19 @@ The normal Clippy generation boundary is `POST /api/process` in `app.py`. It val
 - Keep this self-host/desktop path separate from managed cloud job ownership until Community Highlights has a deliberate cloud credential/media ownership design.
 
 No renderer/job integration or dashboard UI change is made in this architecture review. First complete the packaged-Windows persistence acceptance described above; then implement and test the trim contract and shared job-creation seam before exposing a candidate handoff action.
+
+## Capture and persistence stabilization pass — 2026-11-25
+
+The post-persistence review hardened the candidate lifecycle without adding a database or another worker service:
+
+- A rejected candidate is never returned as preview media, even when Windows keeps its MP4 open and deletion must be retried.
+- Candidate deletion stages the MP4 through a same-directory pending-delete rename, commits metadata removal, and then unlinks the staged file. Startup rolls back a rename when candidate metadata remains, or finishes cleanup when metadata removal committed.
+- Candidate readiness is exposed only after the ready state is durably written. A failed write leaves the MP4 unavailable for preview and the candidate in an error state.
+- Trigger callback failures, including local state-store failures, are logged with only provider, reason, and exception type; chat transport remains isolated from capture/persistence errors.
+- Capture cleanup waits for the actual capture process completion signal and uses candidate processing state rather than thread liveness. This avoids two finishing workers both skipping the final cleanup pass.
+- The default state-store factory validates the supplied data path before resolving it, preserving its ability to reject a symlinked data directory.
+- The Windows payload contract and first-run smoke check explicitly require `community_highlights/state_store.py`.
+
+Regression tests were added for rejected previews, failed ready-state writes, deletion rollback and restart recovery, natural-end concurrent cleanup, actual merged-segment assembly, trigger storage diagnostics, and the default data-path symlink check. These tests must still run on the PR branch before merge.
+
+Remaining independent acceptance items: a candidate MP4 age/byte retention policy, measured Windows segment-boundary drift (the current wall-clock estimate is not frame-accurate), packaged restart/media playback, and the focused Twitch live smoke test once the account is connected. No renderer handoff is included in this stabilization pass.

@@ -19,15 +19,6 @@ _LOG = logging.getLogger(__name__)
 STATE_SCHEMA_VERSION = 1
 _MAX_STATE_BYTES = 2 * 1024 * 1024
 _SECTIONS = {"trigger_settings", "capture_sessions", "candidates"}
-_DEFAULT_STATE: dict[str, Any] = {
-    "schema_version": STATE_SCHEMA_VERSION,
-    "updated_at": None,
-    "trigger_settings": None,
-    "capture_sessions": [],
-    "candidates": [],
-}
-
-
 class StateStoreError(RuntimeError):
     """A safe, user-displayable local Community Highlights persistence failure."""
 
@@ -187,9 +178,14 @@ _DEFAULT_STORE: CommunityHighlightsStateStore | None = None
 def get_state_store() -> CommunityHighlightsStateStore:
     """Resolve storage after dotenv/supervisor environment setup, not at import time."""
     global _DEFAULT_STORE
-    raw_root = os.environ.get("CLIPPY_DATA_DIR") or os.environ.get("OUTPUT_DIR", "output")
-    root = Path(raw_root).expanduser().resolve()
+    raw_root = Path(
+        os.environ.get("CLIPPY_DATA_DIR") or os.environ.get("OUTPUT_DIR", "output")
+    ).expanduser()
+    # Check the caller-supplied path before resolve() erases the symlink.
+    if raw_root.is_symlink():
+        raise StateStoreError("The Clippy data directory cannot be a symbolic link.")
+    root = raw_root.resolve()
     with _DEFAULT_STORE_LOCK:
         if _DEFAULT_STORE is None or _DEFAULT_STORE.data_root != root:
-            _DEFAULT_STORE = CommunityHighlightsStateStore(root)
+            _DEFAULT_STORE = CommunityHighlightsStateStore(raw_root)
         return _DEFAULT_STORE
