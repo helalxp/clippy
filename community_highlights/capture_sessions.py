@@ -328,6 +328,7 @@ class CaptureSessionManager:
             raise ValueError("Highlight windows must be between 0 and 300 seconds.")
 
         trigger_utc = triggered_at.astimezone(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
         window_start = trigger_utc - timedelta(seconds=pre_seconds)
         window_end = trigger_utc + timedelta(seconds=post_seconds)
 
@@ -360,7 +361,7 @@ class CaptureSessionManager:
                     or existing.window_start is None
                     or existing.window_end is None
                     or existing.merge_until is None
-                    or trigger_utc > existing.merge_until
+                    or now_utc > existing.merge_until
                 ):
                     continue
                 gap = max(

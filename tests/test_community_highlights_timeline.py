@@ -104,17 +104,18 @@ def test_selects_and_validates_exact_merged_interval(tmp_path):
     start = datetime.fromtimestamp(1000, timezone.utc)
     end = datetime.fromtimestamp(1012, timezone.utc)
     records = [
-        make_record(tmp_path / "before.ts", 0, 4, 1000),
+        make_record(tmp_path / "before.ts", 0, 4, 999),
         make_record(tmp_path / "inside-a.ts", 4, 8, 1004),
         make_record(tmp_path / "inside-b.ts", 8, 12, 1008),
-        make_record(tmp_path / "after.ts", 12, 16, 1016),
+        make_record(tmp_path / "inside-c.ts", 12, 16, 1012),
+        make_record(tmp_path / "after.ts", 16, 20, 1017),
     ]
 
     selected = select_segments_for_interval(
         records, window_start=start, window_end=end
     )
     assert [item.path.name for item in selected] == [
-        "before.ts", "inside-a.ts", "inside-b.ts"
+        "inside-a.ts", "inside-b.ts", "inside-c.ts"
     ]
     validate_contiguous_interval(
         selected, window_start=start, window_end=end
