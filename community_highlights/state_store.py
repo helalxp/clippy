@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import log_event
+
 _LOG = logging.getLogger(__name__)
 STATE_SCHEMA_VERSION = 1
 _MAX_STATE_BYTES = 2 * 1024 * 1024
@@ -72,6 +74,7 @@ class CommunityHighlightsStateStore:
             "Community Highlights state was invalid; preserved the original as %s",
             backup.name,
         )
+        log_event("state.quarantined", level=logging.ERROR, outcome="corrupt_state_preserved")
 
     def _read_locked(self) -> dict[str, Any]:
         self._ensure_directory()
@@ -139,6 +142,7 @@ class CommunityHighlightsStateStore:
             os.replace(temporary_path, self.path)
             temporary_path = None
         except (OSError, TypeError, ValueError) as error:
+            log_event("state.write.failed", level=logging.ERROR, error_type=type(error).__name__)
             raise StateStoreError("Clippy could not save Community Highlights state safely.") from error
         finally:
             if temporary_path:
