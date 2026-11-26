@@ -1,4 +1,16 @@
 import os
+
+# Register app-local native dependencies before third-party imports can load
+# Pillow or other extensions that resolve DLLs during module initialization.
+_APP_DLL_DIRECTORY_HANDLES = []
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    _app_bin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+    if os.path.isdir(_app_bin):
+        try:
+            _APP_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_app_bin))
+        except OSError:
+            pass
+
 import logging
 import llm_backend
 import re
