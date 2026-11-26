@@ -1,3 +1,16 @@
+import os
+
+# main.py runs as a separate managed-Python process. Register app-local DLLs
+# before Ultralytics or other dependencies can initialize Pillow.
+_APP_DLL_DIRECTORY_HANDLES = []
+if os.name == "nt" and hasattr(os, "add_dll_directory"):
+    _app_bin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+    if os.path.isdir(_app_bin):
+        try:
+            _APP_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_app_bin))
+        except OSError:
+            pass
+
 import time
 import cv2
 import subprocess
@@ -13,7 +26,6 @@ from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
 import torch
-import os
 import math
 import numpy as np
 from tqdm import tqdm
