@@ -371,3 +371,63 @@ def test_analysis_scheduler_registers_task_with_desktop_maintenance_tracker(monk
         assert app_module._MAINTENANCE_ACTIVE_BACKGROUND_TASKS == before
 
     asyncio.run(exercise())
+
+def test_template_compatibility_endpoint_reports_every_renderer_without_applying(
+    tmp_path, monkeypatch
+):
+    from template_system.models import TemplateDocument, TemplateRecipe
+
+    _configure(monkeypatch, tmp_path)
+    document = TemplateDocument(
+        id="tpl_0123456789",
+        name="Compatibility fixture",
+        recipe=TemplateRecipe.model_validate({
+            "captions": {"enabled": True},
+            "transitions": [{"kind": "fade", "at_seconds": 1.0}],
+        }),
+    )
+
+    class FakeTemplateStorage:
+        def get(self, template_id):
+            assert template_id == document.id
+            return document
+
+    monkeypatch.setattr(
+        app_module, "_template_system_storage", lambda: FakeTemplateStorage()
+    )
+
+    response = asyncio.run(
+        app_module.get_template_system_compatibility(document.id)
+    )
+
+    assert response["template_id"] == document.id
+    assert response["revision"] == document.revision
+    assert set(response["reports"]) == {
+        "python_ffmpeg", "remotion_preview", "remotion_render"
+    }
+    assert response["reports"]["python_ffmpeg"]["unsupported"][0]["feature"] == "transitions"
+    assert response["reports"]["remotion_preview"]["approximate"][0]["feature"] == "captions"
+    assert response["reports"]["remotion_render"]["unsupported"][0]["feature"] == "transitions"
+
+
+def test_template_compatibility_endpoint_returns_not_found_for_missing_template(
+    tmp_path, monkeypatch
+):
+    from template_system.storage import TemplateNotFound
+
+    _configure(monkeypatch, tmp_path)
+
+    class MissingTemplateStorage:
+        def get(self, _template_id):
+            raise TemplateNotFound("tpl_0123456789")
+
+    monkeypatch.setattr(
+        app_module, "_template_system_storage", lambda: MissingTemplateStorage()
+    )
+
+    with pytest.raises(HTTPException) as missing:
+        asyncio.run(
+            app_module.get_template_system_compatibility("tpl_0123456789")
+        )
+
+    assert missing.value.status_code == 404
