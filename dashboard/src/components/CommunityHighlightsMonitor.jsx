@@ -6,6 +6,7 @@ import {
   communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
   isCommunityHighlightsSessionActive,
+  isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
 } from '../lib/communityHighlights';
 
@@ -161,8 +162,9 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
                   ? `${providerName} sign-in is not configured for this installation. Check its OAuth app registration.`
                   : `Connect your ${streamReference.provider === 'youtube' ? 'Google account for YouTube' : 'Twitch account'} in the card above before starting this stream.`;
 
-  const workflowReady = Boolean(matchingChatSession && matchingCaptureSession);
-  const workflowPartial = Boolean(matchingChatSession || matchingCaptureSession) && !workflowReady;
+  const workflowSessionsPresent = Boolean(matchingChatSession && matchingCaptureSession);
+  const workflowActive = isCommunityHighlightsWorkflowActive(matchingChatSession, matchingCaptureSession);
+  const workflowPartial = Boolean(matchingChatSession || matchingCaptureSession) && !workflowSessionsPresent;
   const triggerSettingsDirty = JSON.stringify(triggerSettings) !== JSON.stringify(savedTriggerSettings);
 
   const hasActiveWork = (
@@ -473,7 +475,8 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
               One start action connects chat and begins the rolling recording for the same stream.
             </p>
           </div>
-          {workflowReady && <span className="badge-ok">● Highlighting</span>}
+          {workflowActive && <span className="badge-ok">● Highlighting</span>}
+          {workflowSessionsPresent && !workflowActive && <span className="badge-warn">Not fully active</span>}
           {workflowPartial && <span className="badge-warn">Setup incomplete</span>}
         </div>
 
@@ -483,9 +486,9 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             <input
               value={streamUrl}
               onChange={(event) => setStreamUrl(event.target.value)}
-              disabled={workflowReady || workflowPartial || busy}
+              disabled={workflowSessionsPresent || workflowPartial || busy}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && streamUrl.trim() && !busy && !workflowReady) startHighlighting();
+                if (event.key === 'Enter' && streamUrl.trim() && !busy && !workflowSessionsPresent) startHighlighting();
               }}
               placeholder="Paste stream link"
               aria-label="Twitch or YouTube stream URL"
@@ -494,25 +497,27 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
           </label>
           <button
             type="button"
-            disabled={busy || !!sessionActionBusy || !streamReference || (!workflowReady && (connections == null || !providerConnected))}
-            onClick={workflowReady ? stopHighlighting : startHighlighting}
-            className={workflowReady ? 'btn-ghost w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'}
-            title={!providerConnected && !workflowReady ? connectionGuidance : undefined}
+            disabled={busy || !!sessionActionBusy || !streamReference || (!workflowSessionsPresent && (connections == null || !providerConnected))}
+            onClick={workflowSessionsPresent ? stopHighlighting : startHighlighting}
+            className={workflowSessionsPresent ? 'btn-ghost w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'}
+            title={!providerConnected && !workflowSessionsPresent ? connectionGuidance : undefined}
           >
-            {busy || sessionActionBusy ? <Loader2 size={15} className="animate-spin" /> : workflowReady ? <Square size={14} /> : <Activity size={15} />}
-            {busy ? 'Starting…' : sessionActionBusy ? 'Stopping…' : workflowReady ? 'Stop highlighting' : workflowPartial ? 'Finish setup' : 'Start highlighting'}
+            {busy || sessionActionBusy ? <Loader2 size={15} className="animate-spin" /> : workflowSessionsPresent ? <Square size={14} /> : <Activity size={15} />}
+            {busy ? 'Starting…' : sessionActionBusy ? 'Stopping…' : workflowSessionsPresent ? 'Stop highlighting' : workflowPartial ? 'Finish setup' : 'Start highlighting'}
           </button>
         </div>
 
         <p
-          role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowReady)) ? 'alert' : 'status'}
-          className={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowReady))
+          role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowSessionsPresent)) ? 'alert' : 'status'}
+          className={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowSessionsPresent))
             ? 'rounded-input border border-warn/30 bg-paper2 px-3 py-2 text-xs text-warn'
             : 'text-xs leading-relaxed text-muted'}
         >
-          {workflowReady
+          {workflowActive
             ? 'Chat and recording are both active for this stream.'
-            : workflowPartial
+            : workflowSessionsPresent
+              ? 'Both sessions are present, but the workflow is not fully active. Check the chat and recording statuses below.'
+              : workflowPartial
               ? 'One part is running. Finish setup to enable automatic highlights.'
               : connectionGuidance}
         </p>

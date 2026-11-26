@@ -73,3 +73,7 @@ export function isCommunityHighlightsSessionActive(session) {
     && !COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES.has(session.status)
   );
 }
+
+export function isCommunityHighlightsWorkflowActive(chatSession, captureSession) {
+  return chatSession?.status === "connected" && captureSession?.status === "recording";
+}

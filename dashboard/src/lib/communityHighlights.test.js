@@ -5,6 +5,7 @@ import {
   communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
   isCommunityHighlightsSessionActive,
+  isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
 } from "./communityHighlights.js";
 
@@ -91,4 +92,34 @@ test("treats interrupted and other terminal sessions as inactive", () => {
 
   assert.equal(isCommunityHighlightsSessionActive(null), false);
   assert.equal(isCommunityHighlightsSessionActive(undefined), false);
+});
+
+
+test("reports highlighting as active only when chat is connected and recording is running", () => {
+  assert.equal(
+    isCommunityHighlightsWorkflowActive(
+      { status: "connected" },
+      { status: "recording" },
+    ),
+    true,
+  );
+
+  for (const [chatStatus, captureStatus] of [
+    ["connecting", "starting"],
+    ["reconnecting", "recording"],
+    ["connected", "stopping"],
+    ["connected", "starting"],
+  ]) {
+    assert.equal(
+      isCommunityHighlightsWorkflowActive(
+        { status: chatStatus },
+        { status: captureStatus },
+      ),
+      false,
+      `${chatStatus}/${captureStatus}`,
+    );
+  }
+
+  assert.equal(isCommunityHighlightsWorkflowActive(null, { status: "recording" }), false);
+  assert.equal(isCommunityHighlightsWorkflowActive({ status: "connected" }, null), false);
 });
