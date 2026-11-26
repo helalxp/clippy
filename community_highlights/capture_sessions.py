@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from .models import ChatProvider
 from .rolling_capture import RollingCapture, RollingCaptureConfig, RollingCaptureError
-from .extraction import assemble_segments
+from .extraction import assemble_segments, probe_media_duration_seconds
 from .timeline import segment_wall_interval, select_segments_for_interval, validate_contiguous_interval
 from .urls import parse_stream_url
 from .state_store import StateStoreError, get_state_store
@@ -75,6 +75,7 @@ class HighlightCandidate:
     window_end: datetime | None = None
     merge_until: datetime | None = None
     trigger_count: int = 1
+    actual_duration_seconds: float | None = None
     generation_status: str = "not_started"
     generation_job_id: str | None = None
     generation_error: str | None = None
@@ -85,8 +86,11 @@ class HighlightCandidate:
             "candidate_id": self.candidate_id,
             "capture_session_id": self.capture_session_id,
             "triggered_at": self.triggered_at.isoformat(),
+            "window_start": self.window_start.isoformat() if self.window_start else None,
+            "window_end": self.window_end.isoformat() if self.window_end else None,
             "pre_seconds": self.pre_seconds,
             "post_seconds": self.post_seconds,
+            "actual_duration_seconds": self.actual_duration_seconds,
             "reason": self.reason,
             "status": self.status,
             "review_status": self.review_status,
@@ -203,8 +207,11 @@ class CaptureSessionManager:
                 "candidate_id": item.candidate_id,
                 "capture_session_id": item.capture_session_id,
                 "triggered_at": item.triggered_at.isoformat(),
+                "window_start": item.window_start.isoformat() if item.window_start else None,
+                "window_end": item.window_end.isoformat() if item.window_end else None,
                 "pre_seconds": item.pre_seconds,
                 "post_seconds": item.post_seconds,
+                "actual_duration_seconds": item.actual_duration_seconds,
                 "reason": item.reason,
                 "status": item.status,
                 "review_status": item.review_status,
@@ -423,6 +430,25 @@ class CaptureSessionManager:
 
                 pre_seconds = row.get("pre_seconds", 0)
                 post_seconds = row.get("post_seconds", 0)
+                window_start = self._parse_saved_datetime(row.get("window_start"))
+                window_end = self._parse_saved_datetime(row.get("window_end"))
+                actual_duration_seconds = row.get("actual_duration_seconds")
+                if (
+                    isinstance(actual_duration_seconds, bool)
+                    or not isinstance(actual_duration_seconds, (int, float))
+                    or not math.isfinite(actual_duration_seconds)
+                    or actual_duration_seconds <= 0
+                ):
+                    actual_duration_seconds = None
+                else:
+                    actual_duration_seconds = float(actual_duration_seconds)
+                if (
+                    window_start is not None
+                    and window_end is not None
+                    and window_end < window_start
+                ):
+                    window_start = None
+                    window_end = None
                 segment_count = row.get("segment_count", 0)
                 trigger_count = row.get("trigger_count", 1)
                 generation_status = row.get("generation_status", "not_started")
@@ -466,6 +492,9 @@ class CaptureSessionManager:
                     output_path=output_path,
                     segment_count=segment_count,
                     trigger_count=trigger_count,
+                    window_start=window_start,
+                    window_end=window_end,
+                    actual_duration_seconds=actual_duration_seconds,
                     generation_status=generation_status,
                     generation_job_id=generation_job_id,
                     generation_error=generation_error,
@@ -924,9 +953,16 @@ class CaptureSessionManager:
             )
             output_path = session.config.output_dir / "highlights" / f"{candidate.candidate_id}.mp4"
             assemble_segments(records, output_path, ffmpeg_path=session.config.ffmpeg_path)
+            # This measures the assembled file. It does not make the mtime-based
+            # chat-to-media alignment or segment-boundary selection frame-accurate.
+            actual_duration = probe_media_duration_seconds(
+                output_path,
+                ffmpeg_path=session.config.ffmpeg_path,
+            )
             with self._lock:
                 candidate.output_path = output_path
                 candidate.segment_count = len(records)
+                candidate.actual_duration_seconds = actual_duration
                 candidate.status = "ready"
                 # The preview must not become visible until its ready state is
                 # durable. A crash after a best-effort write would restore this

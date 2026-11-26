@@ -1,7 +1,9 @@
 """Lossless MP4 remuxing of selected MPEG-TS rolling segments."""
 from __future__ import annotations
 
+import math
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -78,6 +80,76 @@ def _run_ffmpeg(
             process.kill()
             process.wait()
     return return_code, stderr_tail.diagnostic_fields()
+
+
+def probe_media_duration_seconds(
+    media_path: Path,
+    *,
+    ffmpeg_path: str = "ffmpeg",
+    runner: Callable[..., Any] | None = None,
+) -> float | None:
+    """Return a finite positive duration, or None when FFprobe is unavailable.
+
+    Prefer FFPROBE_PATH when explicitly configured, then a sibling FFprobe next
+    to the configured FFmpeg executable, and finally one available on PATH.
+    This is a best-effort display metric: failure must never invalidate a video
+    that FFmpeg has already assembled successfully.
+    """
+    try:
+        media_path = Path(media_path)
+        if not media_path.is_file() or media_path.stat().st_size <= 0:
+            return None
+
+        probe_path = os.environ.get("FFPROBE_PATH", "").strip()
+        if not probe_path:
+            ffmpeg_resolved = ffmpeg_path
+            if not os.path.isabs(ffmpeg_resolved) and os.path.dirname(ffmpeg_resolved) == "":
+                ffmpeg_resolved = shutil.which(ffmpeg_resolved) or ""
+
+            if ffmpeg_resolved:
+                sibling_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+                sibling = Path(ffmpeg_resolved).with_name(sibling_name)
+                if sibling.is_file():
+                    probe_path = str(sibling)
+
+            if not probe_path:
+                probe_path = shutil.which("ffprobe") or ("ffprobe.exe" if os.name == "nt" else "ffprobe")
+
+        command = [
+            probe_path,
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            str(media_path),
+        ]
+        execute = runner or subprocess.run
+        result = execute(
+            command,
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+            check=False,
+        )
+        if getattr(result, "returncode", 1) != 0:
+            return None
+
+        raw_duration = getattr(result, "stdout", b"")
+        if isinstance(raw_duration, bytes):
+            raw_duration = raw_duration.decode("ascii", errors="ignore")
+        duration = float(str(raw_duration).strip())
+        if not math.isfinite(duration) or duration <= 0:
+            return None
+        return duration
+    except (OSError, subprocess.TimeoutExpired, TypeError, ValueError) as error:
+        # Never log FFprobe stderr or media paths; they can contain local details.
+        log_event(
+            "candidate.duration.measure_failed",
+            level=30,
+            error_type=type(error).__name__,
+        )
+        return None
 
 
 def assemble_segments(
