@@ -181,7 +181,7 @@ foreach ($relativePath in $requiredRuntimeFiles) {
     }
 }
 
-$directories = @("assets", "fonts", "render-service", "remotion", "bin", "community_highlights")
+$directories = @("assets", "fonts", "render-service", "remotion", "bin", "community_highlights", "template_system")
 foreach ($name in $directories) {
     $source = Join-Path $repoRoot $name
     if (Test-Path $source) {
@@ -203,6 +203,10 @@ $requiredPayloadFiles = @(
     "app.py",
     "community_highlights\__init__.py",
     "community_highlights\api.py",
+    "template_system\__init__.py",
+    "template_system\jobs.py",
+    "template_system\reference_report.py",
+    "template_system\providers\reference_video.py",
     "community-highlights-oauth.json",
     "local_library.py",
     "requirements.txt",
