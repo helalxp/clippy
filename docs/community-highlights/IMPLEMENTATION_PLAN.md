@@ -1,8 +1,8 @@
 # Community Highlights Implementation Plan
 
 **Status:** In progress  
-**Active working branch:** `fix/community-highlights-correctness`  
-**Base:** `main` at `c402e3adbe8205802c9d3786a660ca7285c1faef` (merged Community Highlights baseline; version metadata `0.3.3`)  
+**Active working branch:** `fix/community-highlights-window-metrics` (stacked on `fix/community-highlights-correctness`)  
+**Correctness base:** draft PR #42; original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
 **Last updated:** 2026-11-26  
@@ -28,6 +28,17 @@ This register records findings from the dated source audits below. A checked ite
 
 The checked items above mean code and focused regression tests have been authored on this branch. They do **not** mean CI or live-provider acceptance has passed.
 
+### Batch 3 — requested-window persistence and measured candidate duration (2026-11-26)
+
+- [x] Persist requested/effective UTC candidate window bounds (`window_start`, `window_end`) in candidate snapshots and state storage; old records without bounds remain compatible.
+- [x] Measure the completed candidate MP4's duration with FFprobe after assembly and expose it as optional `actual_duration_seconds`. Probe failure is fail-open and must not fail a successfully assembled candidate.
+- [x] Restore only finite, positive duration measurements and valid, ordered window-bound pairs; malformed legacy or edited values become unavailable.
+- [ ] Add/complete CI coverage and verify FFprobe is available in the packaged Windows runtime (or confirm that the optional metric safely remains unavailable there).
+- [ ] Display requested bounds and actual measured duration separately in the UI.
+- [ ] Measure trigger-to-media drift on real authorized YouTube and Twitch streams before deciding whether final-stage trimming is necessary.
+
+This batch measures the assembled media file. It does not correct the mtime-based clock estimate or whole-segment boundaries and does not claim frame-accurate pre/post timing.
+
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
 - [x] Persist compatible Windows paths for newly selected data directories, normalize legacy Win32 extended-prefix drive/UNC values before PowerShell path operations, and reject paths that require extended-length handling rather than stripping their prefix unsafely.
@@ -48,7 +59,7 @@ The checked items above mean code and focused regression tests have been authore
 - [x] Fix approved-candidate queue exhaustion with an explicit candidate DELETE API and dashboard control. Delete removes the candidate's local media before its metadata, refuses in-progress workers, validates the generated path remains under the capture root, and preserves metadata if Windows refuses to unlink a locked file. No candidate status is silently pruned when the queue reaches its cap.
 - [x] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Restore through the actual FastAPI lifespan, mark interrupted captures/extractions explicitly, and preserve completed MP4s. Keep provider tokens in Windows Credential Manager; no credentials or chat history enter the JSON metadata store.
 - [ ] Complete provider/capture lifecycle verification after the latest chat repair. **YouTube:** packaged-Windows chat, capture, candidate extraction, inline preview, and the approval-to-results handoff are user-verified. YouTube continuation/cursor recovery has been updated on the current branch and needs packaged-Windows retesting. **Twitch:** live chat/capture remains unverified; test IRC `RECONNECT`, terminal/rate-limit behavior, and full stop/disconnect.
-- [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger rules now use provider publication timestamps; capture requests still use local receipt time. Segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
+- [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger rules use provider publication timestamps; capture requests still use local receipt time. Requested window bounds and actual MP4 duration are now persisted when available, but segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
 - [x] Merge overlapping or nearby trigger windows into one candidate while it is still collecting. Hold the candidate through the original pre-window plus one segment interval to catch a later overlapping pre-window; atomically seal before assembly. The union is bounded by the capture's configured retention, and newly included segments are pinned before the union is published.
 - [x] Add inline candidate preview using an MP4 remux and browser video controls. Frame-accurate trimming, analysis/suggested boundaries, and renderer handoff remain open.
 - [x] Remove rolling source segments, FFmpeg indexes, and abandoned concat manifests after normal capture termination and candidate workers finish; preserve candidate MP4s until rejection or explicit deletion.
