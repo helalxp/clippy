@@ -3,9 +3,9 @@ Pure helpers for the Gemini clip-selection pipeline.
 
 Standard-library only so both main.py and gemini_worker.py can import it and
 the logic stays unit-testable without the heavy video dependencies.
+"""
 
 import math
-"""
 
 # USD per 1M tokens (input, output incl. thinking), from ai.google.dev pricing.
 MODEL_PRICES = {
