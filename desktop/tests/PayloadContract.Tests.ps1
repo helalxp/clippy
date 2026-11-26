@@ -151,6 +151,9 @@ Describe "Assembled Clippy application payload contract" {
         $smokeSource | Should -Match 'unexpectedly created a default data folder'
         $smokeSource | Should -Match 'community_highlights\\__init__\.py'
         $smokeSource | Should -Match 'community_highlights\\api\.py'
+        $smokeSource | Should -Match 'template_system\\__init__\.py'
+        $smokeSource | Should -Match 'template_system\\providers\\reference_video\.py'
+        $smokeSource | Should -Match 'from template_system\.jobs import AnalysisJobStore'
     }
 
     It "packages the helper scripts next to setup-runtime.ps1" {
