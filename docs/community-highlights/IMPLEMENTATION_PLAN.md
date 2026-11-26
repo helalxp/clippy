@@ -5,7 +5,8 @@
 **Base:** `main` at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e` (stable release `v0.3.2`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
-**Last updated:** 2026-11-26
+**Last updated:** 2026-11-26  
+**Post-implementation backlog:** [`AFTER_IMPLEMENTATION.md`](AFTER_IMPLEMENTATION.md)
 
 ## Code audit follow-up register
 
