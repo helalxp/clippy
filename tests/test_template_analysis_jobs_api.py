@@ -41,7 +41,7 @@ def _configure(monkeypatch, tmp_path):
 
 
 def test_upload_endpoint_uses_the_explicit_gemini_request_header(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog
 ):
     store = _configure(monkeypatch, tmp_path)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -54,14 +54,17 @@ def test_upload_endpoint_uses_the_explicit_gemini_request_header(
     request = SimpleNamespace(headers={"X-Gemini-Key": "header-only-test-key"})
     upload = FakeUpload()
 
-    response = asyncio.run(app_module.create_template_analysis_job(
-        request, upload, "My reference", "Podcast", True, True
-    ))
+    with caplog.at_level(logging.INFO, logger="clippy.template_analysis"):
+        response = asyncio.run(app_module.create_template_analysis_job(
+            request, upload, "My reference", "Podcast", True, True
+        ))
 
     job = response["job"]
     assert job["gemini_consent"] is True
     assert scheduled == [(job["id"], "header-only-test-key")]
     assert "api_key" not in store.get(job["id"])
+    assert "header-only-test-key" not in caplog.text
+    assert "header_present=True" in caplog.text
     assert upload.closed is True
 
 
