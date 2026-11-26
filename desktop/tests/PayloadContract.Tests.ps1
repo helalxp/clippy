@@ -72,6 +72,10 @@ Describe "Assembled Clippy application payload contract" {
             "community_highlights/api.py",
             "community_highlights/diagnostics.py",
             "community_highlights/state_store.py",
+            "template_system/__init__.py",
+            "template_system/jobs.py",
+            "template_system/reference_report.py",
+            "template_system/providers/reference_video.py",
             "local_library.py",
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
@@ -155,6 +159,9 @@ Describe "Assembled Clippy application payload contract" {
         $smokeSource | Should -Match 'community_highlights\\api\.py'
         $smokeSource | Should -Match 'community_highlights\\diagnostics\.py'
         $smokeSource | Should -Match 'community_highlights\\state_store\.py'
+        $smokeSource | Should -Match 'template_system\\__init__\.py'
+        $smokeSource | Should -Match 'template_system\\providers\\reference_video\.py'
+        $smokeSource | Should -Match 'from template_system\.jobs import AnalysisJobStore'
     }
 
     It "packages the helper scripts next to setup-runtime.ps1" {
