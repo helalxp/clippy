@@ -14,6 +14,7 @@ jobs:
     outputs:
       twitch_client_id: ${{ steps.oauth.outputs.twitch_client_id }}
       google_client_id: ${{ steps.oauth.outputs.google_client_id }}
+      google_client_secret: ${{ steps.oauth.outputs.google_client_secret }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -32,6 +33,7 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ vars.CLIPPY_TWITCH_CLIENT_ID }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_ID }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ vars.CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET }}
         run: |
           set -euo pipefail
 
@@ -40,9 +42,14 @@ jobs:
           # disables Twitch sign-in in the packaged application.
           google="$CLIPPY_GOOGLE_OAUTH_CLIENT_ID"
           twitch="$CLIPPY_TWITCH_CLIENT_ID"
+          google_client_secret="$CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET"
 
           if [ -z "$google" ]; then
             echo "::error::Missing Google OAuth Client ID. Configure CLIPPY_GOOGLE_OAUTH_CLIENT_ID before tagging this release."
+            exit 1
+          fi
+          if [ -z "$google_client_secret" ]; then
+            echo "::error::Missing CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET repository Actions Variable for the configured Google Desktop OAuth client."
             exit 1
           fi
 
@@ -55,9 +62,23 @@ jobs:
             fi
           done
 
+          if [ -n "$google_client_secret" ]; then
+            if [ "${#google_client_secret}" -gt 4096 ]; then
+              echo "::error::Google Desktop OAuth client metadata exceeds 4096 characters."
+              exit 1
+            fi
+            case "$google_client_secret" in
+              *[![:graph:]]*)
+                echo "::error::Google Desktop OAuth client metadata must be printable non-space characters."
+                exit 1
+                ;;
+            esac
+          fi
+
           echo "twitch_client_id=$twitch" >> "$GITHUB_OUTPUT"
           echo "google_client_id=$google" >> "$GITHUB_OUTPUT"
-          echo "Community Highlights OAuth configuration validated (Twitch configured: $([ -n "$twitch" ] && echo yes || echo no))."
+          echo "google_client_secret=$google_client_secret" >> "$GITHUB_OUTPUT"
+          echo "Community Highlights OAuth configuration validated (Twitch configured: $([ -n "$twitch" ] && echo yes || echo no); Google Desktop public credential configured: $([ -n "$google_client_secret" ] && echo yes || echo no))."
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -215,6 +236,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ needs.validate.outputs.google_client_secret }}
         run: ./desktop/build.ps1 -CreateUpdaterArtifacts
 
       # The payload contract tests must run after prepare-payload.ps1 has built
@@ -224,6 +246,7 @@ jobs:
         env:
           CLIPPY_TWITCH_CLIENT_ID: ${{ needs.validate.outputs.twitch_client_id }}
           CLIPPY_GOOGLE_OAUTH_CLIENT_ID: ${{ needs.validate.outputs.google_client_id }}
+          CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET: ${{ needs.validate.outputs.google_client_secret }}
         run: |
           Import-Module Pester -MinimumVersion 5.0 -Force
           Invoke-Pester -Path ./desktop/tests -CI

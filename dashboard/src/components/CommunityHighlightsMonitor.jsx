@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import {
+  communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
   parseCommunityHighlightsStreamUrl,
 } from '../lib/communityHighlights';
@@ -17,7 +18,7 @@ const statusLabel = (status) => ({
   stopped: 'Stopped',
 }[status] || status || 'Unknown');
 
-export default function CommunityHighlightsMonitor({ connections }) {
+export default function CommunityHighlightsMonitor({ connections, onOpenJob, geminiApiKey }) {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
@@ -26,9 +27,93 @@ export default function CommunityHighlightsMonitor({ connections }) {
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState('');
+  const [previewCandidateId, setPreviewCandidateId] = useState('');
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [previewBusy, setPreviewBusy] = useState('');
+  const previewObjectUrl = useRef(null);
+  const previewAbort = useRef(null);
   const [startingAction, setStartingAction] = useState('');
   const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
+  const requestedGenerationJobs = useRef(new Set());
+  const openedGenerationJobs = useRef(new Set());
+
+  useEffect(() => () => {
+    previewAbort.current?.abort();
+    previewAbort.current = null;
+    if (previewObjectUrl.current) URL.revokeObjectURL(previewObjectUrl.current);
+    previewObjectUrl.current = null;
+  }, []);
+
+  const closeCandidatePreview = useCallback(() => {
+    previewAbort.current?.abort();
+    previewAbort.current = null;
+    if (previewObjectUrl.current) {
+      URL.revokeObjectURL(previewObjectUrl.current);
+      previewObjectUrl.current = null;
+    }
+    setPreviewUrl('');
+    setPreviewCandidateId('');
+    setPreviewBusy('');
+  }, []);
+
+  const openCandidatePreview = async (candidateId) => {
+    if (previewAbort.current) return;
+    setError('');
+    setPreviewBusy(candidateId);
+    setPreviewCandidateId(candidateId);
+    setPreviewUrl('');
+    if (previewObjectUrl.current) {
+      URL.revokeObjectURL(previewObjectUrl.current);
+      previewObjectUrl.current = null;
+    }
+    const controller = new AbortController();
+    previewAbort.current = controller;
+    try {
+      const response = await apiFetch(
+        '/api/community-highlights/candidates/' + encodeURIComponent(candidateId) + '/file',
+        { signal: controller.signal },
+      );
+      if (!response.ok) throw new Error('The candidate preview is not ready.');
+      const blob = await response.blob();
+      if (controller.signal.aborted || previewAbort.current !== controller) return;
+      const url = URL.createObjectURL(blob);
+      previewObjectUrl.current = url;
+      setPreviewUrl(url);
+    } catch (requestError) {
+      if (requestError?.name !== 'AbortError') {
+        setError(requestError?.detail || requestError.message || 'Could not load the candidate preview.');
+        setPreviewCandidateId('');
+      }
+    } finally {
+      if (previewAbort.current === controller) {
+        previewAbort.current = null;
+        setPreviewBusy('');
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (previewCandidateId && !candidates.some((candidate) => candidate.candidate_id === previewCandidateId)) {
+      closeCandidatePreview();
+    }
+  }, [candidates, previewCandidateId, closeCandidatePreview]);
+
+  useEffect(() => {
+    for (const candidate of candidates) {
+      const jobId = candidate.generation_job_id;
+      if (
+        candidate.generation_status === 'completed'
+        && jobId
+        && requestedGenerationJobs.current.has(jobId)
+        && !openedGenerationJobs.current.has(jobId)
+      ) {
+        openedGenerationJobs.current.add(jobId);
+        onOpenJob?.(jobId);
+        break;
+      }
+    }
+  }, [candidates, onOpenJob]);
 
   const streamReference = parseCommunityHighlightsStreamUrl(streamUrl);
   const providerConnection = streamReference ? connections?.[streamReference.provider] : null;
@@ -222,7 +307,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
       const blobUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = blobUrl;
-      anchor.download = `community-highlight-${candidateId}.ts`;
+      anchor.download = `community-highlight-${candidateId}.mp4`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -235,17 +320,41 @@ export default function CommunityHighlightsMonitor({ connections }) {
   };
 
   const decideCandidate = async (candidateId, approved) => {
+    if (approved && !window.confirm(
+      'Approve this highlight and generate one vertical Short? Confirm that you own this content or have permission to process it.'
+    )) return;
+
     setReviewBusy(candidateId);
     setError('');
     try {
-      await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/decision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved }),
-      });
+      if (approved) {
+        const result = await apiJson('/api/process', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...communityHighlightsGeminiHeaders(geminiApiKey),
+          },
+          body: JSON.stringify({
+            community_candidate_id: candidateId,
+            acknowledged: true,
+            output_format: 'vertical',
+            target_clips: 1,
+          }),
+        });
+        if (!result?.job_id) throw new Error('Clippy did not return a generation job.');
+        requestedGenerationJobs.current.add(result.job_id);
+      } else {
+        await apiJson(`/api/community-highlights/candidates/${encodeURIComponent(candidateId)}/decision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: false }),
+        });
+      }
+      if (previewCandidateId === candidateId) closeCandidatePreview();
       await refreshSessions();
     } catch (requestError) {
-      setError(requestError?.detail || 'Could not save the candidate decision.');
+      setError(requestError?.detail || requestError.message || (approved ? 'Could not generate a Short from this candidate.' : 'Could not reject the candidate.'));
+      await refreshSessions().catch(() => {});
     } finally {
       setReviewBusy('');
     }
@@ -253,6 +362,7 @@ export default function CommunityHighlightsMonitor({ connections }) {
 
   const deleteCandidate = async (candidateId) => {
     if (!window.confirm('Delete this highlight candidate and its local video file? This cannot be undone.')) return;
+    if (previewCandidateId === candidateId) closeCandidatePreview();
     setReviewBusy(candidateId);
     setError('');
     try {
@@ -409,6 +519,11 @@ export default function CommunityHighlightsMonitor({ connections }) {
                 </div>
                 <p className="text-xs text-muted mt-1 break-all">{session.stream_id}</p>
                 {session.error && <p className="text-xs text-warn mt-2">{session.error}</p>}
+                {session.diagnostic && (
+                  <p className="text-[11px] text-muted mt-1 break-words">
+                    API diagnostic: {session.diagnostic.operation} · HTTP {session.diagnostic.http_status} · reason {session.diagnostic.reason}
+                  </p>
+                )}
               </div>
               <button type="button" onClick={() => stopMonitoring(session.session_id)}
                 disabled={!!sessionActionBusy}
@@ -511,51 +626,97 @@ export default function CommunityHighlightsMonitor({ connections }) {
         ) : (
           <div className="space-y-2">
             {candidates.map((candidate) => (
-              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div className="min-w-0">
+              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
                     <span className={candidate.status === 'ready' ? 'badge-ok' : 'readout'}>{candidate.status}</span>
                   </div>
                   <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments · {candidate.review_status || 'pending review'}</p>
                   {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
+                  {candidate.generation_error && <p className="text-xs text-warn mt-1">{candidate.generation_error}</p>}
                 </div>
                 <div className="flex gap-2 shrink-0">
                   {candidate.status === 'ready' && (
                     <>
                       {candidate.review_status !== 'rejected' && (
-                        <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                          {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
-                        </button>
+                        <>
+                          <button type="button" onClick={() => openCandidatePreview(candidate.candidate_id)}
+                            disabled={!!previewBusy || reviewBusy === candidate.candidate_id}
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                            {previewBusy === candidate.candidate_id ? 'Loading…' : 'Preview'}
+                          </button>
+                          <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                            {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
+                          </button>
+                        </>
                       )}
-                      {candidate.review_status === 'pending' ? (
+                      {candidate.review_status === 'pending' && (
                         <>
                           <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Approve</button>
+                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+                            {reviewBusy === candidate.candidate_id ? 'Starting…' : 'Approve & Generate'}
+                          </button>
                           <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
                             className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
                         </>
-                      ) : (
-                        <span className="text-xs text-muted capitalize">{candidate.review_status}</span>
+                      )}
+                      {candidate.review_status === 'approved' && candidate.generation_status === 'not_started' && (
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Generate Short</button>
+                      )}
+                      {['staging', 'queued', 'processing'].includes(candidate.generation_status) && (
+                        <span className="text-xs text-muted">{candidate.generation_status === 'staging' ? 'Preparing source…' : 'Generating Short…'}</span>
+                      )}
+                      {candidate.generation_status === 'failed' && (
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Retry Short</button>
+                      )}
+                      {candidate.generation_status === 'completed' && candidate.generation_job_id && (
+                        <button type="button" onClick={() => { openedGenerationJobs.current.add(candidate.generation_job_id); onOpenJob?.(candidate.generation_job_id); }}
+                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink">Open Short</button>
                       )}
                     </>
                   )}
                   <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
-                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing'}
+                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing' || ['staging', 'queued', 'processing'].includes(candidate.generation_status)}
                     title="Delete candidate and local file"
                     aria-label="Delete candidate"
                     className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40">
                     <Trash2 size={13} />
                   </button>
                 </div>
+                </div>
+                {previewCandidateId === candidate.candidate_id && (
+                  <div className="mt-3 rounded-input border border-rule bg-paper3 p-3">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <span className="text-xs font-medium text-ink">Clip preview</span>
+                      <button type="button" onClick={closeCandidatePreview}
+                        className="text-xs text-muted hover:text-ink">Close preview</button>
+                    </div>
+                    {previewUrl ? (
+                      <video
+                        key={previewUrl}
+                        src={previewUrl}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full max-h-[420px] rounded-input bg-black"
+                      />
+                    ) : (
+                      <p className="text-xs text-muted">{previewBusy === candidate.candidate_id ? 'Preparing preview…' : 'Preview unavailable.'}</p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
       <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Completed highlights are saved as MPEG-TS (.ts) files. You can approve, reject, delete, or download them here. Fine trimming and MP4 export are not available yet.
+        Approving a candidate starts one vertical Short through Clippy's normal generation pipeline. The original highlight remains available locally; publishing is always a separate action.
       </p>
     </section>
   );

@@ -34,6 +34,8 @@ from .twitch_oauth import (
 )
 from .revocation import revoke_google_credentials, revoke_twitch_credentials
 from .credential_lifecycle import provider_disconnect_lock
+from .state_store import StateStoreError
+from .diagnostics import log_event
 
 router = APIRouter()
 
@@ -86,6 +88,14 @@ def connection_status(store_factory=None) -> dict:
     }
 
 
+def restore_community_highlights_state() -> None:
+    """Restore durable settings and candidate metadata before serving requests."""
+    # An unsupported newer schema or unavailable data directory must fail
+    # closed rather than silently starting an empty feature and overwriting it.
+    trigger_coordinator.restore()
+    capture_sessions.restore()
+
+
 @router.get("/api/community-highlights/connections")
 async def get_connections():
     return connection_status()
@@ -113,12 +123,14 @@ async def get_twitch_authorization_status(flow_id: str):
 async def stop_twitch_authorization(flow_id: str):
     if len(flow_id) < 32 or len(flow_id) > 128:
         raise HTTPException(status_code=404, detail="Sign-in attempt not found.")
-    await cancel_twitch_flow(flow_id)
-    return {"cancelled": True}
+    cancelled = await cancel_twitch_flow(flow_id)
+    log_event("oauth.cancel", provider="twitch", outcome="cancelled" if cancelled else "already_completed_or_missing")
+    return {"cancelled": cancelled}
 
 
 async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
     """Stop chat and atomically revoke/delete credentials relative to token writes."""
+    log_event("provider.disconnect.started", provider=provider)
     await chat_sessions.begin_provider_disconnect(provider)
     try:
         # Refresh, initial OAuth token exchange, and disconnect all share this
@@ -138,10 +150,10 @@ async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
             else:
                 try:
                     confirmed = await revoker(bundle)
-                except Exception:
+                except Exception as error:
                     # Local disconnect must remain possible during provider outages.
-                    # Provider request details may contain credentials and are not
-                    # returned to the frontend or written to logs.
+                    # Request details may contain credentials; log only the exception type.
+                    log_event("provider.disconnect.revocation_failed", level=30, provider=provider, error_type=type(error).__name__)
                     confirmed = False
                 revocation_status = "revoked" if confirmed else "not_confirmed"
                 if provider == "youtube":
@@ -165,12 +177,14 @@ async def _disconnect_provider(provider: str, revoker) -> dict[str, Any]:
             # the shared lock is released because all outstanding flows were
             # cancelled while holding the same lock.
             store.delete(provider)
+            log_event("provider.disconnect.finished", provider=provider, outcome=revocation_status)
             return {
                 "connected": False,
                 "revocation_status": revocation_status,
                 "message": message,
             }
     except CredentialStoreError as error:
+        log_event("provider.disconnect.failed", level=40, provider=provider, error_type=type(error).__name__)
         raise HTTPException(status_code=503, detail=str(error)) from None
     finally:
         await chat_sessions.end_provider_disconnect(provider)
@@ -204,8 +218,9 @@ async def get_google_authorization_status(flow_id: str):
 async def stop_google_authorization(flow_id: str):
     if len(flow_id) < 32 or len(flow_id) > 128:
         raise HTTPException(status_code=404, detail="Sign-in attempt not found.")
-    await cancel_google_flow(flow_id)
-    return {"cancelled": True}
+    cancelled = await cancel_google_flow(flow_id)
+    log_event("oauth.cancel", provider="google", outcome="cancelled" if cancelled else "already_completed_or_missing")
+    return {"cancelled": cancelled}
 
 
 @router.delete("/api/community-highlights/connections/youtube")
@@ -292,6 +307,8 @@ async def start_capture_session(body: StartCaptureSessionRequest):
         return capture_sessions.start(body.stream_url, settings)
     except (StreamUrlError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save capture metadata to local storage.") from None
 
 
 @router.get("/api/community-highlights/captures/{session_id}")
@@ -304,13 +321,16 @@ async def get_capture_session(session_id: str):
 
 @router.delete("/api/community-highlights/captures/{session_id}")
 async def stop_capture_session(session_id: str):
-    stopped = await capture_sessions.stop(session_id)
+    try:
+        stopped = await capture_sessions.stop(session_id)
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the stop status to local storage.") from None
     if not stopped:
         raise HTTPException(status_code=404, detail="Capture session not found.")
+    log_event("capture.stop.completed", session_id=session_id)
     return {"stopped": True}
 
 
-@router.on_event("shutdown")
 async def stop_community_highlights_workers():
     """Stop owned background work before the backend process exits."""
     await capture_sessions.stop_all()
@@ -329,6 +349,8 @@ async def update_trigger_settings(body: TriggerSettingsRequest):
         return trigger_coordinator.configure(**body.model_dump())
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights settings could not be saved to local storage.") from None
 
 
 @router.get("/api/community-highlights/candidates")
@@ -355,6 +377,8 @@ async def delete_highlight_candidate(candidate_id: str):
             status_code=409,
             detail="The highlight file could not be deleted. Close any app using it and try again.",
         ) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the deletion to local storage.") from None
     except RuntimeError:
         raise HTTPException(
             status_code=500,
@@ -372,8 +396,8 @@ async def download_highlight_candidate(candidate_id: str):
         raise HTTPException(status_code=404, detail="Highlight file is not ready.")
     return FileResponse(
         candidate[1],
-        media_type="video/mp2t",
-        filename=f"community-highlight-{candidate_id}.ts",
+        media_type="video/mp4",
+        filename=f"community-highlight-{candidate_id}.mp4",
     )
 
 
@@ -392,8 +416,13 @@ async def trigger_highlight(session_id: str, body: ManualTriggerRequest):
             reason=body.reason,
         )
     except (ValueError, RollingCaptureError) as error:
+        log_event("candidate.trigger.failed", level=30, session_id=session_id, error_type=type(error).__name__)
         raise HTTPException(status_code=409, detail=str(error)) from None
+    except StateStoreError as error:
+        log_event("candidate.trigger.persist_failed", level=40, session_id=session_id, error_type=type(error).__name__)
+        raise HTTPException(status_code=503, detail="Community Highlights could not save candidate metadata to local storage.") from None
     if candidate is None:
+        log_event("candidate.trigger.unavailable", level=30, session_id=session_id, outcome="capture_not_recording")
         raise HTTPException(status_code=409, detail="Capture is not recording.")
     return candidate
 
@@ -404,6 +433,8 @@ async def decide_highlight_candidate(candidate_id: str, body: CandidateDecisionR
         candidate = capture_sessions.decide_candidate(candidate_id, approved=body.approved)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
+    except StateStoreError:
+        raise HTTPException(status_code=503, detail="Community Highlights could not save the review decision to local storage.") from None
     if candidate is None:
         raise HTTPException(status_code=404, detail="Highlight candidate not found.")
     return candidate

@@ -1,18 +1,53 @@
 """Bridge normalized chat events into capture-window requests."""
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
 from .capture_sessions import capture_sessions
-from .rolling_capture import RollingCaptureError
 from .models import ChatMessage
+from .state_store import StateStoreError, get_state_store
+from .rolling_capture import RollingCaptureError
+from .diagnostics import log_event
 from .triggers import TriggerEngine, TriggerRule
 
 
+_LOG = logging.getLogger(__name__)
+
+
+def _trigger_failure_code(error: Exception) -> str:
+    """Map known capture failures to stable, content-free diagnostic outcomes."""
+    if isinstance(error, StateStoreError):
+        return "state_store_error"
+    message = str(error).lower()
+    if isinstance(error, RollingCaptureError):
+        if "storage budget" in message:
+            return "protected_buffer_limit"
+        return "capture_storage_error"
+    if isinstance(error, ValueError):
+        if "retention" in message:
+            return "retention_too_short"
+        if "queue is full" in message:
+            return "candidate_queue_full"
+        if any(term in message for term in (
+            "pre-trigger window",
+            "post-trigger footage",
+            "recording gap",
+            "no completed segments overlap",
+        )):
+            return "capture_window_unavailable"
+        return "invalid_trigger"
+    if isinstance(error, OSError):
+        return "capture_io_error"
+    return "unexpected_error"
+
+
 class TriggerCoordinator:
-    def __init__(self, capture_manager=capture_sessions) -> None:
+    def __init__(self, capture_manager=capture_sessions, *, state_store=None) -> None:
         self._capture_manager = capture_manager
+        self._state_store = state_store
+        self._uses_default_store = state_store is None and capture_manager is capture_sessions
         self._lock = threading.RLock()
         self._phrases = ("clip it", "clip that")
         self._min_messages = 12
@@ -47,6 +82,64 @@ class TriggerCoordinator:
                 "post_seconds": self._post_seconds,
             }
 
+    def _get_state_store(self):
+        if self._state_store is not None:
+            return self._state_store
+        return get_state_store() if self._uses_default_store else None
+
+    @staticmethod
+    def _validate_settings(
+        *,
+        phrases: list[str],
+        min_messages: int,
+        min_unique_users: int,
+        window_seconds: float,
+        cooldown_seconds: float,
+        pre_seconds: int,
+        post_seconds: int,
+    ) -> dict[str, Any]:
+        if not isinstance(phrases, (list, tuple)):
+            raise ValueError("Trigger phrases must be provided as a list.")
+        normalized = tuple(dict.fromkeys(
+            phrase.strip() for phrase in phrases
+            if isinstance(phrase, str) and phrase.strip()
+        ))
+        if len(normalized) > 30 or any(len(phrase) > 80 for phrase in normalized):
+            raise ValueError("Use at most 30 trigger phrases, each no longer than 80 characters.")
+        if type(min_messages) is not int or not 2 <= min_messages <= 500:
+            raise ValueError("Message threshold must be between 2 and 500.")
+        if type(min_unique_users) is not int or not 1 <= min_unique_users <= min_messages:
+            raise ValueError("Unique-user threshold must be between 1 and the message threshold.")
+        if isinstance(window_seconds, bool) or not isinstance(window_seconds, (int, float)):
+            raise ValueError("Trigger window must be numeric.")
+        if isinstance(cooldown_seconds, bool) or not isinstance(cooldown_seconds, (int, float)):
+            raise ValueError("Cooldown must be numeric.")
+        if not 1 <= window_seconds <= 120 or not 0 <= cooldown_seconds <= 3600:
+            raise ValueError("Trigger window must be 1-120 seconds and cooldown 0-3600 seconds.")
+        if type(pre_seconds) is not int or type(post_seconds) is not int:
+            raise ValueError("Highlight windows must be whole numbers of seconds.")
+        if not 0 <= pre_seconds <= 300 or not 0 <= post_seconds <= 300:
+            raise ValueError("Highlight windows must be between 0 and 300 seconds.")
+        return {
+            "phrases": normalized,
+            "min_messages": min_messages,
+            "min_unique_users": min_unique_users,
+            "window_seconds": float(window_seconds),
+            "cooldown_seconds": float(cooldown_seconds),
+            "pre_seconds": pre_seconds,
+            "post_seconds": post_seconds,
+        }
+
+    def _apply_settings_locked(self, settings: dict[str, Any]) -> None:
+        self._phrases = settings["phrases"]
+        self._min_messages = settings["min_messages"]
+        self._min_unique_users = settings["min_unique_users"]
+        self._window_seconds = settings["window_seconds"]
+        self._cooldown_seconds = settings["cooldown_seconds"]
+        self._pre_seconds = settings["pre_seconds"]
+        self._post_seconds = settings["post_seconds"]
+        self._engine = self._build_engine()
+
     def configure(
         self,
         *,
@@ -57,33 +150,45 @@ class TriggerCoordinator:
         cooldown_seconds: float,
         pre_seconds: int,
         post_seconds: int,
+        persist: bool = True,
     ) -> dict[str, Any]:
-        normalized = tuple(dict.fromkeys(
-            phrase.strip() for phrase in phrases
-            if isinstance(phrase, str) and phrase.strip()
-        ))
-        if len(normalized) > 30 or any(len(phrase) > 80 for phrase in normalized):
-            raise ValueError("Use at most 30 trigger phrases, each no longer than 80 characters.")
-        if min_messages < 2 or min_messages > 500:
-            raise ValueError("Message threshold must be between 2 and 500.")
-        if min_unique_users < 1 or min_unique_users > min_messages:
-            raise ValueError("Unique-user threshold must be between 1 and the message threshold.")
-        if not 1 <= window_seconds <= 120 or not 0 <= cooldown_seconds <= 3600:
-            raise ValueError("Trigger window must be 1-120 seconds and cooldown 0-3600 seconds.")
-        if not 0 <= pre_seconds <= 300 or not 0 <= post_seconds <= 300:
-            raise ValueError("Highlight windows must be between 0 and 300 seconds.")
-        if not normalized and min_messages < 2:
-            raise ValueError("Configure at least one phrase or a message threshold.")
+        settings = self._validate_settings(
+            phrases=phrases,
+            min_messages=min_messages,
+            min_unique_users=min_unique_users,
+            window_seconds=window_seconds,
+            cooldown_seconds=cooldown_seconds,
+            pre_seconds=pre_seconds,
+            post_seconds=post_seconds,
+        )
         with self._lock:
-            self._phrases = normalized
-            self._min_messages = min_messages
-            self._min_unique_users = min_unique_users
-            self._window_seconds = window_seconds
-            self._cooldown_seconds = cooldown_seconds
-            self._pre_seconds = pre_seconds
-            self._post_seconds = post_seconds
-            self._engine = self._build_engine()
+            store = self._get_state_store() if persist else None
+            if store is not None:
+                store.update_sections(trigger_settings={
+                    **settings,
+                    "phrases": list(settings["phrases"]),
+                })
+            self._apply_settings_locked(settings)
+        log_event("trigger.settings.updated", phrase_count=len(settings["phrases"]), pre_seconds=settings["pre_seconds"], post_seconds=settings["post_seconds"])
         return self.settings()
+
+    def restore(self) -> None:
+        """Load validated trigger settings before the API begins accepting requests."""
+        store = self._get_state_store()
+        if store is None:
+            return
+        settings = store.read_section("trigger_settings")
+        if settings is None:
+            return
+        if not isinstance(settings, dict):
+            _LOG.warning("Stored Community Highlights trigger settings were invalid; defaults remain active.")
+            log_event("trigger.settings.restore_failed", level=logging.WARNING, outcome="invalid_shape")
+            return
+        try:
+            self.configure(**settings, persist=False)
+        except (TypeError, ValueError) as error:
+            _LOG.warning("Stored Community Highlights trigger settings failed validation; defaults remain active.")
+            log_event("trigger.settings.restore_failed", level=logging.WARNING, error_type=type(error).__name__)
 
     def on_message(self, message: ChatMessage) -> None:
         with self._lock:
@@ -91,6 +196,7 @@ class TriggerCoordinator:
             pre_seconds = self._pre_seconds
             post_seconds = self._post_seconds
         for match in matches:
+            log_event("trigger.detected", provider=match.provider, reason=match.reason)
             try:
                 self._capture_manager.trigger(
                     provider=match.provider,
@@ -100,10 +206,28 @@ class TriggerCoordinator:
                     post_seconds=post_seconds,
                     reason=match.reason,
                 )
-            except (ValueError, RollingCaptureError):
-                # Keep chat transport alive; an undersized buffer is surfaced
-                # through capture/candidate diagnostics rather than dropping chat.
-                continue
+            except Exception as error:
+                # A failed trigger must not tear down chat, regardless of whether
+                # it came from validation, capture I/O, or durable-state storage.
+                # Log only fixed labels and the exception type, never chat content,
+                # stream identifiers/URLs, or credential data.
+                failure_code = _trigger_failure_code(error)
+                _LOG.warning(
+                    "Community Highlights trigger was not captured "
+                    "(provider=%s, reason=%s, error_type=%s, failure_code=%s)",
+                    match.provider,
+                    match.reason,
+                    type(error).__name__,
+                    failure_code,
+                )
+                log_event(
+                    "trigger.capture.failed",
+                    level=logging.WARNING,
+                    provider=match.provider,
+                    reason=match.reason,
+                    error_type=type(error).__name__,
+                    failure_code=failure_code,
+                )
 
 
 trigger_coordinator = TriggerCoordinator()

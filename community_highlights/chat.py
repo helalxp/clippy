@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from collections import deque
 from dataclasses import dataclass, field
@@ -15,11 +16,126 @@ from .credentials import CredentialStoreError, WindowsCredentialStore
 from .models import ChatMessage, ChatProvider, StreamReference
 from .token_manager import ProviderTokenError, ensure_access_token
 from .urls import StreamUrlError, parse_stream_url
+from .diagnostics import log_event
 
 YOUTUBE_API = "https://www.googleapis.com/youtube/v3"
 TWITCH_IRC = "wss://irc-ws.chat.twitch.tv:443"
 MAX_CHAT_SESSIONS = 2
 MAX_SESSION_MESSAGES = 250
+_LOG = logging.getLogger(__name__)
+
+
+class ChatTerminalError(RuntimeError):
+    """A provider refusal that will not be repaired by reconnecting the same grant."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: str = "error",
+        diagnostic: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.diagnostic = diagnostic
+
+
+def _split_twitch_irc_frame(frame: str | bytes) -> list[str]:
+    """Twitch WebSocket frames may contain several CRLF-delimited IRC messages."""
+    text = frame.decode("utf-8", "replace") if isinstance(frame, bytes) else str(frame)
+    return [line for line in text.splitlines() if line]
+
+
+def _youtube_api_error_reason(response: httpx.Response) -> str:
+    """Extract only Google's stable error reason; never surface its raw description."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    errors = error.get("errors") if isinstance(error, dict) else None
+    if isinstance(errors, list):
+        for item in errors:
+            reason = item.get("reason") if isinstance(item, dict) else None
+            if (
+                isinstance(reason, str)
+                and len(reason) <= 80
+                and reason.isascii()
+                and reason.replace("_", "").replace("-", "").isalnum()
+            ):
+                return reason
+    return ""
+
+
+def _youtube_response_diagnostic(response: httpx.Response, operation: str) -> dict[str, Any]:
+    """Build safe support metadata without copying provider messages or request identifiers."""
+    return {
+        "operation": operation,
+        "http_status": int(response.status_code),
+        "reason": _youtube_api_error_reason(response) or "unreported",
+    }
+
+
+def _youtube_operation_for_response(response: httpx.Response) -> str:
+    """Map known API paths to fixed labels; never expose the request URL or query string."""
+    try:
+        path = response.request.url.path
+    except RuntimeError:
+        path = ""
+    if path.endswith("/videos"):
+        return "videos.list"
+    if path.endswith("/liveChat/messages"):
+        return "liveChatMessages.list"
+    return "youtube_api_request"
+
+
+def _check_youtube_response(
+    response: httpx.Response,
+    *,
+    operation: str = "youtube_api_request",
+) -> None:
+    if response.is_success:
+        return
+    reason = _youtube_api_error_reason(response)
+    diagnostic = _youtube_response_diagnostic(response, operation)
+    if response.status_code == 401:
+        raise ChatTerminalError(
+            "Google authorization was rejected. Reconnect your Google account.",
+            diagnostic=diagnostic,
+        )
+    if reason == "liveChatDisabled":
+        raise ChatTerminalError(
+            "Live chat is disabled for this YouTube broadcast.",
+            status="ended",
+            diagnostic=diagnostic,
+        )
+    if reason == "liveChatEnded":
+        raise ChatTerminalError(
+            "This YouTube live chat has ended.",
+            status="ended",
+            diagnostic=diagnostic,
+        )
+    if reason == "liveChatNotFound":
+        raise ChatTerminalError(
+            "YouTube could not find an active live chat for this video.",
+            diagnostic=diagnostic,
+        )
+    if reason == "forbidden":
+        raise ChatTerminalError(
+            "The connected Google account is not permitted to read this live chat.",
+            diagnostic=diagnostic,
+        )
+    if reason in {"quotaExceeded", "dailyLimitExceeded", "dailyLimitExceededUnreg"}:
+        raise ChatTerminalError(
+            "YouTube API quota is exhausted. Try monitoring again after the quota resets.",
+            diagnostic=diagnostic,
+        )
+    if response.status_code in {400, 403, 404} and reason != "rateLimitExceeded":
+        raise ChatTerminalError(
+            "YouTube rejected this live-chat request. Check that the video is live and chat is enabled.",
+            diagnostic=diagnostic,
+        )
+    response.raise_for_status()
 
 
 @dataclass
@@ -32,6 +148,7 @@ class ChatSession:
     messages: deque[ChatMessage] = field(default_factory=lambda: deque(maxlen=MAX_SESSION_MESSAGES))
     task: asyncio.Task | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
+    diagnostic: dict[str, Any] | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -40,6 +157,7 @@ class ChatSession:
             "stream_id": self.reference.stream_id,
             "status": self.status,
             "error": self.error,
+            "diagnostic": dict(self.diagnostic) if self.diagnostic else None,
             "started_at": self.started_at.isoformat(),
             "message_count": len(self.messages),
             "messages": [
@@ -125,6 +243,11 @@ class ChatSessionManager:
         self._message_callback = message_callback
         self._disconnecting_providers: set[str] = set()
 
+    def _prune_terminal_sessions_locked(self) -> None:
+        for session_id, session in list(self._sessions.items()):
+            if session.status in {"stopped", "ended", "error"}:
+                self._sessions.pop(session_id, None)
+
     async def start(self, stream_url: str) -> dict[str, Any]:
         reference = parse_stream_url(stream_url)
         provider = reference.provider.value
@@ -134,21 +257,26 @@ class ChatSessionManager:
         try:
             await self._token_provider(provider)
         except ProviderTokenError as error:
+            log_event("chat.start.auth_failed", level=logging.WARNING, provider=provider, error_type=type(error).__name__)
             raise ValueError(str(error)) from None
 
         async with self._lock:
             # A disconnect can begin while token refresh is in flight. Check
-            # again before registering a new background chat task.
+            # again before registering a new background chat task. Reclaim
+            # terminal sessions here so an errored stream can be restarted and
+            # a failed session cannot consume one of the two active slots.
             if provider in self._disconnecting_providers:
                 raise ValueError(f"{provider.title()} is being disconnected. Try again shortly.")
+            self._prune_terminal_sessions_locked()
             for session in self._sessions.values():
-                if session.reference == reference and session.status not in {"stopped", "ended"}:
+                if session.reference == reference and session.status not in {"stopped", "ended", "error"}:
                     return session.snapshot()
             if len(self._sessions) >= MAX_CHAT_SESSIONS:
                 raise ValueError("Clippy can monitor up to two live chats at a time.")
             session = ChatSession(secrets.token_urlsafe(18), reference)
             self._sessions[session.session_id] = session
             session.task = asyncio.create_task(self._run(session))
+            log_event("chat.start.accepted", provider=provider, session_id=session.session_id)
             return session.snapshot()
 
     async def stop(self, session_id: str) -> bool:
@@ -164,6 +292,7 @@ class ChatSessionManager:
             except asyncio.CancelledError:
                 pass
         session.status = "stopped"
+        log_event("chat.stopped", provider=session.reference.provider.value, session_id=session.session_id)
         return True
 
     async def begin_provider_disconnect(self, provider: str) -> None:
@@ -185,11 +314,13 @@ class ChatSessionManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         for session in sessions:
             session.status = "stopped"
+        log_event("chat.provider_disconnect", provider=provider, session_count=len(sessions), outcome="stopped")
 
     async def end_provider_disconnect(self, provider: str) -> None:
         """Allow new chat sessions after local credential cleanup has finished."""
         async with self._lock:
             self._disconnecting_providers.discard(provider)
+        log_event("chat.provider_disconnect.finished", provider=provider)
 
     async def get(self, session_id: str) -> dict[str, Any] | None:
         async with self._lock:
@@ -212,22 +343,52 @@ class ChatSessionManager:
                     break
                 session.status = "reconnecting"
                 session.error = "The chat connection ended. Reconnecting…"
+                log_event("chat.reconnecting", level=logging.WARNING, provider=session.reference.provider.value, session_id=session.session_id, outcome="connection_ended")
             except asyncio.CancelledError:
                 raise
-            except (ProviderTokenError, CredentialStoreError):
+            except (ProviderTokenError, CredentialStoreError) as error:
                 session.status = "error"
                 session.error = "Provider authorization is unavailable. Reconnect the account."
+                log_event("chat.terminal_error", level=logging.ERROR, provider=session.reference.provider.value, session_id=session.session_id, error_type=type(error).__name__)
+                break
+            except ChatTerminalError as error:
+                session.status = error.status
+                session.error = str(error)
+                session.diagnostic = error.diagnostic
+                log_event("chat.terminal_error", level=logging.ERROR, provider=session.reference.provider.value, session_id=session.session_id, outcome=error.status)
+                if error.diagnostic:
+                    _LOG.warning(
+                        "YouTube chat API request rejected (operation=%s, http_status=%s, reason=%s)",
+                        error.diagnostic["operation"],
+                        error.diagnostic["http_status"],
+                        error.diagnostic["reason"],
+                    )
                 break
             except httpx.HTTPStatusError as error:
-                if error.response.status_code in {400, 403, 404}:
-                    session.status = "error"
-                    session.error = "The provider refused access to this live chat. Check that the stream is live and chat is enabled."
-                    break
+                # YouTube reports rateLimitExceeded as HTTP 403. This is
+                # recoverable; permanent permission/chat/quota failures are
+                # classified before raise_for_status() in _run_youtube().
+                diagnostic = _youtube_response_diagnostic(
+                    error.response,
+                    _youtube_operation_for_response(error.response),
+                )
+                session.diagnostic = diagnostic
+                if diagnostic["reason"] != "rateLimitExceeded":
+                    _LOG.warning(
+                        "YouTube chat API request failed (operation=%s, http_status=%s, reason=%s)",
+                        diagnostic["operation"],
+                        diagnostic["http_status"],
+                        diagnostic["reason"],
+                    )
                 session.status = "reconnecting"
                 session.error = "Chat connection interrupted. Clippy is retrying."
-            except Exception:
+                log_event("chat.http_reconnecting", level=logging.WARNING, provider=session.reference.provider.value, session_id=session.session_id, http_status=diagnostic["http_status"], outcome=diagnostic["reason"])
+                if error.response.status_code == 403 and diagnostic["reason"] == "rateLimitExceeded":
+                    delay = max(delay, 5)
+            except Exception as error:
                 session.status = "reconnecting"
                 session.error = "Chat connection interrupted. Clippy is retrying."
+                log_event("chat.reconnecting", level=logging.WARNING, provider=session.reference.provider.value, session_id=session.session_id, error_type=type(error).__name__)
             try:
                 await asyncio.wait_for(session.stop_event.wait(), timeout=delay)
             except asyncio.TimeoutError:
@@ -235,6 +396,7 @@ class ChatSessionManager:
             delay = min(delay * 2, 30)
         if session.status not in {"error", "stopped", "ended"}:
             session.status = "stopped"
+        log_event("chat.worker.finished", provider=session.reference.provider.value, session_id=session.session_id, outcome=session.status)
 
     async def _run_twitch(self, session: ChatSession) -> None:
         channel = session.reference.stream_id
@@ -248,43 +410,76 @@ class ChatSessionManager:
         async with websockets.connect(
             TWITCH_IRC, ping_interval=20, ping_timeout=20, close_timeout=5
         ) as socket:
+            # PASS must precede NICK. The session remains "connecting" until
+            # Twitch confirms that it joined the requested room.
             await socket.send(f"PASS oauth:{token}")
             await socket.send(f"NICK {login}")
             await socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands")
             await socket.send(f"JOIN #{channel}")
-            session.status = "connected"
+            session.status = "connecting"
             session.error = None
-            next_validation = asyncio.get_running_loop().time() + 300
+            loop = asyncio.get_running_loop()
+            next_validation = loop.time() + 300
+            join_deadline = loop.time() + 20
+            joined = False
             while not session.stop_event.is_set():
-                timeout = max(1, next_validation - asyncio.get_running_loop().time())
+                next_deadline = min(next_validation, join_deadline) if not joined else next_validation
+                timeout = max(0.1, next_deadline - loop.time())
                 try:
                     raw = await asyncio.wait_for(socket.recv(), timeout=timeout)
                 except asyncio.TimeoutError:
                     raw = None
-                if asyncio.get_running_loop().time() >= next_validation:
-                    # ensure_access_token validates Twitch grants at startup and
-                    # at least hourly, even when chat messages are arriving.
+
+                now = loop.time()
+                if not joined and now >= join_deadline:
+                    raise ChatTerminalError(
+                        "Twitch did not confirm that this channel joined. Check the channel name and Twitch chat access."
+                    )
+                if now >= next_validation:
                     await self._token_provider("twitch")
-                    next_validation = asyncio.get_running_loop().time() + 300
+                    next_validation = loop.time() + 300
                 if raw is None:
                     continue
-                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
-                if line.startswith("PING"):
-                    await socket.send("PONG :tmi.twitch.tv")
-                    continue
-                if " NOTICE " in line and "Login authentication failed" in line:
-                    await self._token_provider("twitch", force_refresh=True)
-                    raise ConnectionError("Twitch rejected the previous access token; reconnecting with refreshed credentials.")
-                message = _parse_twitch_message(line, channel)
-                if message:
-                    session.messages.append(message)
-                    if self._message_callback:
-                        try:
-                            self._message_callback(message)
-                        except Exception:
-                            pass
+
+                for line in _split_twitch_irc_frame(raw):
+                    if line.startswith("PING"):
+                        # Echo the server's exact ping payload as required by IRC.
+                        await socket.send("PONG" + line[4:])
+                        continue
+                    if " NOTICE " in line and "Login authentication failed" in line:
+                        raise ChatTerminalError(
+                            "Twitch rejected the chat connection. Reconnect Twitch and confirm chat:read access."
+                        )
+                    if " NOTICE " in line and "msg_channel_suspended" in line:
+                        raise ChatTerminalError("Twitch reports that this channel is unavailable.")
+
+                    parts = line.split()
+                    if len(parts) >= 4 and parts[1] == "366" and parts[3].casefold() == f"#{channel}".casefold():
+                        joined = True
+                        session.status = "connected"
+                        session.error = None
+                    elif (
+                        line.casefold().startswith(f":{login.casefold()}!")
+                        and f" JOIN #{channel.casefold()}" in line.casefold()
+                    ):
+                        joined = True
+                        session.status = "connected"
+                        session.error = None
+
+                    message = _parse_twitch_message(line, channel)
+                    if message:
+                        session.messages.append(message)
+                        if self._message_callback:
+                            try:
+                                self._message_callback(message)
+                            except Exception:
+                                # A trigger callback failure must not tear down
+                                # the provider transport. The coordinator logs a
+                                # safe diagnostic for its own failures.
+                                pass
 
     async def _run_youtube(self, session: ChatSession) -> None:
+        session.diagnostic = None
         video_id = session.reference.stream_id
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
             token = await self._token_provider("youtube")
@@ -302,7 +497,7 @@ class ChatSessionManager:
                     params={"part": "liveStreamingDetails", "id": video_id},
                     headers=headers,
                 )
-            video.raise_for_status()
+            _check_youtube_response(video, operation="videos.list")
             items = video.json().get("items") or []
             if not items:
                 raise ValueError("YouTube video was not found or is unavailable.")
@@ -313,6 +508,7 @@ class ChatSessionManager:
                 return
 
             page_token = None
+            rate_limit_delay = 5
             session.status = "connected"
             session.error = None
             while not session.stop_event.is_set():
@@ -338,13 +534,36 @@ class ChatSessionManager:
                         params=params,
                         headers=headers,
                     )
-                response.raise_for_status()
+                if response.status_code == 400 and _youtube_api_error_reason(response) == "pageTokenInvalid":
+                    # A stale continuation token should not kill an otherwise
+                    # valid monitoring session. Restart from the current window.
+                    page_token = None
+                    continue
+                if response.status_code == 403 and _youtube_api_error_reason(response) == "rateLimitExceeded":
+                    # The live-chat list endpoint explicitly asks clients not to
+                    # poll too quickly. Back off in place so we keep the current
+                    # liveChatId/page token and do not spend extra quota resolving
+                    # the video again on each retry.
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        delay = float(retry_after) if retry_after else rate_limit_delay
+                    except ValueError:
+                        delay = rate_limit_delay
+                    await asyncio.sleep(min(30.0, max(1.0, delay)))
+                    rate_limit_delay = min(rate_limit_delay * 2, 30)
+                    continue
+                _check_youtube_response(response, operation="liveChatMessages.list")
+                rate_limit_delay = 5
+                session.diagnostic = None
                 payload = response.json()
                 for item in payload.get("items") or []:
                     message = _parse_youtube_message(item, video_id)
                     if message:
                         session.messages.append(message)
-                        if self._message_callback:
+                        # The first list response can contain recent chat history.
+                        # Keep it visible in the monitor, but don't turn old chat
+                        # into a fresh trigger at the moment monitoring starts.
+                        if message.provider_timestamp >= session.started_at and self._message_callback:
                             try:
                                 self._message_callback(message)
                             except Exception:

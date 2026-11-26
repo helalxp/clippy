@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from .diagnostics import log_event
+
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 TWITCH_REVOKE_URL = "https://id.twitch.tv/oauth2/revoke"
 REVOCATION_TIMEOUT_SECONDS = 15.0
@@ -26,10 +28,13 @@ async def _post_revocation(
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(REVOCATION_TIMEOUT_SECONDS))
     try:
         response = await client.post(url, data=data)
-        return response.status_code == 200
-    except httpx.HTTPError:
+        confirmed = response.status_code == 200
+        log_event("oauth.revocation.response", provider="google" if "google" in url else "twitch", outcome="confirmed" if confirmed else "not_confirmed", http_status=response.status_code)
+        return confirmed
+    except httpx.HTTPError as error:
         # Do not log the exception or request: an HTTP client exception can
         # contain URLs, provider metadata, or credentials.
+        log_event("oauth.revocation.failed", level=30, provider="google" if "google" in url else "twitch", error_type=type(error).__name__)
         return False
     finally:
         if owned_client:

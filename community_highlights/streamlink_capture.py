@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from .models import ChatProvider
 from .urls import parse_stream_url
+from .diagnostics import log_event
 
 
 _QUALITY = re.compile(r"^(?:best|worst|audio_only|\d{3,4}p\d*)$", re.IGNORECASE)
@@ -32,7 +33,8 @@ class ResolvedLiveStream:
         """Open the selected media stream. This may perform blocking I/O."""
         try:
             return self.stream.open()
-        except Exception:
+        except Exception as error:
+            log_event("stream.open.failed", level=40, error_type=type(error).__name__)
             raise StreamResolutionError(
                 "Clippy could not open the selected live stream. Check that it is live and try again."
             ) from None
@@ -62,6 +64,7 @@ def resolve_live_stream(
     if not _QUALITY.fullmatch(requested_quality):
         raise StreamResolutionError("Choose a supported stream quality.")
 
+    log_event("stream.resolve.started", provider=_provider, quality=requested_quality)
     try:
         if session_factory is None:
             from streamlink import Streamlink
@@ -74,7 +77,8 @@ def resolve_live_stream(
         raise StreamResolutionError(
             "Live capture requires the Streamlink runtime dependency."
         ) from None
-    except Exception:
+    except Exception as error:
+        log_event("stream.resolve.failed", level=40, provider=_provider, error_type=type(error).__name__)
         raise StreamResolutionError(
             "Clippy could not resolve this live stream. Confirm the URL is live and supported."
         ) from None
@@ -87,4 +91,5 @@ def resolve_live_stream(
         raise StreamResolutionError(
             f"The requested stream quality ({requested_quality}) is not available."
         )
+    log_event("stream.resolve.ready", provider=_provider, quality=requested_quality)
     return ResolvedLiveStream(session=session, stream=selected, quality=requested_quality)

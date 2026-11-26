@@ -80,17 +80,20 @@ class TriggerEngine:
 
         history.append(message)
         max_window = max((rule.window_seconds for rule in self._rules), default=0)
-        global_cutoff = message.provider_timestamp - timedelta(seconds=max_window)
+        # Trigger windows must use the local receipt clock shared with capture.
+        # Provider timestamps are still retained for display, but can be skewed
+        # or arrive out of order and must not suppress real-time chat activity.
+        global_cutoff = message.received_at - timedelta(seconds=max_window)
         history = deque(
             (item for item in history
-             if global_cutoff <= item.provider_timestamp <= message.provider_timestamp),
+             if global_cutoff <= item.received_at <= message.received_at),
             maxlen=self._max_messages,
         )
         self._messages[key] = history
         matches: list[TriggerMatch] = []
         for rule in self._rules:
-            cutoff = message.provider_timestamp - timedelta(seconds=rule.window_seconds)
-            recent = [item for item in history if cutoff <= item.provider_timestamp <= message.provider_timestamp]
+            cutoff = message.received_at - timedelta(seconds=rule.window_seconds)
+            recent = [item for item in history if cutoff <= item.received_at <= message.received_at]
             phrase_hit = any(
                 _normalise(phrase) in _normalise(message.text)
                 for phrase in rule.phrases
@@ -106,7 +109,7 @@ class TriggerEngine:
 
             cooldown_key = (key[0] + ":" + key[1], rule.rule_id)
             last = self._last_trigger.get(cooldown_key)
-            if last is not None and (message.provider_timestamp - last).total_seconds() < rule.cooldown_seconds:
+            if last is not None and (message.received_at - last).total_seconds() < rule.cooldown_seconds:
                 continue
 
             reason = "phrase" if phrase_hit else "chat_volume"
@@ -119,5 +122,5 @@ class TriggerEngine:
                 message_count=len(recent),
                 unique_user_count=len(users),
             ))
-            self._last_trigger[cooldown_key] = message.provider_timestamp
+            self._last_trigger[cooldown_key] = message.received_at
         return matches

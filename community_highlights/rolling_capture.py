@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .streamlink_capture import ResolvedLiveStream, resolve_live_stream
+from .diagnostics import BoundedStderrTail, log_event
 
 
 class RollingCaptureError(RuntimeError):
@@ -100,12 +101,11 @@ class RollingCapture:
         self._resolver = resolver
         self._popen = popen
         self._clock = clock
-        self._process: Any | None = None
-        self._reader: Any | None = None
         self._stop_requested = threading.Event()
         self._started_at: float | None = None
-        self._stopped = False
-        self._protected_segments: set[Path] = set()
+        # Each candidate owns one pin per segment. Reference counts prevent
+        # one overlapping candidate from unpinning footage another still reads.
+        self._protected_segments: dict[Path, int] = {}
         self._lock = threading.RLock()
 
     @property
@@ -150,65 +150,91 @@ class RollingCapture:
                     if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
                         continue
                     records.append(SegmentRecord(path, start, end))
-        except OSError:
+        except OSError as error:
+            log_event("capture.segment_index.read_failed", level=30, error_type=type(error).__name__)
             return []
         return records
 
     def protect_segments(self, segments: list[Path]) -> list[Path]:
-        """Pin existing segments so retention cannot delete them during extraction."""
-        protected: list[Path] = []
+        """Acquire one pin per unique existing segment for this extraction owner."""
         root = self.segment_dir.resolve()
         with self._lock:
-            current = set(self._protected_segments)
-            additions: list[Path] = []
+            requested: list[Path] = []
+            seen: set[Path] = set()
             for candidate in segments:
                 path = Path(candidate).resolve()
+                if path in seen:
+                    continue
+                seen.add(path)
                 if path.parent != root or path.suffix.lower() != ".ts" or not path.is_file():
                     continue
-                if path not in current and path not in additions:
-                    additions.append(path)
-            protected_bytes = sum(path.stat().st_size for path in current if path.is_file())
+                requested.append(path)
+
+            current = set(self._protected_segments)
+            additions = [path for path in requested if path not in current]
+            protected_bytes = sum(
+                path.stat().st_size for path in current if path.is_file()
+            )
             requested_bytes = sum(path.stat().st_size for path in additions)
             budget = self.config.max_buffer_size_mb * 1024 * 1024
             if protected_bytes + requested_bytes > budget:
                 raise RollingCaptureError(
                     "The requested highlight window exceeds the configured protected-segment storage budget."
                 )
-            self._protected_segments.update(additions)
-            protected = [path for path in segments if Path(path).resolve() in self._protected_segments]
-        return protected
+
+            # Count each successful protect call as an independent owner. The
+            # byte budget still counts each physical file only once.
+            for path in requested:
+                self._protected_segments[path] = self._protected_segments.get(path, 0) + 1
+            return requested
 
     def release_segments(self, segments: list[Path]) -> None:
-        """Release previously pinned segments back to normal retention."""
+        """Release this owner's pins without unpinning concurrent readers."""
         with self._lock:
             for candidate in segments:
-                self._protected_segments.discard(Path(candidate).resolve())
+                path = Path(candidate).resolve()
+                owners = self._protected_segments.get(path, 0)
+                if owners <= 1:
+                    self._protected_segments.pop(path, None)
+                else:
+                    self._protected_segments[path] = owners - 1
 
     def _prune_segments(self) -> None:
-        """Enforce both age and byte budgets, preserving the newest segment."""
-        segments = self.list_segments()
-        if len(segments) <= 1:
-            return
-        now = self._clock()
-        max_age = self.config.retention_seconds
-        max_bytes = self.config.max_buffer_size_mb * 1024 * 1024
-        sizes = {p: p.stat().st_size for p in segments}
-        total = sum(sizes.values())
-        newest = segments[-1]
+        """Enforce age and byte budgets without racing a concurrent pin operation."""
         with self._lock:
-            protected = set(self._protected_segments)
-        for segment in segments[:-1]:
-            if segment.resolve() in protected:
-                continue
+            segments = self.list_segments()
+            if len(segments) <= 1:
+                return
+
+            now = self._clock()
+            max_age = self.config.retention_seconds
+            max_bytes = self.config.max_buffer_size_mb * 1024 * 1024
             try:
-                age_expired = now - segment.stat().st_mtime > max_age
-                size_expired = total > max_bytes
-                if age_expired or size_expired:
-                    size = sizes[segment]
-                    segment.unlink(missing_ok=True)
-                    total -= size
+                sizes = {path: path.stat().st_size for path in segments}
             except FileNotFoundError:
-                continue
+                # A segment can be finalized or removed while the index is being
+                # refreshed. The next recording iteration will retry pruning.
+                return
+            total = sum(sizes.values())
+
+            # Keep the newest segment so FFmpeg can continue its sequence even
+            # when every older segment has aged out or the byte cap is reached.
+            for segment in segments[:-1]:
+                resolved = segment.resolve()
+                # Keep this final protected check and unlink under the same lock
+                # used by protect_segments(); a trigger cannot pin a file after
+                # this check but before the file is deleted.
+                if resolved in self._protected_segments:
+                    continue
+                try:
+                    stat = segment.stat()
+                    age_expired = now - stat.st_mtime > max_age
+                    size_expired = total > max_bytes
+                    if age_expired or size_expired:
+                        segment.unlink(missing_ok=True)
+                        total -= sizes[segment]
+                except FileNotFoundError:
+                    continue
 
     def request_stop(self) -> None:
         self._stop_requested.set()
@@ -221,7 +247,7 @@ class RollingCapture:
     ) -> None:
         """Run until stopped or the source ends; call from a worker thread."""
         with self._lock:
-            if self._process is not None or self._started_at is not None:
+            if self._started_at is not None:
                 raise RollingCaptureError("This capture instance can only be run once.")
             self._started_at = self._clock()
 
@@ -229,6 +255,7 @@ class RollingCapture:
         resolved: ResolvedLiveStream | None = None
         reader = None
         process = None
+        stderr_tail: BoundedStderrTail | None = None
         try:
             self.segment_dir.mkdir(parents=True, exist_ok=True)
             ffmpeg = self.config.ffmpeg_path
@@ -239,6 +266,7 @@ class RollingCapture:
 
             resolved = self._resolver(self.stream_url, quality=self.config.quality)
             reader = resolved.open()
+            log_event("capture.ffmpeg.starting", quality=self.config.quality, segment_seconds=self.config.segment_seconds)
             args = build_ffmpeg_segment_args(self.config)
             args[0] = ffmpeg
             try:
@@ -246,16 +274,16 @@ class RollingCapture:
                     args,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     shell=False,
                     bufsize=0,
                 )
+                stderr_pipe = getattr(process, "stderr", None)
+                if stderr_pipe is not None:
+                    stderr_tail = BoundedStderrTail(stderr_pipe)
             except OSError:
                 raise RollingCaptureError("Clippy could not start FFmpeg. Check the configured FFmpeg executable.") from None
 
-            with self._lock:
-                self._process = process
-                self._reader = reader
             if on_started is not None:
                 on_started()
 
@@ -269,17 +297,54 @@ class RollingCapture:
                 self._prune_segments()
 
             self._finish_process(process)
+            return_code = process.poll()
             process = None
+            if return_code != 0:
+                diagnostic_fields = (
+                    stderr_tail.diagnostic_fields()
+                    if stderr_tail is not None
+                    else {"failure_code": "ffmpeg_unknown"}
+                )
+                log_event(
+                    "capture.ffmpeg.exit_nonzero",
+                    level=40,
+                    return_code=return_code,
+                    **diagnostic_fields,
+                )
+                raise RollingCaptureError("FFmpeg could not finalize the rolling capture successfully.")
             self._prune_segments()
-        except RollingCaptureError:
+            log_event("capture.ffmpeg.finished", outcome="stopped", return_code=return_code)
+        except RollingCaptureError as error:
             if process is not None:
                 self._finish_process(process, force=True)
                 process = None
+            diagnostic_fields = (
+                stderr_tail.diagnostic_fields()
+                if stderr_tail is not None
+                else {}
+            )
+            log_event(
+                "capture.ffmpeg.failed",
+                level=40,
+                error_type=type(error).__name__,
+                **diagnostic_fields,
+            )
             raise
-        except Exception:
+        except Exception as error:
             if process is not None:
                 self._finish_process(process, force=True)
                 process = None
+            diagnostic_fields = (
+                stderr_tail.diagnostic_fields()
+                if stderr_tail is not None
+                else {}
+            )
+            log_event(
+                "capture.ffmpeg.failed",
+                level=40,
+                error_type=type(error).__name__,
+                **diagnostic_fields,
+            )
             raise RollingCaptureError("Live capture ended unexpectedly. Check the stream and FFmpeg installation.") from None
         finally:
             if process is not None:
@@ -287,19 +352,15 @@ class RollingCapture:
             if reader is not None:
                 try:
                     reader.close()
-                except Exception:
-                    pass
+                except Exception as error:
+                    log_event("capture.stream_reader.close_failed", level=30, error_type=type(error).__name__)
             if resolved is not None:
                 close = getattr(resolved.stream, "close", None)
                 if callable(close):
                     try:
                         close()
-                    except Exception:
-                        pass
-            with self._lock:
-                self._process = None
-                self._reader = None
-                self._stopped = True
+                    except Exception as error:
+                        log_event("capture.stream_session.close_failed", level=30, error_type=type(error).__name__)
 
     @staticmethod
     def _write_all(pipe: Any, chunk: bytes) -> None:

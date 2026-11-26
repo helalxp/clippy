@@ -20,6 +20,23 @@ def run_async(test_function):
     return wrapper
 
 
+@pytest.fixture(autouse=True)
+def reset_provider_flows():
+    # Each test gets an isolated process-local registry. Completed flows are
+    # intentionally retained until consumed/next start, so clear them here.
+    google_oauth._GOOGLE_FLOWS.clear()
+    twitch_oauth._flows.clear()
+    yield
+    for flow in google_oauth._GOOGLE_FLOWS.values():
+        server = flow.get("server")
+        if server:
+            server.close()
+    google_oauth._GOOGLE_FLOWS.clear()
+    for flow in twitch_oauth._flows.values():
+        flow.pop("device_code", None)
+    twitch_oauth._flows.clear()
+
+
 class MemoryStore:
     def __init__(self, bundle=None):
         self.bundle = bundle
@@ -182,8 +199,8 @@ async def test_disconnect_waits_for_inflight_twitch_device_exchange_then_removes
 async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_tokens(monkeypatch):
     flow_id = "race-google-flow-012345678901234567890123456789"
     store = MemoryStore()
-    tokeninfo_started = asyncio.Event()
-    allow_tokeninfo = asyncio.Event()
+    exchange_started = asyncio.Event()
+    allow_exchange = asyncio.Event()
 
     class OAuthClient:
         async def __aenter__(self):
@@ -194,19 +211,13 @@ async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_
 
         async def post(self, _url, data):
             assert data["code_verifier"] == "pkce-verifier"
+            exchange_started.set()
+            await allow_exchange.wait()
             return Response({
                 "access_token": "google-access",
                 "refresh_token": "google-refresh",
+                "token_type": "Bearer",
                 "expires_in": 3600,
-            })
-
-        async def get(self, _url, params=None):
-            tokeninfo_started.set()
-            await allow_tokeninfo.wait()
-            return Response({
-                "aud": "another-client-in-same-project",
-                "azp": "google-client",
-                "scope": google_oauth.GOOGLE_SCOPE,
             })
 
     monkeypatch.setattr(
@@ -230,10 +241,10 @@ async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_
     callback = asyncio.create_task(
         google_oauth._complete_google_callback(
             flow_id,
-            {"state": ["expected-state"], "code": ["authorization-code"]},
+            {"state": ["expected-state"], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["authorization-code"]},
         )
     )
-    await asyncio.wait_for(tokeninfo_started.wait(), timeout=10)
+    await asyncio.wait_for(exchange_started.wait(), timeout=10)
 
     disconnect_entered = asyncio.Event()
 
@@ -247,7 +258,7 @@ async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_
     await asyncio.sleep(0)
     assert not disconnect_entered.is_set()
 
-    allow_tokeninfo.set()
+    allow_exchange.set()
     await callback
     await disconnect_task
 
@@ -255,6 +266,116 @@ async def test_disconnect_waits_for_google_callback_exchange_then_removes_saved_
     assert store.saved["refresh_token"] == "google-refresh"
     assert store.bundle is None
     assert flow_id not in google_oauth._GOOGLE_FLOWS
+
+
+
+@run_async
+async def test_google_user_cancellation_waits_for_exchange_and_reports_lost_race(monkeypatch):
+    flow_id = "cancel-google-flow-012345678901234567890123456789"
+    store = MemoryStore()
+    exchange_started = asyncio.Event()
+    allow_exchange = asyncio.Event()
+
+    class OAuthClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, data):
+            assert data["code_verifier"] == "pkce-verifier"
+            exchange_started.set()
+            await allow_exchange.wait()
+            return Response({
+                "access_token": "google-access",
+                "refresh_token": "google-refresh",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            })
+
+    monkeypatch.setattr(google_oauth.httpx, "AsyncClient", lambda **_kwargs: OAuthClient())
+    flow = {
+        "state": "expected-state",
+        "verifier": "pkce-verifier",
+        "client_id": "google-client",
+        "status": "pending",
+        "message": "Waiting",
+        "expires_at": time.monotonic() + 600,
+        "server": None,
+        "redirect_uri": "http://127.0.0.1:54321",
+        "store_factory": lambda: store,
+    }
+    google_oauth._GOOGLE_FLOWS[flow_id] = flow
+
+    callback = asyncio.create_task(google_oauth._complete_google_callback(
+        flow_id,
+        {"state": ["expected-state"], "iss": [google_oauth.GOOGLE_ISSUER], "code": ["authorization-code"]},
+    ))
+    await asyncio.wait_for(exchange_started.wait(), timeout=10)
+    cancellation = asyncio.create_task(google_oauth.cancel_google_flow(flow_id))
+    await asyncio.sleep(0)
+    assert cancellation.done() is False
+
+    allow_exchange.set()
+    assert await callback == "connected"
+    assert await cancellation is False
+    assert flow["status"] == "connected"
+    assert store.saved["refresh_token"] == "google-refresh"
+
+
+@run_async
+async def test_twitch_user_cancellation_waits_for_device_exchange_and_reports_lost_race():
+    flow_id = "cancel-twitch-flow-012345678901234567890123456789"
+    store = MemoryStore()
+    exchange_started = asyncio.Event()
+    allow_exchange = asyncio.Event()
+
+    class OAuthClient:
+        async def post(self, _url, data):
+            assert data["device_code"] == "device-code"
+            exchange_started.set()
+            await allow_exchange.wait()
+            return Response({
+                "access_token": "twitch-access",
+                "refresh_token": "twitch-refresh",
+                "expires_in": 14400,
+            })
+
+        async def get(self, _url, headers=None):
+            assert headers["Authorization"] == "OAuth twitch-access"
+            return Response({
+                "client_id": "twitch-client",
+                "scopes": ["chat:read"],
+                "user_id": "123",
+                "login": "viewer",
+            })
+
+    twitch_oauth._flows[flow_id] = {
+        "device_code": "device-code",
+        "client_id": "twitch-client",
+        "expires_at": time.monotonic() + 600,
+        "interval": 5,
+        "next_poll": 0,
+        "status": "pending",
+        "message": "Waiting",
+    }
+    polling = asyncio.create_task(twitch_oauth.poll_twitch_flow(
+        flow_id,
+        client=OAuthClient(),
+        store_factory=lambda: store,
+    ))
+    await asyncio.wait_for(exchange_started.wait(), timeout=10)
+    cancellation = asyncio.create_task(twitch_oauth.cancel_twitch_flow(flow_id))
+    await asyncio.sleep(0)
+    assert cancellation.done() is False
+
+    allow_exchange.set()
+    result = await polling
+    assert result["status"] == "connected"
+    assert await cancellation is False
+    assert twitch_oauth._flows[flow_id]["status"] == "connected"
+    assert store.saved["refresh_token"] == "twitch-refresh"
 
 
 @run_async

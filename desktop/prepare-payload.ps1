@@ -136,8 +136,9 @@ Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
 
-# OAuth client IDs are public application identifiers, never client secrets.
-# Release workflows source them from repository Actions Variables.
+# Native-app OAuth values are public application configuration. Google's generated
+# Desktop-app client_secret is not confidential and must not be used as proof of
+# client identity. Source it from Actions Variables, never from Actions Secrets.
 function Get-PublicOAuthClientId([string]$Value, [string]$Name) {
     $value = ([string]$Value).Trim()
     if ($value.Length -gt 512 -or ($value -and $value -notmatch '^[A-Za-z0-9._-]+$')) {
@@ -145,10 +146,23 @@ function Get-PublicOAuthClientId([string]$Value, [string]$Name) {
     }
     return $value
 }
+function Get-PublicOAuthClientSecret([string]$Value, [string]$Name) {
+    $value = ([string]$Value).Trim()
+    if ($value.Length -gt 4096 -or ($value -and $value -match '[^\x21-\x7E]')) {
+        throw "$Name must contain printable non-space ASCII characters only (max 4096 characters)."
+    }
+    return $value
+}
+$googleOauthClientId = Get-PublicOAuthClientId -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_ID"
+$googleOauthClientSecret = Get-PublicOAuthClientSecret -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET"
+if ([bool]$googleOauthClientId -ne [bool]$googleOauthClientSecret) {
+    throw "CLIPPY_GOOGLE_OAUTH_CLIENT_ID and CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET must both be configured or both be empty."
+}
 $communityHighlightsOAuth = [ordered]@{
     schemaVersion = 1
     twitchClientId = (Get-PublicOAuthClientId -Value $env:CLIPPY_TWITCH_CLIENT_ID -Name "CLIPPY_TWITCH_CLIENT_ID")
-    googleOauthClientId = (Get-PublicOAuthClientId -Value $env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID -Name "CLIPPY_GOOGLE_OAUTH_CLIENT_ID")
+    googleOauthClientId = $googleOauthClientId
+    googleOauthClientSecret = $googleOauthClientSecret
 }
 [IO.File]::WriteAllText(
     (Join-Path $stageRoot "community-highlights-oauth.json"),
@@ -203,6 +217,8 @@ $requiredPayloadFiles = @(
     "app.py",
     "community_highlights\__init__.py",
     "community_highlights\api.py",
+    "community_highlights\diagnostics.py",
+    "community_highlights\state_store.py",
     "community-highlights-oauth.json",
     "local_library.py",
     "requirements.txt",

@@ -70,6 +70,8 @@ Describe "Assembled Clippy application payload contract" {
             "app.py",
             "community_highlights/__init__.py",
             "community_highlights/api.py",
+            "community_highlights/diagnostics.py",
+            "community_highlights/state_store.py",
             "local_library.py",
             "render-service/dist/server.js",
             "render-service/node_modules/@remotion/renderer/package.json",
@@ -109,7 +111,7 @@ Describe "Assembled Clippy application payload contract" {
         }
     }
 
-    It "packages only public Community Highlights OAuth client IDs" {
+    It "packages public Community Highlights OAuth client metadata" {
         $entry = Get-PayloadZipEntry "community-highlights-oauth.json"
         $entry | Should -Not -BeNullOrEmpty
         $stream = $entry.Open()
@@ -121,9 +123,13 @@ Describe "Assembled Clippy application payload contract" {
         }
 
         $config.schemaVersion | Should -Be 1
+        if (-not [string]::IsNullOrWhiteSpace($config.googleOauthClientId)) {
+            $config.googleOauthClientSecret | Should -Not -BeNullOrEmpty
+        }
         $config.twitchClientId | Should -Be ([string]$env:CLIPPY_TWITCH_CLIENT_ID).Trim()
         $config.googleOauthClientId | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_ID).Trim()
-        @($config.PSObject.Properties.Name) | Should -Be @("schemaVersion", "twitchClientId", "googleOauthClientId")
+        $config.googleOauthClientSecret | Should -Be ([string]$env:CLIPPY_GOOGLE_OAUTH_CLIENT_SECRET).Trim()
+        @($config.PSObject.Properties.Name) | Should -Be @("schemaVersion", "twitchClientId", "googleOauthClientId", "googleOauthClientSecret")
     }
 
     It "uses the persisted data directory for all user-data components" {
@@ -147,6 +153,8 @@ Describe "Assembled Clippy application payload contract" {
         $smokeSource | Should -Match 'unexpectedly created a default data folder'
         $smokeSource | Should -Match 'community_highlights\\__init__\.py'
         $smokeSource | Should -Match 'community_highlights\\api\.py'
+        $smokeSource | Should -Match 'community_highlights\\diagnostics\.py'
+        $smokeSource | Should -Match 'community_highlights\\state_store\.py'
     }
 
     It "packages the helper scripts next to setup-runtime.ps1" {

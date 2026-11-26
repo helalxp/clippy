@@ -1,5 +1,8 @@
 
+import io
 import pytest
+import threading
+from pathlib import Path
 
 from community_highlights.rolling_capture import (
     RollingCapture,
@@ -271,3 +274,173 @@ def test_protected_segments_cannot_exceed_storage_budget(tmp_path):
 
     with pytest.raises(RollingCaptureError, match="storage budget"):
         capture.protect_segments([oversized])
+
+def test_pruning_serializes_with_concurrent_segment_pinning(tmp_path, monkeypatch):
+    now = [1000.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, retention_seconds=20),
+        clock=lambda: now[0],
+    )
+    stale = tmp_path / "segment-00000000.ts"
+    newest = tmp_path / "segment-00000001.ts"
+    stale.write_bytes(b"stale")
+    newest.write_bytes(b"newest")
+    import os
+    os.utime(stale, (900, 900))
+    os.utime(newest, (995, 995))
+
+    unlink_started = threading.Event()
+    allow_unlink = threading.Event()
+    pin_finished = threading.Event()
+    pin_result = []
+    original_unlink = Path.unlink
+
+    def blocked_unlink(path, *args, **kwargs):
+        if path == stale:
+            unlink_started.set()
+            assert allow_unlink.wait(timeout=2)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", blocked_unlink)
+    prune_worker = threading.Thread(target=capture._prune_segments)
+    prune_worker.start()
+    assert unlink_started.wait(timeout=1)
+
+    def pin():
+        pin_result.extend(capture.protect_segments([stale]))
+        pin_finished.set()
+
+    pin_worker = threading.Thread(target=pin)
+    pin_worker.start()
+    # protect_segments must wait for the in-progress prune decision. It cannot
+    # report a segment as protected after prune has already committed to unlink it.
+    assert not pin_finished.wait(timeout=0.05)
+
+    allow_unlink.set()
+    prune_worker.join(timeout=2)
+    pin_worker.join(timeout=2)
+
+    assert not prune_worker.is_alive()
+    assert not pin_worker.is_alive()
+    assert not stale.exists()
+    assert pin_result == []
+
+
+
+def test_overlapping_candidate_pins_are_reference_counted_until_last_release(tmp_path):
+    now = [1000.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, retention_seconds=20),
+        clock=lambda: now[0],
+    )
+    shared = tmp_path / "segment-00000000.ts"
+    newest = tmp_path / "segment-00000001.ts"
+    shared.write_bytes(b"shared candidate footage")
+    newest.write_bytes(b"newest")
+    import os
+    os.utime(shared, (900, 900))
+    os.utime(newest, (995, 995))
+
+    first_owner = capture.protect_segments([shared])
+    second_owner = capture.protect_segments([shared, shared])
+
+    assert first_owner == [shared.resolve()]
+    assert second_owner == [shared.resolve()]
+    assert capture._protected_segments[shared.resolve()] == 2
+
+    capture.release_segments(first_owner)
+    assert capture._protected_segments[shared.resolve()] == 1
+    capture._prune_segments()
+    assert shared.exists(), "the second candidate still owns a pin"
+
+    capture.release_segments(second_owner)
+    assert shared.resolve() not in capture._protected_segments
+    capture._prune_segments()
+    assert not shared.exists(), "the file becomes prunable after its final owner releases it"
+
+
+def test_pin_budget_counts_shared_physical_segments_once(tmp_path):
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path, max_buffer_size_mb=16),
+    )
+    shared = tmp_path / "segment-00000000.ts"
+    with shared.open("wb") as handle:
+        handle.truncate(8 * 1024 * 1024)
+
+    first = capture.protect_segments([shared])
+    second = capture.protect_segments([shared])
+
+    assert first == second == [shared.resolve()]
+    assert capture._protected_segments[shared.resolve()] == 2
+
+
+def test_run_rejects_nonzero_ffmpeg_exit_and_logs_it(tmp_path, monkeypatch, caplog):
+    class FakeReader:
+        def read(self, _size):
+            return b""
+
+        def close(self):
+            pass
+
+    class FakeStream:
+        def open(self):
+            return FakeReader()
+
+        def close(self):
+            pass
+
+    class FakeResolved:
+        stream = FakeStream()
+
+        def open(self):
+            return self.stream.open()
+
+    class FakeStdin:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stderr = io.BytesIO(
+                b"[mpegts] Invalid data found when processing input\n"
+                b"Error opening C:\\Users\\private\\capture.ts\n"
+            )
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 7
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+    process = FakeProcess()
+    monkeypatch.setattr("community_highlights.rolling_capture.shutil.which", lambda _name: "C:/ffmpeg.exe")
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path),
+        resolver=lambda *_args, **_kwargs: FakeResolved(),
+        popen=lambda *_args, **_kwargs: process,
+    )
+
+    with caplog.at_level(40, logger="clippy.community_highlights"):
+        with pytest.raises(RollingCaptureError, match="could not finalize"):
+            capture.run()
+
+    assert "capture.ffmpeg.exit_nonzero" in caplog.text
+    assert '"return_code":7' in caplog.text
+    assert '"failure_code":"invalid_data"' in caplog.text
+    assert "C:\\Users" not in caplog.text
+    assert "private\\capture.ts" not in caplog.text

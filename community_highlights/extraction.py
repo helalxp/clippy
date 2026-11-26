@@ -1,4 +1,4 @@
-"""Lossless assembly of selected MPEG-TS rolling segments."""
+"""Lossless MP4 remuxing of selected MPEG-TS rolling segments."""
 from __future__ import annotations
 
 import os
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .rolling_capture import SegmentRecord, RollingCaptureError
+from .diagnostics import BoundedStderrTail, log_event, summarize_ffmpeg_stderr
 
 
 def _concat_quote(path: Path) -> str:
@@ -16,18 +17,81 @@ def _concat_quote(path: Path) -> str:
     return "'" + value.replace("'", "'\\''") + "'"
 
 
+def _run_ffmpeg(
+    args: list[str],
+    *,
+    runner: Callable[..., Any] | None,
+    timeout: int,
+) -> tuple[int, dict[str, str]]:
+    """Run FFmpeg while draining stderr into a fixed-size tail buffer."""
+    kwargs = {
+        "shell": False,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.PIPE,
+        "timeout": timeout,
+        "check": False,
+    }
+    if runner is not None:
+        try:
+            result = runner(args, **kwargs)
+        except subprocess.TimeoutExpired as error:
+            fields = summarize_ffmpeg_stderr(getattr(error, "stderr", None))
+            log_event("candidate.assembly.ffmpeg_timeout", level=40, **fields)
+            raise
+        return (
+            getattr(result, "returncode", 1),
+            summarize_ffmpeg_stderr(getattr(result, "stderr", None)),
+        )
+
+    try:
+        process = subprocess.Popen(
+            args,
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        log_event(
+            "candidate.assembly.ffmpeg_start_failed",
+            level=40,
+            failure_code="process_start_failed",
+            error_type="OSError",
+        )
+        raise
+
+    stderr_tail = BoundedStderrTail(process.stderr)
+    try:
+        return_code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        log_event(
+            "candidate.assembly.ffmpeg_timeout",
+            level=40,
+            **stderr_tail.diagnostic_fields(),
+        )
+        raise
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    return return_code, stderr_tail.diagnostic_fields()
+
+
 def assemble_segments(
     records: Sequence[SegmentRecord],
     output_path: Path,
     *,
     ffmpeg_path: str = "ffmpeg",
-    runner: Callable[..., Any] = subprocess.run,
+    runner: Callable[..., Any] | None = None,
 ) -> Path:
-    """Concatenate compatible MPEG-TS segments without re-encoding."""
+    """Concatenate MPEG-TS segments into a browser-playable MP4 without re-encoding."""
     if not records:
         raise RollingCaptureError("There are no segments to assemble.")
-    if output_path.suffix.lower() != ".ts":
-        raise RollingCaptureError("Lossless rolling assembly currently requires a .ts output.")
+    if output_path.suffix.lower() != ".mp4":
+        raise RollingCaptureError("Highlight preview assembly requires an .mp4 output.")
     paths = [record.path.resolve() for record in records]
     root = paths[0].parent
     if any(path.parent != root or not path.is_file() for path in paths):
@@ -52,30 +116,39 @@ def assemble_segments(
             for path in paths:
                 manifest.write(f"file {_concat_quote(path)}\n")
 
-        result = runner(
-            [
-                ffmpeg_path,
-                "-hide_banner",
-                "-loglevel", "error",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(manifest_path),
-                "-map", "0",
-                "-c", "copy",
-                "-f", "mpegts",
-                "-y",
-                str(output_path),
-            ],
-            shell=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=120,
-            check=False,
-        )
-        if getattr(result, "returncode", 1) != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+        args = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel", "error",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(manifest_path),
+            # Keep only streams that belong in a browser-playable media file.
+            "-map", "0:v?",
+            "-map", "0:a?",
+            "-c", "copy",
+            "-movflags", "+faststart",
+            "-f", "mp4",
+            "-y",
+            str(output_path),
+        ]
+        return_code, diagnostic_fields = _run_ffmpeg(args, runner=runner, timeout=120)
+        output_missing = not output_path.is_file() or output_path.stat().st_size == 0
+        if return_code != 0 or output_missing:
+            if output_missing and return_code == 0:
+                diagnostic_fields = {"failure_code": "output_missing"}
+            elif not diagnostic_fields:
+                diagnostic_fields = {"failure_code": "ffmpeg_unknown"}
+            log_event(
+                "candidate.assembly.ffmpeg_failed",
+                level=40,
+                return_code=return_code,
+                **diagnostic_fields,
+            )
             output_path.unlink(missing_ok=True)
-            raise RollingCaptureError("FFmpeg could not assemble the selected highlight segments.")
+            raise RollingCaptureError(
+                "FFmpeg could not create a browser-playable MP4 from the selected highlight segments."
+            )
         return output_path
     except subprocess.TimeoutExpired:
         output_path.unlink(missing_ok=True)

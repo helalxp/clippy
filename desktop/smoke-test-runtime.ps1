@@ -109,6 +109,8 @@ try {
         "app.py",
         "community_highlights\__init__.py",
         "community_highlights\api.py",
+        "community_highlights\diagnostics.py",
+        "community_highlights\state_store.py",
         "requirements.txt",
         "VERSION",
         "render-service\dist\server.js",
