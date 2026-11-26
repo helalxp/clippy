@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
+  isCommunityHighlightsSessionActive,
   parseCommunityHighlightsStreamUrl,
 } from "./communityHighlights.js";
 
@@ -76,4 +77,18 @@ test("builds the Gemini BYOK header for candidate generation when a key is saved
   });
   assert.deepEqual(communityHighlightsGeminiHeaders(""), {});
   assert.deepEqual(communityHighlightsGeminiHeaders(undefined), {});
+});
+
+
+test("treats interrupted and other terminal sessions as inactive", () => {
+  for (const status of ["stopped", "ended", "error", "interrupted"]) {
+    assert.equal(isCommunityHighlightsSessionActive({ status }), false, status);
+  }
+
+  for (const status of ["starting", "connecting", "connected", "reconnecting", "recording", "stopping"]) {
+    assert.equal(isCommunityHighlightsSessionActive({ status }), true, status);
+  }
+
+  assert.equal(isCommunityHighlightsSessionActive(null), false);
+  assert.equal(isCommunityHighlightsSessionActive(undefined), false);
 });

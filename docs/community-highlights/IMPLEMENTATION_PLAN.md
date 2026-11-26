@@ -25,6 +25,8 @@ This register records findings from the dated source audits below. A checked ite
 - [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
 - [x] Implement the full workflow-first tab redesign in the stacked `ui/community-highlights-workflow` branch: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
 - [x] Pass backend tests, dashboard unit tests, and production dashboard build for the current UI head in GitHub Actions run #45872885434.
+- [x] Apply one shared terminal-session policy to stream matching and polling; restored `interrupted` sessions no longer appear active in the workflow. Add a focused unit test for terminal and in-flight statuses.
+- [ ] Pass dashboard CI for the terminal-state correction on the updated UI branch.
 - [ ] Perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 

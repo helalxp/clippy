@@ -144,6 +144,8 @@ The full workflow-first redesign is authored on `ui/community-highlights-workflo
 - Rights confirmation and deletion confirmation are inline rather than browser popups.
 - Live chat messages and diagnostics are available in a collapsed section.
 
+The stream selector and active-work polling now use the same terminal-state policy. In particular, persisted `interrupted` sessions from backend restart recovery are not mistaken for active sessions, so they do not leave the workflow in a stale partial state. A focused dashboard unit test covers all terminal and in-flight states.
+
 The current UI head passed backend tests, dashboard unit tests, and the production dashboard build in GitHub Actions run [#45872885434](https://github.com/helalxp/clippy/actions/runs/45872885434). Packaged-Windows and responsive acceptance remain pending. The candidate card displays the measured MP4 duration when the backend's optional `actual_duration_seconds` field is available; otherwise it explicitly says the measurement is unavailable. The window span and merged-trigger count remain separate, and the UI does not claim frame-accurate wall-clock boundaries.
 
 ## Release-prep verification record

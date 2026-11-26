@@ -55,3 +55,21 @@ export function isCommunityHighlightsProviderConnected(streamReference, provider
   if (!streamReference || !providers || typeof providers !== "object") return false;
   return providers[streamReference.provider]?.connected === true;
 }
+
+/**
+ * A session can remain in durable state after its worker is gone. Keep the
+ * same terminal-state policy across workflow matching and background polling.
+ */
+export const COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES = new Set([
+  "stopped",
+  "ended",
+  "error",
+  "interrupted",
+]);
+
+export function isCommunityHighlightsSessionActive(session) {
+  return Boolean(
+    session
+    && !COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES.has(session.status)
+  );
+}

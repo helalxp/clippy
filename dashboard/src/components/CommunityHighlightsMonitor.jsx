@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import {
+  COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES,
   communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
+  isCommunityHighlightsSessionActive,
   parseCommunityHighlightsStreamUrl,
 } from '../lib/communityHighlights';
 
-const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error', 'interrupted']);
+const TERMINAL_SESSION_STATES = COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES;
 
 const statusLabel = (status) => ({
   connecting: 'Connecting',
@@ -133,12 +135,12 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const matchingChatSession = streamReference && sessions.find((session) => (
     session.provider === streamReference.provider
     && session.stream_id === streamReference.streamId
-    && !['stopped', 'ended', 'error'].includes(session.status)
+    && isCommunityHighlightsSessionActive(session)
   ));
   const matchingCaptureSession = streamReference && captures.find((capture) => (
     capture.provider === streamReference.provider
     && capture.stream_id === streamReference.streamId
-    && !['stopped', 'ended', 'error'].includes(capture.status)
+    && isCommunityHighlightsSessionActive(capture)
   ));
   const busy = startingAction !== '';
   const connectionGuidance = !streamUrl.trim()
