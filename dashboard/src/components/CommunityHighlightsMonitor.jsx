@@ -24,7 +24,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const [captures, setCaptures] = useState([]);
   const [captureSettings, setCaptureSettings] = useState({ segment_seconds: 4, retention_seconds: 180, max_buffer_size_mb: 512, quality: 'best' });
   const [candidates, setCandidates] = useState([]);
-  const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
+  const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], mode: 'either', min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState('');
   const [previewCandidateId, setPreviewCandidateId] = useState('');
@@ -590,17 +590,40 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
       </div>
       <div className="mt-6 pt-5 border-t border-rule">
         <h3 className="text-sm font-medium text-ink mb-2">Highlight trigger rules</h3>
-        <p className="text-xs text-muted mb-3">A matching phrase or a burst of chat activity creates a candidate, but only when the same stream has an active rolling capture.</p>
-        <label className="block text-xs text-muted mb-1">Trigger phrases, comma-separated</label>
-        <input
-          value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
-          onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
+        <p className="text-xs text-muted mb-3">Choose exactly what is allowed to create a candidate. Either mode keeps the existing phrase OR chat-activity behavior.</p>
+        <label className="block text-xs text-muted mb-1">Create a highlight when</label>
+        <select
+          value={triggerSettings.mode || 'either'}
+          onChange={(event) => setTriggerSettings((current) => ({ ...current, mode: event.target.value }))}
           className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink mb-3"
-        />
+        >
+          <option value="either">A phrase matches or chat activity spikes</option>
+          <option value="phrases">A configured phrase matches only</option>
+          <option value="chat_volume">Chat activity reaches its threshold only</option>
+        </select>
+        {triggerSettings.mode !== 'chat_volume' && (
+          <>
+            <label className="block text-xs text-muted mb-1">Trigger phrases, comma-separated</label>
+            <input
+              value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
+              onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
+              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink mb-3"
+            />
+          </>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
+          {triggerSettings.mode !== 'phrases' && [
             ['min_messages', 'Messages', 2, 500],
             ['min_unique_users', 'Unique viewers', 1, 500],
+          ].map(([key, label, min, max]) => (
+            <label key={key} className="text-xs text-muted">
+              <span className="block mb-1">{label}</span>
+              <input type="number" min={min} max={max} value={triggerSettings[key]}
+                onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+            </label>
+          ))}
+          {[
             ['window_seconds', 'Chat window (s)', 1, 120],
             ['cooldown_seconds', 'Cooldown (s)', 0, 3600],
             ['pre_seconds', 'Seconds before', 0, 300],
