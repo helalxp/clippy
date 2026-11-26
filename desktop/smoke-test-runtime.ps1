@@ -247,6 +247,55 @@ Write-Output "ConvertFromJsonModule=$($jsonCommand.Source)"
     $env:CLIPPY_SETTINGS_PATH = Join-Path $root 'settings.json'
     & $pythonExe -c "import sys,pathlib,app,torch,fastapi,faster_whisper,importlib.util; from yt_dlp_plugins.extractor.getpot_bgutil_http import BgUtilHTTPPTP; import yt_dlp_plugins.extractor.getpot_bgutil; import yt_dlp_plugins.extractor.getpot_bgutil_http; assert importlib.util.find_spec('yt_dlp_plugins.extractor.getpot_bgutil_script') is None; assert not BgUtilHTTPPTP(None,None,{}).is_available(); assert BgUtilHTTPPTP(None,None,{'base_url':['http://127.0.0.1:4416']}).is_available(); assert pathlib.Path(app.__file__).resolve() == (pathlib.Path(sys.argv[1])/'app.py').resolve(); assert torch.version.cuda is None; print('Packaged backend, CPU runtime, and explicitly enabled HTTP-only bgutil plugin OK:', torch.__version__)" $appDirectory
     if ($LASTEXITCODE -ne 0) { throw "Managed Python backend import smoke test failed." }
+
+    # Exercise the actual managed Pillow + bundled FriBiDi payload, then burn
+    # an Arabic karaoke ASS sample through the managed FFmpeg. Import-only
+    # checks cannot catch missing shaping DLLs or text-rendering regressions.
+    $arabicSmokeDirectory = Join-Path $smokeRoot 'arabic-render'
+    New-Item -ItemType Directory -Path $arabicSmokeDirectory -Force | Out-Null
+    $arabicSmokeScript = Join-Path $arabicSmokeDirectory 'verify_arabic_render.py'
+    @'
+import pathlib
+import subprocess
+import sys
+
+from PIL import features
+from hooks import create_hook_image
+from subtitles import generate_ass, subtitles_filter
+
+root = pathlib.Path(sys.argv[1])
+ffmpeg = sys.argv[2]
+if not features.check_feature("raqm"):
+    raise SystemExit("Pillow RAQM is unavailable; bundled FriBiDi could not be loaded.")
+
+hook_path = root / "arabic-hook.png"
+create_hook_image("مرحبا بالعالم Clippy 🔥", 700, str(hook_path), style="pill")
+if not hook_path.is_file() or hook_path.stat().st_size == 0:
+    raise SystemExit("Arabic hook render did not produce an image.")
+
+ass_path = root / "arabic-subtitles.ass"
+transcript = {"segments": [{"words": [
+    {"word": " مرحبا", "start": 0.0, "end": 0.45},
+    {"word": " بالعالم", "start": 0.45, "end": 0.95},
+]}]}
+if not generate_ass(transcript, 0, 1.0, str(ass_path), font_name="Anton", uppercase=True):
+    raise SystemExit("Arabic ASS subtitle generation returned no events.")
+filter_graph = subtitles_filter(str(ass_path))
+if "shaping=complex" not in filter_graph:
+    raise SystemExit("Arabic ASS filter did not request complex shaping.")
+frame_path = root / "arabic-subtitle-frame.png"
+command = [
+    ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=black:s=360x640:r=25:d=1",
+    "-vf", filter_graph, "-frames:v", "1", str(frame_path),
+]
+subprocess.run(command, check=True, capture_output=True)
+if not frame_path.is_file() or frame_path.stat().st_size == 0:
+    raise SystemExit("Arabic subtitle burn did not produce a frame.")
+print("Managed Pillow RAQM hook and FFmpeg/libass Arabic subtitle smoke test passed.")
+'@ | Set-Content -LiteralPath $arabicSmokeScript -Encoding UTF8
+    & $pythonExe $arabicSmokeScript $arabicSmokeDirectory $ffmpegExe
+    if ($LASTEXITCODE -ne 0) { throw "Packaged Arabic hook/subtitle rendering smoke test failed." }
+
     if (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'output') -PathType Container)) {
         throw "The relocated output directory was not created under the configured data root."
     }
