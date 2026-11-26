@@ -5,7 +5,7 @@
 **Consolidated scope:** correctness changes from former PR #42, workflow UI changes from former PR #43, and requested-window/actual-duration metrics from former PR #44. Original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
-**Last updated:** 2026-11-26  
+**Last updated:** 2026-11-27  
 **Post-implementation backlog:** [`AFTER_IMPLEMENTATION.md`](AFTER_IMPLEMENTATION.md)
 
 ## Code audit follow-up register
@@ -14,7 +14,7 @@ This register records findings from the dated source audits below. A checked ite
 
 ### Batch 2 — post-implementation correctness (2026-11-26)
 
-- [x] Separate approved Community Highlights candidate duration validation from the generic `MIN_SOURCE_SECONDS` guard. Preserve the ordinary URL/upload minimum and validate candidates against the clip selector's actual minimum. A focused 30-second handoff regression test is authored; CI is pending.
+- [x] Separate approved Community Highlights candidate duration validation from the generic `MIN_SOURCE_SECONDS` guard. Preserve the ordinary URL/upload minimum and validate candidates against the clip selector's actual minimum. A focused 30-second handoff regression test is authored and passed in the former PR #42 backend CI run.
 - [x] Evaluate trigger windows and cooldowns against provider publication timestamps, while keeping local receipt timestamps for trigger-to-capture coordination. Older out-of-order events cannot rewind the trigger clock.
 - [x] Normalize Unicode, punctuation, and whitespace before whole-phrase matching, avoiding substring false positives.
 - [x] Add explicit `phrases`, `chat_volume`, and `either` modes. Older persisted settings default to `either`; saving settings preserves message deduplication and cooldown state.
@@ -23,7 +23,7 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Previous PR #42 correctness checks passed backend/frontend CI and Windows desktop validation. Previous PR #43 dashboard/backend checks passed; packaged-Windows UI acceptance remains pending.
 - [ ] Live-test YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
 - [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
-- [x] Implement the full workflow-first tab redesign in the stacked `ui/community-highlights-workflow` branch: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
+- [x] Include the full workflow-first tab redesign in consolidated PR #43: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
 - [x] Pass backend tests, dashboard unit tests, and production dashboard build for the current UI head in GitHub Actions run #45872885434.
 - [x] Apply one shared terminal-session policy to stream matching and polling; restored `interrupted` sessions no longer appear active in the workflow. Add a focused unit test for terminal and in-flight statuses.
 - [x] Show the success badge only when chat is `connected` and the rolling buffer is `recording`; connecting, reconnecting, and stopping states are not described as active. Add focused helper tests.
