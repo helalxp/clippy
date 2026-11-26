@@ -1,8 +1,8 @@
 # Community Highlights: After Implementation
 
-**Status:** Initial feature rollout accepted with tracked refinements  
-**Active branch:** `fix/community-highlights-google-oauth`  
-**Release version being prepared:** `v0.3.3`  
+**Status:** Initial feature merged; post-implementation corrections in progress  
+**Merged baseline:** `main` contains Community Highlights and version metadata `0.3.3`; tag/publication status must be verified separately.  
+**Active fix branch:** `fix/community-highlights-correctness`  
 **Last updated:** 2026-11-26
 
 ## Purpose
@@ -30,11 +30,11 @@ The current feature path includes:
 
 ### P1: Approved candidates shorter than 45 seconds are rejected
 
-**Observed:** A Community Highlights candidate can be shorter than 45 seconds, but generation can reject it before the normal pipeline starts.
+**Observed:** A Community Highlights candidate can be shorter than 45 seconds, but generation previously rejected it before the normal pipeline started.
 
-**Confirmed cause:** The shared `MIN_SOURCE_SECONDS` guard defaults to 45 seconds and is applied to the staged Community Highlights candidate in `app.py`, as well as ordinary uploaded sources. A chat-triggered candidate is already a bounded highlight rather than a full-length source video, so applying the same source minimum creates a contract mismatch.
+**Confirmed cause:** `app.py` applied the generic `MIN_SOURCE_SECONDS` guard to the staged candidate. That guard defaults to 45 seconds and is intended for ordinary URLs/uploads, not already-trimmed highlight media.
 
-**Preferred refinement:** Introduce a source-specific duration policy for Community Highlights candidates. Preserve the existing minimum for ordinary URL/file uploads unless a separate product decision changes it. Do not simply lower the global minimum.
+**Fix authored on `fix/community-highlights-correctness`:** Keep the generic 45-second guard unchanged for ordinary sources. Validate a Community Highlights candidate against the clip selector's actual minimum duration instead. A valid 30-second candidate should pass; media shorter than the configured clip-selection minimum gets a candidate-specific explanation. A regression test sets the generic guard to 45 seconds and exercises a 30-second candidate. CI has not yet run.
 
 **Acceptance criteria:**
 - A valid, readable approved candidate shorter than 45 seconds can enter the one-Short pipeline.
@@ -66,19 +66,24 @@ These findings explain why the current implementation can differ from an exact 3
 
 ### P1: Candidate triggers sometimes occur without the configured phrase
 
-**Observed:** A candidate can be created even though the configured phrase is not present in the recent chat.
+**Observed:** A candidate can be created even though the configured phrase is not present in recent chat.
 
-**Confirmed behavior that likely explains some reports:** A rule currently fires when **either** a phrase matches **or** the chat-volume threshold is reached. The default volume rule is 12 messages from at least 5 unique viewers within 10 seconds. That path deliberately creates a candidate without a phrase; the candidate's reason is recorded as `chat_volume` rather than `phrase`.
+**Confirmed existing behavior:** The old trigger rule fired when **either** a phrase matched **or** chat-volume reached its threshold. The default volume rule is 12 messages from at least 5 unique viewers within 10 seconds. A candidate without the phrase could therefore be expected under the previous default configuration.
 
-This means a trigger without the phrase is not automatically evidence of a phrase-matching defect. The current UI also exposes the volume thresholds alongside the phrases, but the distinction deserves much stronger explanation and visibility.
+**Additional confirmed causes:**
+- The trigger engine used local receipt time for chat-volume windows. YouTube can return messages in batches, so messages published across more than the configured window could arrive together and appear to be a burst.
+- Transient YouTube retries discarded the live-chat continuation token. The original session-start check did not suppress all backlog replayed after a later reconnect.
+- Saving settings rebuilt the trigger engine and discarded in-memory provider-message deduplication and cooldown state.
+- Phrase matching used substring matching, allowing false positives such as a configured phrase inside a larger word.
 
-**Further investigation:** If candidates still appear unexpectedly when neither the phrase nor the configured volume threshold was met, capture a redacted event trace of message counts, unique sender counts, configured window, cooldown, and the candidate reason. Check provider message duplication, reconnect overlap, phrase normalization/substring matching, and candidate merging. Do not log raw chat content or viewer identifiers.
+**Fixes authored on `fix/community-highlights-correctness`:**
+- Use provider publication timestamps for trigger windows/cooldowns while retaining local receipt time for trigger-to-capture coordination.
+- Preserve YouTube's live-chat ID, continuation token, and latest publication-time watermark across retries within the same running chat session. Older replayed backlog stays visible but is not sent to trigger evaluation.
+- Preserve deduplication and cooldown state when rules are updated.
+- Normalize Unicode, punctuation, and whitespace before deterministic whole-phrase matching.
+- Expose `phrases`, `chat_volume`, and `either` modes; older saved settings default to `either` so existing behavior is preserved.
 
-**Preferred refinement:**
-- Make phrase-only, volume-only, and combined triggering explicit user-selectable modes, or provide an equally clear enable/disable control for the volume rule.
-- Show the trigger reason on each candidate and in its detail view.
-- Explain the active thresholds before monitoring starts.
-- Keep phrase matching deterministic and add tests for punctuation, whitespace, casing, substring false positives, duplicate messages, cooldowns, and out-of-order events.
+Focused regression tests have been authored for the above behavior. CI and real provider acceptance are still pending.
 
 **Acceptance criteria:**
 - Phrase-only mode never creates a candidate from chat volume alone.
@@ -104,14 +109,31 @@ This means a trigger without the phrase is not automatically evidence of a phras
 
 ### P2: Remaining operational hardening
 
-These are already present in the implementation plan and remain follow-up work rather than newly confirmed defects:
+The following items remain open after the source audit and are not covered by the first correctness batch:
 
 - Complete live Twitch authorization, chat, rolling capture, candidate extraction, and disconnect acceptance.
+- Complete packaged-Windows acceptance for YouTube reconnect/cursor recovery and Twitch IRC `RECONNECT`, alongside Twitch live chat, capture, candidate extraction, and disconnect.
 - Test long-running provider reconnects, quota/rate-limit handling, and terminal chat states.
-- Measure trigger-to-media timeline drift on real authorized streams.
+- Measure trigger-to-media timeline drift on real authorized streams. The chat-rule clock fix does not make the current segment-mtime/duration capture alignment frame-accurate.
 - Define a total candidate-media age/byte budget and disk-pressure behavior.
 - Improve setup and troubleshooting documentation, including provider-specific error guidance.
 - Revisit exact frame trimming and candidate boundary editing after the duration measurements are available.
+
+## Lifecycle and restart clarification
+
+Candidate metadata and review decisions are persisted and restored by the current backend. Completed candidate MP4s are preserved across a backend restart when their paths pass the storage checks. Active chat connections are not resumed. Active rolling captures and in-progress candidate assembly workers cannot resume; they are marked interrupted/failed and disposable rolling segments are cleaned during startup reconciliation. Trigger-engine message IDs, recent-message windows, and cooldown state are in memory and do not survive a backend process restart. The new YouTube continuation fields are also session-memory state, not durable restart state.
+
+This corrects the older implementation note that candidate metadata was memory-only. It does not mean interrupted live capture or extraction can continue after a process restart.
+
+## Pre/post duration: still open
+
+The current capture timeline estimates segment wall time from filesystem modification time plus FFmpeg media duration. Extraction includes whole overlapping TS segments and remuxes with stream copy. Nearby triggers intentionally merge into the union of their requested windows. Capture settings are snapshotted when a buffer starts, so edits do not change an already-running capture. The manual “Clip now” action currently sends the values in the UI, while automatic chat triggers use persisted backend settings; the UI must make saved versus unsaved settings explicit.
+
+The reliable next step is to persist/display requested bounds and actual candidate duration, include merged-trigger count, and measure real drift on an authorized live stream. Only then decide whether a final-stage trim is needed. Do not re-encode the rolling buffer.
+
+## Current UI scope
+
+The current branch adds the explicit trigger-mode selector only. It is **not** the requested full tab redesign. The complete redesign remains a separate implementation slice: one clear start/stop workflow for chat plus recording, streamlined main settings, collapsed advanced capture settings, visible state/errors, and compact candidate review with trigger reason/count and actual duration.
 
 ## Release-prep verification record
 
@@ -124,8 +146,8 @@ For the PR head that included the Gemini-key handoff fix, GitHub Actions reporte
 
 The user's live test additionally confirmed that the approved candidate reached the standard results card and generated a clip.
 
-These checks establish a solid merge baseline, but do not imply that the post-implementation items above have been fixed. The CI run predates the `v0.3.3` metadata-only version bump; the version-bump commit must pass the same workflows before merge.
+These historical checks establish a merge baseline for the feature branch; they do not validate the current correctness branch. The current branch must pass its own backend, dashboard, and Windows validation workflows before it is ready to merge.
 
 ## Working rule
 
-Fix these items incrementally, one stable issue at a time. For each fix, add a focused regression test that protects the intended behavior, update this register, and keep unrelated pipeline behavior unchanged.
+Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep the full Community Highlights UI redesign separate from correctness fixes so it can be reviewed as one coherent workflow.
