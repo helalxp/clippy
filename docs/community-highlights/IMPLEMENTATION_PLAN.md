@@ -27,7 +27,7 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Pass backend tests, dashboard unit tests, and production dashboard build for the current UI head in GitHub Actions run #45872885434.
 - [x] Apply one shared terminal-session policy to stream matching and polling; restored `interrupted` sessions no longer appear active in the workflow. Add a focused unit test for terminal and in-flight statuses.
 - [x] Show the success badge only when chat is `connected` and the rolling buffer is `recording`; connecting, reconnecting, and stopping states are not described as active. Add focused helper tests.
-- [ ] Pass dashboard CI for the terminal-state and workflow-health UI corrections on the updated branch.
+- [x] Pass dashboard CI for the terminal-state and workflow-health UI corrections. Updated UI head `f664f835` passed backend tests, dashboard unit tests, and production build in GitHub Actions run [#45875358353](https://github.com/helalxp/clippy/actions/runs/45875358353).
 - [ ] Perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 
