@@ -91,7 +91,9 @@ jobs:
 
       - name: Validate synchronized application version
         shell: pwsh
-        run: ./desktop/validate-version.ps1
+        run: |
+          ./desktop/set-version.ps1 -Check
+          ./desktop/validate-version.ps1
 
       - name: Install dashboard dependencies
         working-directory: dashboard
@@ -134,6 +136,7 @@ jobs:
       - name: Validate PowerShell installer scripts
         shell: pwsh
         run: |
+          [scriptblock]::Create((Get-Content ./desktop/set-version.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/prepare-payload.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/setup-runtime.ps1 -Raw)) | Out-Null
           [scriptblock]::Create((Get-Content ./desktop/storage-path.ps1 -Raw)) | Out-Null
