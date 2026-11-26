@@ -1,7 +1,7 @@
 # Template System Foundation Port
 
-**Target branch:** `feature/template-reference-workbench-stable`  
-**Base:** current `main` at the fresh-branch commit recorded in this PR  
+**Target branch:** `feature/template-reference-workbench-current-main`  
+**Base:** current `main` at `c402e3adbe8205802c9d3786a660ca7285c1faef`  
 **Workbench source:** `feature/template-reference-workbench` at `e7b8e3ac6d3da4f2023c7076f44c18f411513892` (PR #20)  
 **Domain source snapshot:** `feature/template-reference-system-clean` at `bc7f7b77444c6e57edfdddbdaad71ea17ec19f07` (PR #6)  
 **Port date:** 2026-11-26
@@ -53,7 +53,9 @@ Comparison mode C (independent normal-vs-template-directed selection) is explici
 
 ## Fresh-main port record — 2026-11-26
 
-- The replacement branch was created directly from current `main`; the previous PR #20 `app.py` was not copied over the current application file. Its workbench routes were selectively inserted into the current backend so newer maintenance and Community Highlights changes remain intact.
+- After `main` advanced 136 commits beyond the earlier PR #39 base, this workbench was re-ported onto a fresh branch from current `main` at `c402e3adbe8205802c9d3786a660ca7285c1faef`. The previous PR #20 `app.py` was not copied over the current application file; the workbench routes, startup recovery, and media-token exceptions were selectively integrated, preserving newer Community Highlights lifecycle and diagnostics.
 - Reference-analysis background workers use the existing `_create_data_background_task` helper, which participates in the current desktop maintenance handshake.
 - The workbench domain package, UI, correction editor, media-token allowlist changes, architecture notes and focused test modules were selectively carried forward.
+- Windows payload assembly, payload-contract tests, runtime smoke imports, and native-supervisor validation now require the `template_system` package.
+- The Templates upload forwards the browser-local Gemini key through `X-Gemini-Key` only with explicit Gemini consent. API failure diagnostics include correlation IDs and tracebacks without logging key values.
 - The previous PR #6/#7/#20 records are retained closed for history. Their remote branches are not deleted, so the source remains recoverable if a later audit identifies a needed implementation detail.
