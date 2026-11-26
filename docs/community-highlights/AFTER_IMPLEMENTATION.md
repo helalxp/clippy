@@ -143,7 +143,7 @@ The full workflow-first redesign is authored on `ui/community-highlights-workflo
 - Rights confirmation and deletion confirmation are inline rather than browser popups.
 - Live chat messages and diagnostics are available in a collapsed section.
 
-This is implemented in source but has **not** passed dashboard CI or packaged-Windows/responsive acceptance yet. Candidate actual media duration is not shown as a measured value because the backend does not yet persist it; the UI shows the current window span and merged-trigger count without claiming frame accuracy.
+This is implemented in source but has **not** passed dashboard CI or packaged-Windows/responsive acceptance for the latest UI commits yet. The candidate card displays the measured MP4 duration when the backend's optional `actual_duration_seconds` field is available; otherwise it explicitly says the measurement is unavailable. The requested/effective window span and merged-trigger count remain separate, and the UI does not claim frame-accurate wall-clock boundaries.
 
 ## Release-prep verification record
 
