@@ -175,19 +175,20 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     || candidates.some((candidate) => candidate.status === 'capturing')
   );
 
-  const refreshSessions = useCallback(async () => {
+  const refreshSessions = useCallback(async (isCurrent = () => true) => {
     try {
       const [chatResult, captureResult, candidateResult] = await Promise.all([
         apiJson('/api/community-highlights/sessions'),
         apiJson('/api/community-highlights/captures'),
         apiJson('/api/community-highlights/candidates'),
       ]);
+      if (!isCurrent()) return;
       setSessions(chatResult.sessions || []);
       setCaptures(captureResult.sessions || []);
       setCandidates(candidateResult.candidates || []);
       setStatusLoadFailed(false);
     } catch (requestError) {
-      setStatusLoadFailed(true);
+      if (isCurrent()) setStatusLoadFailed(true);
       throw requestError;
     }
   }, []);
@@ -200,7 +201,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     let active = true;
     const refresh = async () => {
       try {
-        await refreshSessions();
+        await refreshSessions(() => active);
       } catch (requestError) {
         if (active) setError(requestError?.detail || 'Could not load Community Highlights status.');
       }
