@@ -50,6 +50,7 @@ class TriggerCoordinator:
         self._uses_default_store = state_store is None and capture_manager is capture_sessions
         self._lock = threading.RLock()
         self._phrases = ("clip it", "clip that")
+        self._mode = "either"
         self._min_messages = 12
         self._min_unique_users = 5
         self._window_seconds = 10.0
@@ -58,22 +59,28 @@ class TriggerCoordinator:
         self._post_seconds = 45
         self._engine = self._build_engine()
 
-    def _build_engine(self) -> TriggerEngine:
-        return TriggerEngine([
+    def _build_rules(self) -> list[TriggerRule]:
+        phrases = self._phrases if self._mode in {"phrases", "either"} else ()
+        min_messages = self._min_messages if self._mode in {"chat_volume", "either"} else None
+        return [
             TriggerRule(
                 rule_id="community-default",
-                phrases=self._phrases,
-                min_messages=self._min_messages,
+                phrases=phrases,
+                min_messages=min_messages,
                 min_unique_users=self._min_unique_users,
                 window_seconds=self._window_seconds,
                 cooldown_seconds=self._cooldown_seconds,
             )
-        ])
+        ]
+
+    def _build_engine(self) -> TriggerEngine:
+        return TriggerEngine(self._build_rules())
 
     def settings(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "phrases": list(self._phrases),
+                "mode": self._mode,
                 "min_messages": self._min_messages,
                 "min_unique_users": self._min_unique_users,
                 "window_seconds": self._window_seconds,
@@ -97,7 +104,10 @@ class TriggerCoordinator:
         cooldown_seconds: float,
         pre_seconds: int,
         post_seconds: int,
+        mode: str = "either",
     ) -> dict[str, Any]:
+        if mode not in {"phrases", "chat_volume", "either"}:
+            raise ValueError("Choose phrase-only, chat-activity-only, or combined triggering.")
         if not isinstance(phrases, (list, tuple)):
             raise ValueError("Trigger phrases must be provided as a list.")
         normalized = tuple(dict.fromkeys(
@@ -106,6 +116,8 @@ class TriggerCoordinator:
         ))
         if len(normalized) > 30 or any(len(phrase) > 80 for phrase in normalized):
             raise ValueError("Use at most 30 trigger phrases, each no longer than 80 characters.")
+        if mode == "phrases" and not normalized:
+            raise ValueError("Add at least one trigger phrase or choose another trigger mode.")
         if type(min_messages) is not int or not 2 <= min_messages <= 500:
             raise ValueError("Message threshold must be between 2 and 500.")
         if type(min_unique_users) is not int or not 1 <= min_unique_users <= min_messages:
@@ -122,6 +134,7 @@ class TriggerCoordinator:
             raise ValueError("Highlight windows must be between 0 and 300 seconds.")
         return {
             "phrases": normalized,
+            "mode": mode,
             "min_messages": min_messages,
             "min_unique_users": min_unique_users,
             "window_seconds": float(window_seconds),
@@ -132,13 +145,15 @@ class TriggerCoordinator:
 
     def _apply_settings_locked(self, settings: dict[str, Any]) -> None:
         self._phrases = settings["phrases"]
+        self._mode = settings["mode"]
         self._min_messages = settings["min_messages"]
         self._min_unique_users = settings["min_unique_users"]
         self._window_seconds = settings["window_seconds"]
         self._cooldown_seconds = settings["cooldown_seconds"]
         self._pre_seconds = settings["pre_seconds"]
         self._post_seconds = settings["post_seconds"]
-        self._engine = self._build_engine()
+        # Replacing rules must not erase message IDs or active cooldowns.
+        self._engine.set_rules(self._build_rules())
 
     def configure(
         self,
@@ -150,10 +165,12 @@ class TriggerCoordinator:
         cooldown_seconds: float,
         pre_seconds: int,
         post_seconds: int,
+        mode: str = "either",
         persist: bool = True,
     ) -> dict[str, Any]:
         settings = self._validate_settings(
             phrases=phrases,
+            mode=mode,
             min_messages=min_messages,
             min_unique_users=min_unique_users,
             window_seconds=window_seconds,
