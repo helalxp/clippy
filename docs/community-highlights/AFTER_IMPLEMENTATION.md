@@ -55,14 +55,19 @@ The current feature path includes:
 
 These findings explain why the current implementation can differ from an exact 30/30 split, but they do not quantify the drift on every real stream. The observed cases should be measured before choosing a fix.
 
-**Preferred refinement:** Keep the requested window as the source of truth, record the actual assembled duration and effective boundaries, and make the allowed tolerance explicit. If exact boundaries are a product requirement, evaluate trimming/re-encoding only at the final assembly boundary rather than complicating the rolling capture path.
+**Current implementation on `fix/community-highlights-window-metrics`:**
+- Persist the candidate's requested/effective UTC window bounds (`window_start` / `window_end`) in the candidate snapshot and state store. Older records without these fields restore with null bounds.
+- After MP4 assembly, use FFprobe to measure the actual container duration. Prefer `FFPROBE_PATH`, then FFprobe beside the configured FFmpeg executable, then PATH. This runs after assembly and is best-effort: missing/unavailable FFprobe or invalid output leaves the candidate ready with `actual_duration_seconds: null`.
+- Persist and restore `actual_duration_seconds` when it is finite and positive. Invalid saved metrics are discarded. No rolling capture or stream-copy behavior is changed.
 
-**Acceptance criteria:**
-- Persisted settings used by the trigger coordinator match the values shown as saved in the UI and survive restart.
-- A single trigger produces a measured output duration within a documented tolerance of the requested pre + post duration.
-- Tests cover segment-boundary rounding, delayed segment completion, filesystem timestamp drift, gaps, and merged triggers.
-- The UI distinguishes requested pre/post values from the actual candidate duration and indicates when multiple triggers expanded a candidate.
-- No media is silently presented as frame-accurate until the timeline is made frame-accurate.
+**Important limitation:** this measures the output file's duration. It does not prove that the chat trigger was aligned to the exact requested wall-clock boundaries. The filesystem-mtime timeline estimate and whole-segment selection remain approximate, and merged candidates intentionally span the union of their windows.
+
+**Remaining refinement and acceptance:**
+- Measure drift between trigger receipt and video content on authorized real streams, separately for YouTube and Twitch.
+- Test segment-boundary rounding, delayed segment completion, filesystem timestamp drift, gaps, and merged triggers using reproducible fixtures.
+- Display requested bounds, measured actual duration, and merged-trigger count as distinct values. Never calculate or label the difference as exact timing error until wall-clock alignment has been measured.
+- Decide whether final-stage trimming is required only after the real-stream measurements. Do not re-encode the rolling buffer.
+- No media is presented as frame-accurate until the timeline itself is made frame-accurate.
 
 ### P1: Candidate triggers sometimes occur without the configured phrase
 
