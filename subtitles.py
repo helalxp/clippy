@@ -560,7 +560,7 @@ def format_srt_block(index, start, end, text):
 
 _HEX_COLOR_RE = re.compile(r'^[0-9A-Fa-f]{6}$')
 _FONT_NAME_RE = re.compile(r'[^A-Za-z0-9 _-]')
-_RTL_TEXT_RE = re.compile(r"[֐-ࣿיִ-﷿ﹰ-﻿]")
+_RTL_TEXT_RE = re.compile(r"[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]")
 
 
 def _contains_rtl_text(value):
