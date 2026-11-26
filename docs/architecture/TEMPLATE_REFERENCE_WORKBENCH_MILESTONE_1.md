@@ -179,3 +179,45 @@ The reference-analysis and human-review slice is now present in the branch. The 
 6. Only after single-clip behavior is reliable, consider batch application and normal generation-pipeline integration. Managed/cloud storage remains deferred until account-scoped storage and media delivery are designed.
 
 A configurable local retention policy is also outstanding. It should be implemented with explicit user-visible policy and must never silently purge saved templates or active jobs.
+
+## 13. Analysis-quality gate — required before template application
+
+The first installed-app evaluation showed that a completed deterministic pass is not the same as a usable editing analysis. Template application remains deferred until this gate is met.
+
+### 13.1 First evaluation findings (2026-11-26)
+
+- The supplied gaming/streamer frame is a vertically stacked composition: a webcam/presenter region above a gameplay region. The visible split is approximately 30% webcam and 70% gameplay, not an assumed 50/50 split. This is an initial visual annotation from one still, not yet a source-video ground-truth measurement.
+- The displayed luminance, saturation and edge-density values are low-level per-frame pixel diagnostics. They are not semantic detections, layout measurements, cut-quality scores or recipe instructions. Keep them available as advanced diagnostics, but do not present them as the main editing analysis.
+- The deterministic sampler currently chooses at most 24 scene-midpoint/uniform timestamps. Frames are resized to a maximum dimension of 640 pixels before Gemini interpretation. This is too sparse/coarse to reliably reconstruct brief hooks, fast edits, small subtitle details or word-level caption animation.
+- FFmpeg scene detection currently retains candidate timestamps from its scene filter, but not the scene score or a measured cut-strength/abruptness value. It therefore cannot yet explain how sharp a cut is.
+- The current report has generic composition kinds and anonymous subject-region boxes. It does not identify independently addressable panes such as webcam and gameplay, nor store their ordered normalized rectangles, divider geometry or source-fit policy.
+- The canonical `TemplateRecipe` currently has one `FramingRecipe` for the source frame. It cannot describe a multi-region canvas with separately assigned source panes. Even a better AI report could not yet express this layout as a renderer-ready recipe.
+- The text report already has fields for text role, estimated box, font candidates, weight/style/size, fill/highlight/outline/shadow, alignment, animation and observed visibility interval. Those fields were not returned in the supplied run because Gemini interpretation failed before the request reached the model.
+- The Gemini failure was a local SDK/schema-conversion error. `ReferenceStyleReport.schema_version` used integer `Literal[1]`; the pinned `google-genai==1.75.0` converter rejects non-string singleton Literal constants with `Literal values must be strings.` The field was changed to an integer constrained to version 1, and a regression test now exercises the SDK schema conversion without a network call. This fix is committed on the current workbench branch; CI still needs to validate it.
+
+### 13.2 Required analysis capabilities
+
+1. **Pane/layout reconstruction:** Represent the canvas layout and each region separately. A region needs a semantic role (for example webcam, gameplay, screen share, presenter, background or unknown), normalized x/y/width/height, order/layer, confidence, evidence timestamps, and an explicit fit policy such as contain, cover, crop or unknown. Record divider/gap/border details when visible. Report ratios from observed geometry rather than assuming equal halves.
+2. **Temporal evidence:** Retain broad scene coverage, but add targeted samples around the opening hook, every deterministic cut candidate, text appearance/disappearance and other detected events. Use higher-resolution targeted evidence for small text where needed. Keep frame count, image dimensions and total upload bytes bounded; do not silently claim frame-accurate timing from sparse stills.
+3. **Text/subtitle analysis:** Distinguish captions, hooks, titles, labels and watermarks. Report observed text, region geometry, line count, alignment, font characteristics, ranked font-family candidates, colors, outline/shadow/backing, and reveal/highlight behavior. Add temporal evidence where subtitles change. Font family remains a ranked visual estimate: a flattened video does not normally preserve the original font metadata, so exact identification must not be claimed.
+4. **Hook placement:** Report visual/text hook type, content when readable, normalized placement, first/last observed times, entrance behavior and supporting frames. Spoken hooks and audio-driven timing require a separate transcript/audio-analysis stage; visual-only analysis must state that limitation.
+5. **Cut and pacing analysis:** Preserve each cut candidate's timestamp and FFmpeg scene score. Measure shot durations and visual change around the boundary with before/after evidence. Detect gradual transitions with a multi-frame window rather than guessing from one still. Separate measurable cut abruptness from qualitative editorial effectiveness. Any effectiveness assessment must explain its visual/audio evidence and must not be presented as an objective numeric truth.
+6. **Renderer-ready layout contract:** Extend the recipe only after its pane semantics are defined. A layout recipe must be able to place each source region in a normalized destination rectangle and specify whether source content is preserved, contained, covered or cropped. A separate source is required when webcam and gameplay are separate inputs; a single already-composited source can only be rearranged within the information present in that source. Unsupported source arrangements must fail compatibility preflight instead of silently cropping or dropping a pane.
+7. **Workbench presentation:** Show a visual layout map with labelled panes and measured ratios, a cut/shot timeline, hook and caption timing, and typography details. Keep the low-level pixel measurements in an explicitly labelled advanced diagnostics section, with definitions.
+8. **Human correction and evidence:** Keep all model findings evidence-linked and reviewable. A high-impact layout/caption finding must be correctable before recipe synthesis. Unknown or weakly supported properties should remain unknown instead of being filled with guesses.
+
+### 13.3 Implementation order
+
+1. Validate the Gemini schema compatibility fix and rerun the same reference.
+2. Inspect the now-successful report against the same reference before changing prompts or adding more schema fields; this isolates model quality from the previous local failure.
+3. Upgrade the sampler and deterministic cut evidence, then add the pane-region and text/hook report contracts and their UI.
+4. Add the multi-region recipe and renderer compatibility support. Do not claim that analysis can recreate a layout until the recipe and renderer can represent it.
+5. Validate against manually labelled gaming/streamer, podcast/talking-head, screencast, educational, split-screen and picture-in-picture references. Track pane-role correctness and geometry error, missed/false text regions, hook timing/placement error, cut-boundary/timing error, font-candidate ranking and evidence validity.
+6. Only after the report and renderer pass this quality gate should single-clip template application begin. Batch and normal-generation integration remain later stages.
+
+### 13.4 Boundaries and non-claims
+
+- A reference still can establish visible composition and approximate geometry, but cannot establish cut timing, hook duration, subtitle animation, or whether an edit is effective over time. Those require the source video.
+- Exact original-font recovery is not guaranteed from rendered pixels. Return ranked candidates and visual traits, then allow human correction or a supplied font asset.
+- A visual-only pass cannot judge beat sync, spoken-hook timing, music edits, sound effects or audio ducking. Those belong to a separately validated audio-analysis milestone.
+- “Preserve gameplay without cropping” is a renderer requirement, not something a vision prompt can guarantee. It must be represented explicitly in the layout recipe and verified by preview/final-render parity.
