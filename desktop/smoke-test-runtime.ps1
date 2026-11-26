@@ -116,6 +116,8 @@ try {
         "render-service\dist\server.js",
         "render-service\node_modules\@remotion\renderer\package.json",
         "remotion\src\index.ts",
+        "bin\libfribidi-0.dll",
+        "bin\FRIBIDI-LICENSE.txt",
         "bgutil-provider\server\build\main.js",
         "bgutil-provider\server\package.json",
         "bgutil-provider\server\node_modules\express\package.json"
@@ -259,6 +261,7 @@ import pathlib
 import subprocess
 import sys
 
+sys.path.insert(0, sys.argv[3])
 from PIL import features
 from hooks import create_hook_image
 from subtitles import generate_ass, subtitles_filter
@@ -293,7 +296,7 @@ if not frame_path.is_file() or frame_path.stat().st_size == 0:
     raise SystemExit("Arabic subtitle burn did not produce a frame.")
 print("Managed Pillow RAQM hook and FFmpeg/libass Arabic subtitle smoke test passed.")
 '@ | Set-Content -LiteralPath $arabicSmokeScript -Encoding UTF8
-    & $pythonExe $arabicSmokeScript $arabicSmokeDirectory $ffmpegExe
+    & $pythonExe $arabicSmokeScript $arabicSmokeDirectory $ffmpegExe $appDirectory
     if ($LASTEXITCODE -ne 0) { throw "Packaged Arabic hook/subtitle rendering smoke test failed." }
 
     if (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'output') -PathType Container)) {
