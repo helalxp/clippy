@@ -20,21 +20,23 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Add explicit `phrases`, `chat_volume`, and `either` modes. Older persisted settings default to `either`; saving settings preserves message deduplication and cooldown state.
 - [x] Retain YouTube's live-chat ID, continuation token, and latest publication timestamp across transient retries within the same in-memory chat session. Replayed older backlog remains visible but is not sent to trigger evaluation.
 - [x] Handle Twitch IRC `RECONNECT` by returning from the current transport to the existing bounded reconnect loop.
-- [ ] Pass CI and packaged-Windows acceptance for all new regression tests and the trigger-mode UI.
+- [x] Pass backend CI, dashboard unit tests/build, and Windows desktop validation for correctness PR #42. The Windows NSIS build passed; runtime rebuilds and clean-first-run CPU smoke were skipped because no Python runtime inputs changed.
+- [ ] Complete live packaged-Windows acceptance for YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
 - [ ] Live-test YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
 - [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
 - [ ] Complete the full tab redesign as a separate UI slice: coordinated start/stop, simple primary settings, collapsed advanced controls, and compact candidate review.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 
-The checked items above mean code and focused regression tests have been authored on this branch. They do **not** mean CI or live-provider acceptance has passed.
+The checked implementation items above indicate code and focused regression tests are authored. PR #42 CI and Windows validation passed, but live-provider acceptance remains separate and has not been completed.
 
 ### Batch 3 — requested-window persistence and measured candidate duration (2026-11-26)
 
 - [x] Persist requested/effective UTC candidate window bounds (`window_start`, `window_end`) in candidate snapshots and state storage; old records without bounds remain compatible.
 - [x] Measure the completed candidate MP4's duration with FFprobe after assembly and expose it as optional `actual_duration_seconds`. Probe failure is fail-open and must not fail a successfully assembled candidate.
 - [x] Restore only finite, positive duration measurements and valid, ordered window-bound pairs; malformed legacy or edited values become unavailable.
-- [ ] Add/complete CI coverage and verify FFprobe is available in the packaged Windows runtime (or confirm that the optional metric safely remains unavailable there).
-- [ ] Display requested bounds and actual measured duration separately in the UI.
+- [x] Backend CI and dashboard build passed for the metrics implementation in PR #44.
+- [x] Add a conditional actual-duration readout to the stacked UI branch; it reports “Actual duration unavailable” when the optional field is null.
+- [ ] Complete packaged-Windows validation for PR #44 and verify FFprobe discovery, or confirm that the metric safely remains unavailable when FFprobe is absent.
 - [ ] Measure trigger-to-media drift on real authorized YouTube and Twitch streams before deciding whether final-stage trimming is necessary.
 
 This batch measures the assembled media file. It does not correct the mtime-based clock estimate or whole-segment boundaries and does not claim frame-accurate pre/post timing.

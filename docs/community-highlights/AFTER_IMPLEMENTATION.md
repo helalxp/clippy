@@ -2,7 +2,9 @@
 
 **Status:** Initial feature merged; post-implementation corrections in progress  
 **Merged baseline:** `main` contains Community Highlights and version metadata `0.3.3`; tag/publication status must be verified separately.  
-**Active fix branch:** `fix/community-highlights-correctness`  
+**Active correctness branch:** `fix/community-highlights-correctness` (draft PR #42)  
+**Active timing-metrics branch:** `fix/community-highlights-window-metrics` (draft PR #44)  
+**Active UI branch:** `ui/community-highlights-workflow` (draft PR #43)  
 **Last updated:** 2026-11-26
 
 ## Purpose
@@ -34,7 +36,7 @@ The current feature path includes:
 
 **Confirmed cause:** `app.py` applied the generic `MIN_SOURCE_SECONDS` guard to the staged candidate. That guard defaults to 45 seconds and is intended for ordinary URLs/uploads, not already-trimmed highlight media.
 
-**Fix authored on `fix/community-highlights-correctness`:** Keep the generic 45-second guard unchanged for ordinary sources. Validate a Community Highlights candidate against the clip selector's actual minimum duration instead. A valid 30-second candidate should pass; media shorter than the configured clip-selection minimum gets a candidate-specific explanation. A regression test sets the generic guard to 45 seconds and exercises a 30-second candidate. CI has not yet run.
+**Fix authored on `fix/community-highlights-correctness`:** Keep the generic 45-second guard unchanged for ordinary sources. Validate a Community Highlights candidate against the clip selector's actual minimum duration instead. A valid 30-second candidate should pass; media shorter than the configured clip-selection minimum gets a candidate-specific explanation. A regression test sets the generic guard to 45 seconds and exercises a 30-second candidate. PR #42 backend/frontend CI and Windows desktop validation passed on 2026-11-26; the NSIS installer build passed. The clean first-run CPU runtime smoke and CPU/CUDA rebuild jobs were skipped because no Python runtime inputs changed.
 
 **Acceptance criteria:**
 - A valid, readable approved candidate shorter than 45 seconds can enter the one-Short pipeline.
@@ -88,7 +90,7 @@ These findings explain why the current implementation can differ from an exact 3
 - Normalize Unicode, punctuation, and whitespace before deterministic whole-phrase matching.
 - Expose `phrases`, `chat_volume`, and `either` modes; older saved settings default to `either` so existing behavior is preserved.
 
-Focused regression tests have been authored for the above behavior. CI and real provider acceptance are still pending.
+Focused regression tests are authored, and PR #42 backend/frontend CI plus Windows desktop validation passed. Live acceptance for YouTube reconnect/backlog suppression and Twitch remains pending.
 
 **Acceptance criteria:**
 - Phrase-only mode never creates a candidate from chat volume alone.
@@ -130,15 +132,19 @@ Candidate metadata and review decisions are persisted and restored by the curren
 
 This corrects the older implementation note that candidate metadata was memory-only. It does not mean interrupted live capture or extraction can continue after a process restart.
 
-## Pre/post duration: still open
+## Pre/post duration: measurable, but not yet precise
 
-The current capture timeline estimates segment wall time from filesystem modification time plus FFmpeg media duration. Extraction includes whole overlapping TS segments and remuxes with stream copy. Nearby triggers intentionally merge into the union of their requested windows. Capture settings are snapshotted when a buffer starts, so edits do not change an already-running capture. The manual “Clip now” action currently sends the values in the UI, while automatic chat triggers use persisted backend settings; the UI must make saved versus unsaved settings explicit.
+The capture timeline still estimates segment wall time from filesystem modification time plus FFmpeg media duration. Extraction includes whole overlapping TS segments and remuxes with stream copy. Nearby triggers intentionally merge into the union of their requested windows. Capture settings are snapshotted when a buffer starts, so edits do not change an already-running capture.
 
-The reliable next step is to persist/display requested bounds and actual candidate duration, include merged-trigger count, and measure real drift on an authorized live stream. Only then decide whether a final-stage trim is needed. Do not re-encode the rolling buffer.
+**Implemented on `fix/community-highlights-window-metrics` (draft PR #44):** candidate snapshots and durable state now retain the effective UTC `window_start`/`window_end` bounds. After assembly, FFprobe records the completed MP4's `actual_duration_seconds` when available. Probe failure is fail-open and leaves the candidate ready with a null measurement. Older candidate state without these fields remains compatible.
+
+The measured MP4 duration describes the resulting file; it does not prove the video content is aligned to the exact chat-relative wall-clock boundaries. Segment mtime drift, keyframe/segment edges, and intentional merging still need real-stream measurement. Final-stage trimming should be considered only after those measurements. Do not re-encode the rolling buffer.
 
 ## Current UI scope
 
-The current branch adds the explicit trigger-mode selector only. It is **not** the requested full tab redesign. The complete redesign remains a separate implementation slice: one clear start/stop workflow for chat plus recording, streamlined main settings, collapsed advanced capture settings, visible state/errors, and compact candidate review with trigger reason/count and actual duration.
+The full workflow-first redesign is authored separately on `ui/community-highlights-workflow` (draft PR #43). It combines chat and recording start/stop, makes partial state recoverable, keeps provider connections reusable, collapses advanced capture settings and diagnostics, distinguishes saved trigger settings, and simplifies candidate review with trigger reason and merged-trigger count. The candidate row displays measured MP4 duration when the optional backend field is available.
+
+The dashboard/backend CI run for the current UI branch passed. Packaged-Windows responsive acceptance and live start/stop testing remain pending.
 
 ## Release-prep verification record
 
@@ -151,7 +157,12 @@ For the PR head that included the Gemini-key handoff fix, GitHub Actions reporte
 
 The user's live test additionally confirmed that the approved candidate reached the standard results card and generated a clip.
 
-These historical checks establish a merge baseline for the feature branch; they do not validate the current correctness branch. The current branch must pass its own backend, dashboard, and Windows validation workflows before it is ready to merge.
+Current follow-up validation record (2026-11-26):
+- Correctness PR #42: backend test suite and dashboard build passed; Windows desktop validation passed, including NSIS installer build. CPU/CUDA runtime rebuilds and clean-first-run CPU smoke were skipped because the Python runtime inputs did not change.
+- Workflow UI PR #43: backend test suite and dashboard unit/build job passed for the current UI head. It is stacked on PR #42, so packaged-Windows validation remains pending.
+- Window-metrics PR #44: backend test suite and dashboard build passed. It is stacked on PR #42; packaged-Windows verification of FFprobe discovery/fail-open behavior remains pending.
+
+These checks do not replace live provider/timing acceptance. No live Twitch acceptance or real-stream pre/post drift measurement is claimed.
 
 ## Working rule
 
