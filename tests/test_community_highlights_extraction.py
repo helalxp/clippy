@@ -124,7 +124,7 @@ def test_probe_media_duration_returns_finite_positive_seconds(tmp_path):
     def runner(args, **kwargs):
         invocation["args"] = args
         invocation["kwargs"] = kwargs
-        return SimpleNamespace(returncode=0, stdout=b"63.250\\n")
+        return SimpleNamespace(returncode=0, stdout=b"63.250\n")
 
     duration = probe_media_duration_seconds(
         media,
