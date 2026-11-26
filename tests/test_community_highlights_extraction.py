@@ -163,3 +163,31 @@ def test_probe_media_duration_fails_open_when_probe_is_unavailable(tmp_path):
         raise FileNotFoundError("ffprobe missing")
 
     assert probe_media_duration_seconds(media, runner=unavailable) is None
+
+
+
+def test_probe_prefers_ffprobe_beside_configured_ffmpeg(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    ffmpeg = bin_dir / ffmpeg_name
+    ffprobe = bin_dir / ffprobe_name
+    media = tmp_path / "candidate.mp4"
+    ffmpeg.write_bytes(b"fake ffmpeg")
+    ffprobe.write_bytes(b"fake ffprobe")
+    media.write_bytes(b"assembled")
+    invocation = {}
+
+    def runner(args, **_kwargs):
+        invocation["args"] = args
+        return SimpleNamespace(returncode=0, stdout=b"12.5\\n")
+
+    duration = probe_media_duration_seconds(
+        media,
+        ffmpeg_path=str(ffmpeg),
+        runner=runner,
+    )
+
+    assert duration == pytest.approx(12.5)
+    assert invocation["args"][0] == str(ffprobe)
