@@ -3,13 +3,18 @@ import os
 # main.py runs as a separate managed-Python process. Register app-local DLLs
 # before Ultralytics or other dependencies can initialize Pillow.
 _APP_DLL_DIRECTORY_HANDLES = []
-if os.name == "nt" and hasattr(os, "add_dll_directory"):
+if os.name == "nt":
     _app_bin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
     if os.path.isdir(_app_bin):
-        try:
-            _APP_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_app_bin))
-        except OSError:
-            pass
+        # Pillow's Windows FriBiDi shim calls LoadLibrary(), which searches
+        # PATH. AddDllDirectory alone does not cover that legacy lookup.
+        if _app_bin not in os.environ.get("PATH", "").split(os.pathsep):
+            os.environ["PATH"] = _app_bin + os.pathsep + os.environ.get("PATH", "")
+        if hasattr(os, "add_dll_directory"):
+            try:
+                _APP_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_app_bin))
+            except OSError:
+                pass
 
 import time
 import cv2
