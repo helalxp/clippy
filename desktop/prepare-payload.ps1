@@ -209,7 +209,7 @@ foreach ($name in $directories) {
 # dependency-free FriBiDi DLL plus its LGPL license in the app payload.
 $fribidiVersion = "1.0.18-1"
 $fribidiArchiveName = "mingw-w64-ucrt-x86_64-fribidi-$fribidiVersion-any.pkg.tar.zst"
-$fribidiArchiveUrl = "https://mirror.msys2.org/mingw/ucrt64/$fribidiArchiveName"
+$fribidiArchiveUrl = "https://repo.msys2.org/mingw/ucrt64/$fribidiArchiveName"
 $fribidiArchiveSha256 = "4837d3626349c617aaa2db3d116f9b7ea208b11644f507a6a83eab36bb3ac920"
 $fribidiArchive = Join-Path $env:TEMP $fribidiArchiveName
 $fribidiExtractRoot = Join-Path $env:TEMP "clippy-fribidi-$fribidiVersion"
