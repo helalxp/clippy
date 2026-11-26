@@ -203,6 +203,46 @@ foreach ($name in $directories) {
     }
 }
 
+# Pillow's Windows wheel uses libraqm for Arabic shaping and resolves
+# FriBiDi through the Windows DLL search path. Pin the standalone MSYS2
+# UCRT64 runtime package, verify its published SHA-256, and ship only the
+# dependency-free FriBiDi DLL plus its LGPL license in the app payload.
+$fribidiVersion = "1.0.18-1"
+$fribidiArchiveName = "mingw-w64-ucrt-x86_64-fribidi-$fribidiVersion-any.pkg.tar.zst"
+$fribidiArchiveUrl = "https://mirror.msys2.org/mingw/ucrt64/$fribidiArchiveName"
+$fribidiArchiveSha256 = "4837d3626349c617aaa2db3d116f9b7ea208b11644f507a6a83eab36bb3ac920"
+$fribidiArchive = Join-Path $env:TEMP $fribidiArchiveName
+$fribidiExtractRoot = Join-Path $env:TEMP "clippy-fribidi-$fribidiVersion"
+$nativeBin = Join-Path $stageRoot "bin"
+$tarCommand = Get-Command "tar.exe" -ErrorAction SilentlyContinue
+if (-not $tarCommand) { throw "Windows tar.exe is required to extract the pinned FriBiDi runtime." }
+if (Test-Path $fribidiExtractRoot) { Remove-Item $fribidiExtractRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $fribidiExtractRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $nativeBin -Force | Out-Null
+try {
+    Write-Host "Fetching pinned FriBiDi $fribidiVersion for Pillow Arabic shaping..."
+    Invoke-WebRequest -Uri $fribidiArchiveUrl -OutFile $fribidiArchive
+    $actualFribidiHash = (Get-FileHash -LiteralPath $fribidiArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualFribidiHash -ne $fribidiArchiveSha256) {
+        throw "FriBiDi archive SHA-256 mismatch: got $actualFribidiHash."
+    }
+    & $tarCommand.Path -xf $fribidiArchive -C $fribidiExtractRoot "ucrt64/bin/libfribidi-0.dll" "ucrt64/share/licenses/fribidi/COPYING"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not extract the pinned FriBiDi archive (exit $LASTEXITCODE). Ensure tar.exe supports Zstandard archives."
+    }
+    $fribidiDll = Join-Path $fribidiExtractRoot "ucrt64/bin/libfribidi-0.dll"
+    $fribidiLicense = Join-Path $fribidiExtractRoot "ucrt64/share/licenses/fribidi/COPYING"
+    if (-not (Test-Path -LiteralPath $fribidiDll -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $fribidiLicense -PathType Leaf)) {
+        throw "Pinned FriBiDi package did not contain the expected DLL and license."
+    }
+    Copy-Item -LiteralPath $fribidiDll -Destination (Join-Path $nativeBin "libfribidi-0.dll") -Force
+    Copy-Item -LiteralPath $fribidiLicense -Destination (Join-Path $nativeBin "FRIBIDI-LICENSE.txt") -Force
+} finally {
+    if (Test-Path $fribidiArchive) { Remove-Item $fribidiArchive -Force }
+    if (Test-Path $fribidiExtractRoot) { Remove-Item $fribidiExtractRoot -Recurse -Force }
+}
+
 # Remove development-only files while retaining package locks and production
 # node_modules needed by the renderer and Remotion bundler.
 Get-ChildItem $stageRoot -Directory -Recurse -Force |
@@ -233,6 +273,8 @@ $requiredPayloadFiles = @(
     "render-service\dist\server.js",
     "render-service\node_modules\@remotion\renderer\package.json",
     "remotion\src\index.ts",
+    "bin\libfribidi-0.dll",
+    "bin\FRIBIDI-LICENSE.txt",
     "bgutil-provider\server\build\main.js",
     "bgutil-provider\server\package.json",
     "bgutil-provider\server\node_modules\express\package.json"
