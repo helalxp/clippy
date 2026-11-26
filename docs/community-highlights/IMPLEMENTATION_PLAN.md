@@ -1,8 +1,8 @@
 # Community Highlights Implementation Plan
 
 **Status:** In progress  
-**Active working branch:** `ui/community-highlights-workflow` (stacked on `fix/community-highlights-correctness`)  
-**Correctness base:** PR #42 from `fix/community-highlights-correctness`; original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
+**Active working branch:** `ui/community-highlights-workflow` (draft PR #43, stacked on `fix/community-highlights-correctness`)  
+**Correctness base:** PR #42; timing metrics are tracked separately in draft PR #44 (`fix/community-highlights-window-metrics`). Original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
 **Last updated:** 2026-11-26  
@@ -24,10 +24,11 @@ This register records findings from the dated source audits below. A checked ite
 - [ ] Live-test YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
 - [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
 - [x] Implement the full workflow-first tab redesign in the stacked `ui/community-highlights-workflow` branch: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
-- [ ] Pass dashboard CI and perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
+- [x] Pass backend tests, dashboard unit tests, and production dashboard build for the current UI head in GitHub Actions run #45872885434.
+- [ ] Perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 
-The checked items above mean code and focused regression tests have been authored on this branch. They do **not** mean CI or live-provider acceptance has passed.
+The correctness implementation and UI source are authored on their separate branches. PR #42 backend/frontend CI and Windows validation passed; PR #43 backend/frontend CI passed. Live-provider acceptance and packaged-Windows UI acceptance remain pending.
 
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.

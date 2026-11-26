@@ -3,7 +3,8 @@
 **Status:** Initial feature merged; correctness and UI refinements in progress  
 **Merged baseline:** `main` contains Community Highlights and version metadata `0.3.3`; tag/publication status must be verified separately.  
 **Active correctness branch:** `fix/community-highlights-correctness` (draft PR #42)  
-**Active UI branch:** `ui/community-highlights-workflow` (stacked on the correctness branch)  
+**Active timing-metrics branch:** `fix/community-highlights-window-metrics` (draft PR #44)  
+**Active UI branch:** `ui/community-highlights-workflow` (draft PR #43, stacked on correctness)  
 **Last updated:** 2026-11-26
 
 ## Purpose
@@ -130,7 +131,7 @@ This corrects the older implementation note that candidate metadata was memory-o
 
 The current capture timeline estimates segment wall time from filesystem modification time plus FFmpeg media duration. Extraction includes whole overlapping TS segments and remuxes with stream copy. Nearby triggers intentionally merge into the union of their requested windows. Capture settings are snapshotted when a buffer starts, so edits do not change an already-running capture. The manual “Clip now” action currently sends the values in the UI, while automatic chat triggers use persisted backend settings; the UI must make saved versus unsaved settings explicit.
 
-The reliable next step is to persist/display requested bounds and actual candidate duration, include merged-trigger count, and measure real drift on an authorized live stream. Only then decide whether a final-stage trim is needed. Do not re-encode the rolling buffer.
+The separate `fix/community-highlights-window-metrics` branch (draft PR #44) now persists effective UTC window bounds and measures the assembled MP4 duration when FFprobe is available. The UI below reads this optional metric without treating it as proof of exact wall-clock alignment. Real-stream drift still needs measurement before deciding whether a final-stage trim is necessary. Do not re-encode the rolling buffer.
 
 ## Current UI scope
 
@@ -143,7 +144,7 @@ The full workflow-first redesign is authored on `ui/community-highlights-workflo
 - Rights confirmation and deletion confirmation are inline rather than browser popups.
 - Live chat messages and diagnostics are available in a collapsed section.
 
-This is implemented in source but has **not** passed dashboard CI or packaged-Windows/responsive acceptance for the latest UI commits yet. The candidate card displays the measured MP4 duration when the backend's optional `actual_duration_seconds` field is available; otherwise it explicitly says the measurement is unavailable. The requested/effective window span and merged-trigger count remain separate, and the UI does not claim frame-accurate wall-clock boundaries.
+The current UI head passed backend tests, dashboard unit tests, and the production dashboard build in GitHub Actions run [#45872885434](https://github.com/helalxp/clippy/actions/runs/45872885434). Packaged-Windows and responsive acceptance remain pending. The candidate card displays the measured MP4 duration when the backend's optional `actual_duration_seconds` field is available; otherwise it explicitly says the measurement is unavailable. The window span and merged-trigger count remain separate, and the UI does not claim frame-accurate wall-clock boundaries.
 
 ## Release-prep verification record
 
@@ -156,7 +157,7 @@ For the PR head that included the Gemini-key handoff fix, GitHub Actions reporte
 
 The user's live test additionally confirmed that the approved candidate reached the standard results card and generated a clip.
 
-These historical checks establish a merge baseline for the feature branch; they do not validate the current correctness branch. The current branch must pass its own backend, dashboard, and Windows validation workflows before it is ready to merge.
+These historical checks establish a merge baseline for the feature branch. Current follow-up validation is recorded in the dated entries above: correctness PR #42 backend/frontend CI and Windows desktop validation passed; UI PR #43 backend/frontend CI passed (Windows acceptance pending); timing-metrics PR #44 backend/frontend CI passed (Windows FFprobe availability check pending).
 
 ## Working rule
 
