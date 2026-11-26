@@ -1,11 +1,10 @@
 # Community Highlights: After Implementation
 
-**Status:** Initial feature merged; correctness and UI refinements in progress  
+**Status:** Initial feature merged; consolidated follow-up is in review.  
 **Merged baseline:** `main` contains Community Highlights and version metadata `0.3.3`; tag/publication status must be verified separately.  
-**Active correctness branch:** `fix/community-highlights-correctness` (draft PR #42)  
-**Active timing-metrics branch:** `fix/community-highlights-window-metrics` (draft PR #44)  
-**Active UI branch:** `ui/community-highlights-workflow` (draft PR #43, stacked on correctness)  
-**Last updated:** 2026-11-26
+**Active PR:** #43, consolidating correctness fixes, the workflow UI, and candidate timing metrics into one reviewable change against `main`.  
+**Included work:** former PR #42 correctness batch, former PR #43 workflow redesign, and former PR #44 requested-window/actual-duration metrics.  
+**Last updated:** 2026-11-27
 
 ## Purpose
 
@@ -57,14 +56,19 @@ The current feature path includes:
 
 These findings explain why the current implementation can differ from an exact 30/30 split, but they do not quantify the drift on every real stream. The observed cases should be measured before choosing a fix.
 
-**Preferred refinement:** Keep the requested window as the source of truth, record the actual assembled duration and effective boundaries, and make the allowed tolerance explicit. If exact boundaries are a product requirement, evaluate trimming/re-encoding only at the final assembly boundary rather than complicating the rolling capture path.
+**Included in consolidated PR #43:**
+- Persist the candidate's requested/effective UTC window bounds (`window_start` / `window_end`) in the candidate snapshot and state store. Older records without these fields restore with null bounds.
+- After MP4 assembly, use FFprobe to measure the actual container duration. Prefer `FFPROBE_PATH`, then FFprobe beside the configured FFmpeg executable, then PATH. This runs after assembly and is best-effort: missing/unavailable FFprobe or invalid output leaves the candidate ready with `actual_duration_seconds: null`.
+- Persist and restore `actual_duration_seconds` when it is finite and positive. Invalid saved metrics are discarded. No rolling capture or stream-copy behavior is changed.
 
-**Acceptance criteria:**
-- Persisted settings used by the trigger coordinator match the values shown as saved in the UI and survive restart.
-- A single trigger produces a measured output duration within a documented tolerance of the requested pre + post duration.
-- Tests cover segment-boundary rounding, delayed segment completion, filesystem timestamp drift, gaps, and merged triggers.
-- The UI distinguishes requested pre/post values from the actual candidate duration and indicates when multiple triggers expanded a candidate.
-- No media is silently presented as frame-accurate until the timeline is made frame-accurate.
+**Important limitation:** this measures the output file's duration. It does not prove that the chat trigger was aligned to the exact requested wall-clock boundaries. The filesystem-mtime timeline estimate and whole-segment selection remain approximate, and merged candidates intentionally span the union of their windows.
+
+**Remaining refinement and acceptance:**
+- Measure drift between trigger receipt and video content on authorized real streams, separately for YouTube and Twitch.
+- Test segment-boundary rounding, delayed segment completion, filesystem timestamp drift, gaps, and merged triggers using reproducible fixtures.
+- Display requested bounds, measured actual duration, and merged-trigger count as distinct values. Never calculate or label the difference as exact timing error until wall-clock alignment has been measured.
+- Decide whether final-stage trimming is required only after the real-stream measurements. Do not re-encode the rolling buffer.
+- No media is presented as frame-accurate until the timeline itself is made frame-accurate.
 
 ### P1: Candidate triggers sometimes occur without the configured phrase
 
@@ -127,15 +131,13 @@ Candidate metadata and review decisions are persisted and restored by the curren
 
 This corrects the older implementation note that candidate metadata was memory-only. It does not mean interrupted live capture or extraction can continue after a process restart.
 
-## Pre/post duration: still open
+## Pre/post duration status
 
-The current capture timeline estimates segment wall time from filesystem modification time plus FFmpeg media duration. Extraction includes whole overlapping TS segments and remuxes with stream copy. Nearby triggers intentionally merge into the union of their requested windows. Capture settings are snapshotted when a buffer starts, so edits do not change an already-running capture. The manual “Clip now” action currently sends the values in the UI, while automatic chat triggers use persisted backend settings; the UI must make saved versus unsaved settings explicit.
-
-The separate `fix/community-highlights-window-metrics` branch (draft PR #44) now persists effective UTC window bounds and measures the assembled MP4 duration when FFprobe is available. The UI below reads this optional metric without treating it as proof of exact wall-clock alignment. Real-stream drift still needs measurement before deciding whether a final-stage trim is necessary. Do not re-encode the rolling buffer.
+Requested/effective UTC window bounds and the measured MP4 container duration are now stored and displayed when available. This measures the assembled file, not exact wall-clock alignment. Whole-segment selection, filesystem timestamp drift, and merged trigger windows remain approximate; real-stream measurement is still required before deciding whether final-stage trimming is necessary. Do not re-encode the rolling buffer.
 
 ## Current UI scope
 
-The full workflow-first redesign is authored on `ui/community-highlights-workflow`:
+The full workflow-first redesign is included in consolidated PR #43:
 - Provider connections remain in their existing reusable section.
 - The stream URL and one coordinated start/stop action are now the primary workflow. A partial start remains visible and can be completed or stopped.
 - Capture quality/storage settings are collapsed by default and explain that they apply to the next recording.
@@ -159,8 +161,8 @@ For the PR head that included the Gemini-key handoff fix, GitHub Actions reporte
 
 The user's live test additionally confirmed that the approved candidate reached the standard results card and generated a clip.
 
-These historical checks establish a merge baseline for the feature branch. Current follow-up validation is recorded in the dated entries above: correctness PR #42 backend/frontend CI and Windows desktop validation passed; UI PR #43 backend/frontend CI passed (Windows acceptance pending); timing-metrics PR #44 backend/frontend CI passed (Windows FFprobe availability check pending).
+These historical checks establish a merge baseline for the feature branch. The constituent changes were validated independently before consolidation: correctness (former PR #42) passed backend/frontend CI and Windows desktop validation; workflow UI (former PR #43) passed backend CI, dashboard unit tests, and production build; timing metrics (former PR #44) passed backend CI and dashboard build. Packaged-Windows acceptance for the UI and FFprobe discovery remains pending. These historical runs were on the pre-consolidation branch heads and do not constitute CI for the combined merge commit.
 
 ## Working rule
 
-Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep correctness fixes and the UI redesign in separate, reviewable PRs.
+Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep the Community Highlights correctness, timing, and UI changes together in one reviewable PR; continue with one stable fix at a time.

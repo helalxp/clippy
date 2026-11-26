@@ -1,8 +1,8 @@
 # Community Highlights Implementation Plan
 
 **Status:** In progress  
-**Active working branch:** `ui/community-highlights-workflow` (draft PR #43, stacked on `fix/community-highlights-correctness`)  
-**Correctness base:** PR #42; timing metrics are tracked separately in draft PR #44 (`fix/community-highlights-window-metrics`). Original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
+**Active working branch:** `ui/community-highlights-workflow` (consolidated draft PR #43, targeting `main`)  
+**Consolidated scope:** correctness changes from former PR #42, workflow UI changes from former PR #43, and requested-window/actual-duration metrics from former PR #44. Original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
 **Last updated:** 2026-11-26  
@@ -20,7 +20,7 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Add explicit `phrases`, `chat_volume`, and `either` modes. Older persisted settings default to `either`; saving settings preserves message deduplication and cooldown state.
 - [x] Retain YouTube's live-chat ID, continuation token, and latest publication timestamp across transient retries within the same in-memory chat session. Replayed older backlog remains visible but is not sent to trigger evaluation.
 - [x] Handle Twitch IRC `RECONNECT` by returning from the current transport to the existing bounded reconnect loop.
-- [ ] Pass CI and packaged-Windows acceptance for all new regression tests and the trigger-mode UI.
+- [x] Previous PR #42 correctness checks passed backend/frontend CI and Windows desktop validation. Previous PR #43 dashboard/backend checks passed; packaged-Windows UI acceptance remains pending.
 - [ ] Live-test YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
 - [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
 - [x] Implement the full workflow-first tab redesign in the stacked `ui/community-highlights-workflow` branch: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
@@ -32,7 +32,19 @@ This register records findings from the dated source audits below. A checked ite
 - [ ] Perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 
-The correctness implementation and UI source are authored on their separate branches. PR #42 backend/frontend CI and Windows validation passed; PR #43 backend/frontend CI passed. Live-provider acceptance and packaged-Windows UI acceptance remain pending.
+The correctness, workflow UI, and timing-metrics implementations are now combined in one branch and one PR. Their constituent branch checks passed as recorded in the post-implementation register; live-provider acceptance and packaged-Windows UI/FFprobe acceptance remain pending.
+
+### Batch 3 — requested-window persistence and measured candidate duration (2026-11-26)
+
+- [x] Persist requested/effective UTC candidate window bounds (`window_start`, `window_end`) in candidate snapshots and state storage; old records without bounds remain compatible.
+- [x] Measure the completed candidate MP4's duration with FFprobe after assembly and expose it as optional `actual_duration_seconds`. Probe failure is fail-open and must not fail a successfully assembled candidate.
+- [x] Restore only finite, positive duration measurements and valid, ordered window-bound pairs; malformed legacy or edited values become unavailable.
+- [x] Backend CI and dashboard build passed for the metrics implementation on the former timing-metrics branch before consolidation.
+- [x] Add a conditional actual-duration readout to the consolidated UI; it reports “Actual duration unavailable” when the optional field is null.
+- [ ] Complete packaged-Windows validation for consolidated PR #43 and verify FFprobe discovery, or confirm that the metric safely remains unavailable when FFprobe is absent.
+- [ ] Measure trigger-to-media drift on real authorized YouTube and Twitch streams before deciding whether final-stage trimming is necessary.
+
+This batch measures the assembled media file. It does not correct the mtime-based clock estimate or whole-segment boundaries and does not claim frame-accurate pre/post timing.
 
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
