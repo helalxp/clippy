@@ -120,6 +120,8 @@ def test_chat_volume_only_mode_does_not_trigger_on_phrase_alone():
     coordinator.on_message(message("clip it", "1", now, "u1"))
     assert manager.calls == []
     coordinator.on_message(message("hello", "2", now + timedelta(seconds=1), "u2"))
+    assert manager.calls == []
+    coordinator.on_message(message("hello", "3", now + timedelta(seconds=2), "u3"))
     assert [call["reason"] for call in manager.calls] == ["chat_volume"]
 
 
