@@ -3618,7 +3618,8 @@ async def create_template_analysis_job(
         api_key = None
         if gemini_consent:
             stage = "gemini_key_resolution"
-            header_key_present = bool(request.headers.get("X-Gemini-Key"))
+            request_headers = getattr(request, "headers", {})
+            header_key_present = bool(request_headers.get("X-Gemini-Key"))
             environment_key_present = bool(os.environ.get("GEMINI_API_KEY"))
             api_key = await resolve_gemini(request)
             key_source = (
