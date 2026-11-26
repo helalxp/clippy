@@ -130,8 +130,8 @@ if ($compiledBgutilMain -notmatch '127\.0\.0\.1' -or
 }
 Remove-Item $bgutilSource -Recurse -Force
 
-# Include all top-level Python modules and the Community Highlights package.
-# app.py imports both at backend startup; omitting a package breaks first run.
+# Include all top-level Python modules and the backend packages used by API routes.
+# Community Highlights is imported at startup; template_system is used by Templates.
 Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
@@ -195,7 +195,7 @@ foreach ($relativePath in $requiredRuntimeFiles) {
     }
 }
 
-$directories = @("assets", "fonts", "render-service", "remotion", "bin", "community_highlights")
+$directories = @("assets", "fonts", "render-service", "remotion", "bin", "community_highlights", "template_system")
 foreach ($name in $directories) {
     $source = Join-Path $repoRoot $name
     if (Test-Path $source) {
@@ -219,6 +219,10 @@ $requiredPayloadFiles = @(
     "community_highlights\api.py",
     "community_highlights\diagnostics.py",
     "community_highlights\state_store.py",
+    "template_system\__init__.py",
+    "template_system\jobs.py",
+    "template_system\reference_report.py",
+    "template_system\providers\reference_video.py",
     "community-highlights-oauth.json",
     "local_library.py",
     "requirements.txt",
