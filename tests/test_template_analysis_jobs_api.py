@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -37,6 +38,54 @@ def _configure(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "MAX_FILE_SIZE_MB", 1)
     monkeypatch.setattr(app_module, "BILLING_ENABLED", False)
     return store
+
+
+def test_upload_endpoint_uses_the_explicit_gemini_request_header(
+    tmp_path, monkeypatch
+):
+    store = _configure(monkeypatch, tmp_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    scheduled = []
+    monkeypatch.setattr(
+        app_module,
+        "_schedule_template_analysis_job",
+        lambda job_id, api_key=None: scheduled.append((job_id, api_key)),
+    )
+    request = SimpleNamespace(headers={"X-Gemini-Key": "header-only-test-key"})
+    upload = FakeUpload()
+
+    response = asyncio.run(app_module.create_template_analysis_job(
+        request, upload, "My reference", "Podcast", True, True
+    ))
+
+    job = response["job"]
+    assert job["gemini_consent"] is True
+    assert scheduled == [(job["id"], "header-only-test-key")]
+    assert "api_key" not in store.get(job["id"])
+    assert upload.closed is True
+
+
+def test_template_analysis_list_failure_returns_diagnostic_and_logs_traceback(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(app_module, "_assert_data_storage_available", lambda: None)
+    monkeypatch.setattr(app_module, "_reference_templates_local_only", lambda: None)
+
+    def missing_package():
+        raise ModuleNotFoundError("template_system")
+
+    monkeypatch.setattr(app_module, "_template_analysis_store", missing_package)
+
+    with caplog.at_level(logging.ERROR, logger="clippy.template_analysis"):
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(app_module.list_template_analysis_jobs())
+
+    assert failure.value.status_code == 500
+    assert "diagnostic ID:" in failure.value.detail
+    assert any(
+        record.exc_info and "Could not list reference-analysis jobs" in record.message
+        for record in caplog.records
+    )
 
 
 def test_upload_endpoint_creates_job_and_schedules_without_applying_generation(
