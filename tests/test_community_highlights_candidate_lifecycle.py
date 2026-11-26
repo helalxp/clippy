@@ -1,11 +1,16 @@
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
+
+import pytest
+
+import community_highlights.capture_sessions as capture_sessions_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from community_highlights.capture_sessions import CaptureSessionManager
-from community_highlights.rolling_capture import SegmentRecord
+from community_highlights.rolling_capture import RollingCaptureError, SegmentRecord
 from community_highlights.state_store import StateStoreError
 
 
@@ -532,3 +537,81 @@ def test_candidate_is_not_ready_when_durable_ready_transition_fails(tmp_path, mo
     assert store.state["candidates"][0]["status"] == "error"
 
     assert asyncio.run(manager.stop(session_id)) is True
+
+
+
+def test_candidate_media_usage_counts_saved_orphaned_and_pending_delete_files(tmp_path):
+    root = tmp_path / "captures"
+    highlights = root / ("A" * 24) / "highlights"
+    highlights.mkdir(parents=True)
+    (highlights / "saved.mp4").write_bytes(b"s" * 5)
+    (highlights / "orphaned.mp4").write_bytes(b"o" * 7)
+    (highlights / ".pending.delete-pending.mp4").write_bytes(b"p" * 11)
+
+    manager = CaptureSessionManager(output_root=root)
+
+    assert manager._candidate_media_usage_locked() == 23
+
+
+def test_candidate_media_reservations_enforce_total_budget_without_deleting_saved_media(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "captures"
+    output_dir = root / ("A" * 24)
+    highlights = output_dir / "highlights"
+    highlights.mkdir(parents=True)
+    saved_media = highlights / "saved.mp4"
+    saved_media.write_bytes(b"s" * 30)
+
+    source_segment = tmp_path / "segment.ts"
+    source_segment.write_bytes(b"x" * 60)
+    record = SimpleNamespace(path=source_segment)
+
+    manager = CaptureSessionManager(output_root=root)
+    monkeypatch.setattr(capture_sessions_module, "MAX_CANDIDATE_MEDIA_BYTES", 100)
+    monkeypatch.setattr(capture_sessions_module, "MIN_CANDIDATE_FREE_BYTES", 0)
+    monkeypatch.setattr(
+        capture_sessions_module, "CANDIDATE_MEDIA_ESTIMATE_OVERHEAD_BYTES", 0
+    )
+    monkeypatch.setattr(
+        capture_sessions_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=10_000),
+    )
+
+    with manager._lock:
+        manager._reserve_candidate_media_locked("B" * 24, [record], output_dir)
+        with pytest.raises(RollingCaptureError, match="Delete one or more saved highlights"):
+            manager._reserve_candidate_media_locked("C" * 24, [record], output_dir)
+
+    assert manager._candidate_storage_reservations == {"B" * 24: 63}
+    assert saved_media.read_bytes() == b"s" * 30
+
+
+def test_candidate_media_reservation_preserves_minimum_free_disk_space(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "captures"
+    output_dir = root / ("A" * 24)
+    output_dir.mkdir(parents=True)
+    source_segment = tmp_path / "segment.ts"
+    source_segment.write_bytes(b"x" * 60)
+    record = SimpleNamespace(path=source_segment)
+
+    manager = CaptureSessionManager(output_root=root)
+    monkeypatch.setattr(capture_sessions_module, "MAX_CANDIDATE_MEDIA_BYTES", 1024 ** 3)
+    monkeypatch.setattr(capture_sessions_module, "MIN_CANDIDATE_FREE_BYTES", 100)
+    monkeypatch.setattr(
+        capture_sessions_module, "CANDIDATE_MEDIA_ESTIMATE_OVERHEAD_BYTES", 0
+    )
+    monkeypatch.setattr(
+        capture_sessions_module.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(free=162),
+    )
+
+    with manager._lock:
+        with pytest.raises(RollingCaptureError, match="free disk space"):
+            manager._reserve_candidate_media_locked("B" * 24, [record], output_dir)
+
+    assert manager._candidate_storage_reservations == {}

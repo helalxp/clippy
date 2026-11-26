@@ -115,9 +115,13 @@ The following items remain open after the source audit and are not covered by th
 - Complete packaged-Windows acceptance for YouTube reconnect/cursor recovery and Twitch IRC `RECONNECT`, alongside Twitch live chat, capture, candidate extraction, and disconnect.
 - Test long-running provider reconnects, quota/rate-limit handling, and terminal chat states.
 - Measure trigger-to-media timeline drift on real authorized streams. The chat-rule clock fix does not make the current segment-mtime/duration capture alignment frame-accurate.
-- Define a total candidate-media age/byte budget and disk-pressure behavior.
+- [x] Enforce a 5 GiB total candidate-media byte budget and retain 2 GiB free space on the output drive before assembly. A failed preflight affects only the new candidate; existing MP4s remain untouched. Candidate age is intentionally unbounded: ready media never expires automatically and remains until the user rejects or explicitly deletes it.
 - Improve setup and troubleshooting documentation, including provider-specific error guidance.
 - Revisit exact frame trimming and candidate boundary editing after the duration measurements are available.
+
+### Candidate media storage and retention policy
+
+Candidate MP4 storage is capped at 5 GiB across Community Highlights capture folders. Before stream-copy assembly, Clippy estimates output size from the selected TS segments with a 5%/16 MiB overhead allowance, accounts for concurrent in-flight reservations, and requires at least 2 GiB of free space to remain on the output drive. If either limit would be exceeded, only the new candidate fails with an actionable message. Existing ready, approved, or pending MP4s are never removed to make room. There is no automatic age expiry; candidate media remains until the user rejects or explicitly deletes it. Orphaned and deletion-pending MP4 files are included in the byte count and are not silently removed.
 
 ## Lifecycle and restart clarification
 
