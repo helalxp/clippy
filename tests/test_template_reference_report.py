@@ -249,6 +249,21 @@ def test_single_frame_transition_must_use_exact_observed_timestamp():
         )
 
 
+def test_report_schema_is_compatible_with_pinned_google_genai():
+    # Exercise the SDK's actual Pydantic-to-response-schema conversion without
+    # making a network request. This catches unsupported schema constructs at
+    # the same boundary used by GeminiReferenceAnalyzer.
+    from google.genai import types
+    from google.genai._transformers import t_schema
+
+    schema = t_schema(None, ReferenceStyleReport)
+
+    assert schema is not None
+    assert schema.properties["schema_version"].type == types.Type.INTEGER
+    with pytest.raises(ValidationError):
+        ReferenceStyleReport(schema_version=2)
+
+
 def test_audio_treatment_is_not_part_of_visual_report_contract():
     with pytest.raises(ValidationError, match="audio_treatment"):
         ReferenceStyleReport.model_validate({"audio_treatment": ["Bass boost detected"]})
