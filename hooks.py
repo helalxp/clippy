@@ -38,10 +38,10 @@ def _truncate_bytes(text, max_bytes):
 FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
 FONT_DIR = str(_APP_ROOT / "fonts")
 FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
-_RTL_TEXT_RE = re.compile(r"[\\u0590-\\u08FF\\uFB1D-\\uFDFF\\uFE70-\\uFEFF]")
+_RTL_TEXT_RE = re.compile(r"[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]")
 _ARABIC_FONT_CANDIDATES = (
-    r"C:\\Windows\\Fonts\\segoeuib.ttf",
-    r"C:\\Windows\\Fonts\\arialbd.ttf",
+    r"C:\Windows\Fonts\segoeuib.ttf",
+    r"C:\Windows\Fonts\arialbd.ttf",
     "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
     "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
