@@ -26,6 +26,24 @@ const formatBytes = (value) => {
 
 const titleCase = (value) => String(value || 'unknown').replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 
+function templateRequestError(operation, error, fallback) {
+  const message = String(error?.detail || error?.message || '');
+  const networkFailure = error?.name === 'TypeError' && /failed to fetch|networkerror/i.test(message);
+  const diagnosticId = message.match(/diagnostic ID:\s*([a-f0-9]+)/i)?.[1] || null;
+  console.error('[Clippy Templates] Request failed', {
+    operation,
+    errorName: error?.name || 'Error',
+    status: Number.isFinite(error?.status) ? error.status : null,
+    networkFailure,
+    diagnosticId,
+  });
+  if (networkFailure) {
+    return `Could not reach Clippy's local backend while ${operation}. Check %LOCALAPPDATA%\\Clippy\\logs\\backend.log.`;
+  }
+  return error?.detail || error?.message || fallback;
+}
+
+
 const STATUS = {
   queued: { label: 'Queued', icon: Clock3, tone: 'text-muted' },
   running: { label: 'Analyzing', icon: Loader2, tone: 'text-brass' },
@@ -216,7 +234,7 @@ export default function ReferenceTemplateLibrary() {
       const data = await apiJson('/api/template-analysis/jobs/' + jobId);
       if (data.job?.id === jobId) setSelectedJobDetail(data.job);
     } catch (e) {
-      setError(e?.detail || e?.message || 'Could not load the selected analysis report.');
+      setError(templateRequestError('loading the selected analysis report', e, 'Could not load the selected analysis report.'));
     }
   }, []);
 
@@ -230,7 +248,7 @@ export default function ReferenceTemplateLibrary() {
         ? current : (nextJobs[0]?.id || null));
       setError('');
     } catch (e) {
-      setError(e?.detail || e?.message || 'Could not load reference analyses.');
+      setError(templateRequestError('loading reference analyses', e, 'Could not load reference analyses.'));
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -241,7 +259,7 @@ export default function ReferenceTemplateLibrary() {
       const data = await apiJson('/api/template-library/templates');
       setSavedTemplates(data.templates || []);
     } catch (e) {
-      setError(e?.detail || e?.message || 'Could not load saved template drafts.');
+      setError(templateRequestError('loading the local template library', e, 'Could not load saved template drafts.'));
     }
   }, []);
 
@@ -305,7 +323,21 @@ export default function ReferenceTemplateLibrary() {
       body.append('category', category.trim());
       body.append('rights_confirmed', 'true');
       body.append('gemini_consent', geminiConsent ? 'true' : 'false');
-      const response = await apiFetch('/api/template-analysis/jobs', { method: 'POST', body });
+      const headers = {};
+      if (geminiConsent) {
+        // The Gemini key is intentionally browser-local. Send it only on this
+        // explicitly consented request; never persist it in the analysis job.
+        const geminiKey = localStorage.getItem('gemini_key') || '';
+        if (!geminiKey.trim()) {
+          throw new Error('Gemini visual analysis is enabled, but no Gemini API key is saved in Settings.');
+        }
+        headers['X-Gemini-Key'] = geminiKey.trim();
+      }
+      const response = await apiFetch('/api/template-analysis/jobs', {
+        method: 'POST',
+        headers,
+        body,
+      });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || 'Could not start reference analysis.');
       const job = payload.job;
@@ -318,7 +350,7 @@ export default function ReferenceTemplateLibrary() {
       const input = document.getElementById('template-reference-upload');
       if (input) input.value = '';
     } catch (e) {
-      setError(e?.detail || e?.message || 'Could not start reference analysis.');
+      setError(templateRequestError('uploading the reference video', e, 'Could not start reference analysis.'));
     } finally {
       setSubmitting(false);
     }
