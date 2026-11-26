@@ -11,12 +11,19 @@ const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error']);
 
 const statusLabel = (status) => ({
   connecting: 'Connecting',
-  connected: 'Monitoring chat',
+  connected: 'Connected',
   reconnecting: 'Reconnecting',
   error: 'Needs attention',
   ended: 'Chat ended',
   stopped: 'Stopped',
 }[status] || status || 'Unknown');
+
+const formatDuration = (seconds) => {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
 
 export default function CommunityHighlightsMonitor({ connections, onOpenJob, geminiApiKey }) {
   const [streamUrl, setStreamUrl] = useState('');
@@ -25,6 +32,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const [captureSettings, setCaptureSettings] = useState({ segment_seconds: 4, retention_seconds: 180, max_buffer_size_mb: 512, quality: 'best' });
   const [candidates, setCandidates] = useState([]);
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], mode: 'either', min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
+  const [savedTriggerSettings, setSavedTriggerSettings] = useState(triggerSettings);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState('');
   const [previewCandidateId, setPreviewCandidateId] = useState('');
@@ -35,6 +43,8 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const [startingAction, setStartingAction] = useState('');
   const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
+  const [pendingApprovalCandidateId, setPendingApprovalCandidateId] = useState('');
+  const [pendingDeleteCandidateId, setPendingDeleteCandidateId] = useState('');
   const requestedGenerationJobs = useRef(new Set());
   const openedGenerationJobs = useRef(new Set());
 
@@ -148,6 +158,10 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
                   ? `${providerName} sign-in is not configured for this installation. Check its OAuth app registration.`
                   : `Connect your ${streamReference.provider === 'youtube' ? 'Google account for YouTube' : 'Twitch account'} in the card above before starting this stream.`;
 
+  const workflowReady = Boolean(matchingChatSession && matchingCaptureSession);
+  const workflowPartial = Boolean(matchingChatSession || matchingCaptureSession) && !workflowReady;
+  const triggerSettingsDirty = JSON.stringify(triggerSettings) !== JSON.stringify(savedTriggerSettings);
+
   const hasActiveWork = (
     sessions.some((session) => !TERMINAL_SESSION_STATES.has(session.status))
     || captures.some((capture) => !TERMINAL_SESSION_STATES.has(capture.status))
@@ -200,79 +214,101 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     if (!connections) return undefined;
     let active = true;
     apiJson('/api/community-highlights/triggers/settings')
-      .then((settings) => { if (active) setTriggerSettings(settings); })
+      .then((settings) => {
+        if (active) {
+          setTriggerSettings(settings);
+          setSavedTriggerSettings(settings);
+        }
+      })
       .catch((requestError) => { if (active) setError(requestError?.detail || 'Could not load trigger settings.'); });
     return () => { active = false; };
   }, [connections]);
 
-  const startMonitoring = async () => {
+  const startHighlighting = async () => {
     if (!streamReference || !providerConnected || connections == null) {
       setError(connectionGuidance);
       return;
     }
-    if (matchingChatSession) {
-      setError(`Chat monitoring is already active for this ${providerName} stream.`);
-      return;
-    }
 
     setError('');
-    setStartingAction('chat');
+    setStartingAction('workflow');
+    let createdCaptureId = null;
     try {
-      await apiJson('/api/community-highlights/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim() }),
+      if (!matchingCaptureSession) {
+        const capture = await apiJson('/api/community-highlights/captures', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
+        });
+        createdCaptureId = capture?.session_id || null;
+      }
+
+      if (!matchingChatSession) {
+        try {
+          await apiJson('/api/community-highlights/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stream_url: streamUrl.trim() }),
+          });
+        } catch (chatError) {
+          // Roll back only a buffer created by this click; never stop an
+          // existing recording if starting chat fails.
+          if (createdCaptureId) {
+            try {
+              await apiJson(`/api/community-highlights/captures/${encodeURIComponent(createdCaptureId)}`, {
+                method: 'DELETE',
+              });
+            } catch {
+              throw new Error(
+                `${chatError?.detail || chatError.message || 'Chat monitoring could not start.'} The new rolling buffer may still be running; stop it from this page.`,
+              );
+            }
+          }
+          throw chatError;
+        }
+      }
+
+      await refreshSessions().catch((refreshError) => {
+        setError(refreshError?.detail || 'Highlighting started, but Clippy could not refresh the current status.');
       });
-      await refreshSessions();
     } catch (requestError) {
-      setError(requestError?.detail || 'Could not start chat monitoring.');
+      setError(requestError?.detail || requestError.message || 'Could not start Community Highlights.');
+      await refreshSessions().catch(() => {});
     } finally {
       setStartingAction('');
     }
   };
 
-  const startCapture = async () => {
-    if (!streamReference || !providerConnected || connections == null) {
-      setError(connectionGuidance);
-      return;
-    }
-    if (matchingCaptureSession) {
-      setError(`A rolling buffer is already running for this ${providerName} stream.`);
-      return;
-    }
-
-    setError('');
-    setStartingAction('capture');
-    try {
-      await apiJson('/api/community-highlights/captures', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
-      });
-      await refreshSessions();
-    } catch (requestError) {
-      setError(requestError?.detail || 'Could not start rolling capture.');
-    } finally {
-      setStartingAction('');
-    }
-  };
-
-  const stopCapture = async (sessionId) => {
+  const stopHighlighting = async () => {
     if (sessionActionBusy) return;
-    setSessionActionBusy(`capture-stop:${sessionId}`);
+    setSessionActionBusy('workflow-stop');
     setError('');
-    try {
-      await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}`, {
-        method: 'DELETE',
-      });
-      await refreshSessions();
-    } catch (requestError) {
-      setError(requestError?.detail || 'Could not stop rolling capture.');
-    } finally {
-      setSessionActionBusy('');
-    }
-  };
+    const failures = [];
 
+    if (matchingChatSession) {
+      try {
+        await apiJson(`/api/community-highlights/sessions/${encodeURIComponent(matchingChatSession.session_id)}`, {
+          method: 'DELETE',
+        });
+      } catch (stopError) {
+        failures.push(stopError?.detail || 'Could not stop chat monitoring.');
+      }
+    }
+
+    if (matchingCaptureSession) {
+      try {
+        await apiJson(`/api/community-highlights/captures/${encodeURIComponent(matchingCaptureSession.session_id)}`, {
+          method: 'DELETE',
+        });
+      } catch (stopError) {
+        failures.push(stopError?.detail || 'Could not stop the rolling buffer.');
+      }
+    }
+
+    await refreshSessions().catch(() => {});
+    if (failures.length) setError(failures.join(' '));
+    setSessionActionBusy('');
+  };
 
   const saveTriggerSettings = async () => {
     setError('');
@@ -290,6 +326,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
         body: JSON.stringify(payload),
       });
       setTriggerSettings(saved);
+      setSavedTriggerSettings(saved);
     } catch (requestError) {
       setError(requestError?.detail || 'Could not save trigger settings.');
     } finally {
@@ -319,11 +356,13 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
-  const decideCandidate = async (candidateId, approved) => {
-    if (approved && !window.confirm(
-      'Approve this highlight and generate one vertical Short? Confirm that you own this content or have permission to process it.'
-    )) return;
+  const decideCandidate = async (candidateId, approved, confirmed = false) => {
+    if (approved && !confirmed) {
+      setPendingApprovalCandidateId(candidateId);
+      return;
+    }
 
+    setPendingApprovalCandidateId('');
     setReviewBusy(candidateId);
     setError('');
     try {
@@ -360,8 +399,12 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
-  const deleteCandidate = async (candidateId) => {
-    if (!window.confirm('Delete this highlight candidate and its local video file? This cannot be undone.')) return;
+  const deleteCandidate = async (candidateId, confirmed = false) => {
+    if (!confirmed) {
+      setPendingDeleteCandidateId(candidateId);
+      return;
+    }
+    setPendingDeleteCandidateId('');
     if (previewCandidateId === candidateId) closeCandidatePreview();
     setReviewBusy(candidateId);
     setError('');
@@ -385,7 +428,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
       await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}/trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pre_seconds: triggerSettings.pre_seconds, post_seconds: triggerSettings.post_seconds, reason: 'manual' }),
+        body: JSON.stringify({ pre_seconds: savedTriggerSettings.pre_seconds, post_seconds: savedTriggerSettings.post_seconds, reason: 'manual' }),
       });
       await refreshSessions();
     } catch (requestError) {
@@ -395,21 +438,18 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
-  const stopMonitoring = async (sessionId) => {
-    if (sessionActionBusy) return;
-    setSessionActionBusy(`chat-stop:${sessionId}`);
-    setError('');
-    try {
-      await apiJson(`/api/community-highlights/sessions/${encodeURIComponent(sessionId)}`, {
-        method: 'DELETE',
-      });
-      await refreshSessions();
-    } catch (requestError) {
-      setError(requestError?.detail || 'Could not stop chat monitoring.');
-    } finally {
-      setSessionActionBusy('');
-    }
-  };
+  const otherActiveSessions = [
+    ...sessions.filter((session) => !TERMINAL_SESSION_STATES.has(session.status)
+      && session.session_id !== matchingChatSession?.session_id).map((session) => ({
+      id: session.session_id, provider: session.provider, stream_id: session.stream_id,
+      type: 'chat', status: session.status,
+    })),
+    ...captures.filter((capture) => !TERMINAL_SESSION_STATES.has(capture.status)
+      && capture.session_id !== matchingCaptureSession?.session_id).map((capture) => ({
+      id: capture.session_id, provider: capture.provider, stream_id: capture.stream_id,
+      type: 'buffer', status: capture.status,
+    })),
+  ];
 
   return (
     <section className="card p-5 sm:p-7">
