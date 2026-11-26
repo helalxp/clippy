@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -181,7 +182,7 @@ def test_probe_prefers_ffprobe_beside_configured_ffmpeg(tmp_path):
 
     def runner(args, **_kwargs):
         invocation["args"] = args
-        return SimpleNamespace(returncode=0, stdout=b"12.5\\n")
+        return SimpleNamespace(returncode=0, stdout=b"12.5\n")
 
     duration = probe_media_duration_seconds(
         media,
