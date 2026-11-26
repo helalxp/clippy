@@ -65,6 +65,30 @@ def test_upload_endpoint_uses_the_explicit_gemini_request_header(
     assert upload.closed is True
 
 
+def test_local_template_library_failure_returns_diagnostic_and_logs_traceback(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(app_module, "_assert_data_storage_available", lambda: None)
+    monkeypatch.setattr(app_module, "_reference_templates_local_only", lambda: None)
+
+    def missing_package():
+        raise ModuleNotFoundError("template_system")
+
+    monkeypatch.setattr(app_module, "_template_system_storage", missing_package)
+
+    with caplog.at_level(logging.ERROR, logger="clippy.template_analysis"):
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(app_module.list_template_system_documents())
+
+    assert failure.value.status_code == 500
+    assert "diagnostic ID:" in failure.value.detail
+    assert "template_system" not in failure.value.detail
+    assert any(
+        record.exc_info and "Could not read local template library" in record.message
+        for record in caplog.records
+    )
+
+
 def test_template_analysis_list_failure_returns_diagnostic_and_logs_traceback(
     monkeypatch, caplog
 ):
