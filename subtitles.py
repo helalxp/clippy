@@ -640,8 +640,9 @@ def subtitles_filter(srt_path, alignment=2, fontsize=16,
     if final_fontsize < 10:
         final_fontsize = 10
 
+    has_rtl_text = _file_contains_rtl_text(srt_path)
     safe_font_name = _sanitize_font_name(font_name)
-    if not str(srt_path).lower().endswith(".ass") and _file_contains_rtl_text(srt_path):
+    if not str(srt_path).lower().endswith(".ass") and has_rtl_text:
         safe_font_name = "Segoe UI"
     bg_opacity = _clamp_number(bg_opacity, 0.0, 1.0, 0.0)
     border_width = _clamp_number(border_width, 0, 10, 2)
@@ -688,13 +689,15 @@ def subtitles_filter(srt_path, alignment=2, fontsize=16,
     # ffmpeg 8's filtergraph parser rejects a quoted positional value that is
     # followed by more :name=value options ("No option name near ..."), while
     # the named form parses on every version back to 4.x.
+    shaping_option = ":shaping=complex" if has_rtl_text else ""
     if str(srt_path).lower().endswith('.ass'):
         # ASS files (karaoke style) carry their own styles; force_style would
         # override the per-word color tags.
-        vf = f"ass=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}':shaping=complex"
+        vf = (f"ass=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
+              f"{shaping_option}")
     else:
         vf = (f"subtitles=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
-              f":charenc=UTF-8:shaping=complex:force_style='{style_string}'")
+              f":charenc=UTF-8{shaping_option}:force_style='{style_string}'")
 
     return vf
 
