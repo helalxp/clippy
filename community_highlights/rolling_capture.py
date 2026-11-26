@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .streamlink_capture import ResolvedLiveStream, resolve_live_stream
-from .diagnostics import log_event
+from .diagnostics import BoundedStderrTail, log_event
 
 
 class RollingCaptureError(RuntimeError):
@@ -255,6 +255,7 @@ class RollingCapture:
         resolved: ResolvedLiveStream | None = None
         reader = None
         process = None
+        stderr_tail: BoundedStderrTail | None = None
         try:
             self.segment_dir.mkdir(parents=True, exist_ok=True)
             ffmpeg = self.config.ffmpeg_path
@@ -273,10 +274,13 @@ class RollingCapture:
                     args,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     shell=False,
                     bufsize=0,
                 )
+                stderr_pipe = getattr(process, "stderr", None)
+                if stderr_pipe is not None:
+                    stderr_tail = BoundedStderrTail(stderr_pipe)
             except OSError:
                 raise RollingCaptureError("Clippy could not start FFmpeg. Check the configured FFmpeg executable.") from None
 
@@ -296,7 +300,17 @@ class RollingCapture:
             return_code = process.poll()
             process = None
             if return_code != 0:
-                log_event("capture.ffmpeg.exit_nonzero", level=40, return_code=return_code)
+                diagnostic_fields = (
+                    stderr_tail.diagnostic_fields()
+                    if stderr_tail is not None
+                    else {"failure_code": "ffmpeg_unknown"}
+                )
+                log_event(
+                    "capture.ffmpeg.exit_nonzero",
+                    level=40,
+                    return_code=return_code,
+                    **diagnostic_fields,
+                )
                 raise RollingCaptureError("FFmpeg could not finalize the rolling capture successfully.")
             self._prune_segments()
             log_event("capture.ffmpeg.finished", outcome="stopped", return_code=return_code)
@@ -304,13 +318,33 @@ class RollingCapture:
             if process is not None:
                 self._finish_process(process, force=True)
                 process = None
-            log_event("capture.ffmpeg.failed", level=40, error_type=type(error).__name__)
+            diagnostic_fields = (
+                stderr_tail.diagnostic_fields()
+                if stderr_tail is not None
+                else {}
+            )
+            log_event(
+                "capture.ffmpeg.failed",
+                level=40,
+                error_type=type(error).__name__,
+                **diagnostic_fields,
+            )
             raise
         except Exception as error:
             if process is not None:
                 self._finish_process(process, force=True)
                 process = None
-            log_event("capture.ffmpeg.failed", level=40, error_type=type(error).__name__)
+            diagnostic_fields = (
+                stderr_tail.diagnostic_fields()
+                if stderr_tail is not None
+                else {}
+            )
+            log_event(
+                "capture.ffmpeg.failed",
+                level=40,
+                error_type=type(error).__name__,
+                **diagnostic_fields,
+            )
             raise RollingCaptureError("Live capture ended unexpectedly. Check the stream and FFmpeg installation.") from None
         finally:
             if process is not None:

@@ -1,4 +1,5 @@
 
+import io
 import pytest
 import threading
 from pathlib import Path
@@ -406,6 +407,10 @@ def test_run_rejects_nonzero_ffmpeg_exit_and_logs_it(tmp_path, monkeypatch, capl
     class FakeProcess:
         def __init__(self):
             self.stdin = FakeStdin()
+            self.stderr = io.BytesIO(
+                b"[mpegts] Invalid data found when processing input\n"
+                b"Error opening C:\\Users\\private\\capture.ts\n"
+            )
             self.returncode = None
 
         def poll(self):
@@ -436,3 +441,6 @@ def test_run_rejects_nonzero_ffmpeg_exit_and_logs_it(tmp_path, monkeypatch, capl
 
     assert "capture.ffmpeg.exit_nonzero" in caplog.text
     assert '"return_code":7' in caplog.text
+    assert '"failure_code":"invalid_data"' in caplog.text
+    assert "C:\\Users" not in caplog.text
+    assert "private\\capture.ts" not in caplog.text

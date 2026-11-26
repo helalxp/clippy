@@ -46,6 +46,7 @@ def test_assembles_single_browser_preview_mp4_without_reencoding(tmp_path):
     assert "segment-00000001.ts" in invocation["manifest"]
     assert invocation["kwargs"]["shell"] is False
     assert invocation["kwargs"]["stdin"] == subprocess.DEVNULL
+    assert invocation["kwargs"]["stderr"] == subprocess.PIPE
     assert not list(output.parent.glob("*.ffconcat"))
 
 
@@ -59,6 +60,33 @@ def test_failed_mp4_assembly_removes_partial_candidate(tmp_path):
 
     with pytest.raises(RollingCaptureError, match="browser-playable MP4"):
         assemble_segments(records, output, runner=runner)
+    assert not output.exists()
+
+
+def test_failed_assembly_logs_a_redacted_ffmpeg_diagnostic(tmp_path, caplog):
+    records = _records(tmp_path)
+    output = tmp_path / "candidate.mp4"
+    private_url = "https://viewer:password@example.test/live?access_token=do-not-log"
+    private_path = "C:\\Users\\private\\candidate.ts"
+
+    def runner(_args, **_kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stderr=(
+                f"Invalid data found when processing input from {private_url}\n"
+                f"Error opening {private_path}\n"
+            ).encode(),
+        )
+
+    with caplog.at_level(40, logger="clippy.community_highlights"):
+        with pytest.raises(RollingCaptureError, match="browser-playable MP4"):
+            assemble_segments(records, output, runner=runner)
+
+    assert '"failure_code":"invalid_data"' in caplog.text
+    assert "Invalid data found" in caplog.text
+    assert "do-not-log" not in caplog.text
+    assert "viewer:password@" not in caplog.text
+    assert "C:\\Users" not in caplog.text
     assert not output.exists()
 
 
