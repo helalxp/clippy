@@ -434,3 +434,35 @@ class TestBurnWithMark:
         cmd = captured["cmd"]
         assert cmd[:5] == ["ffmpeg", "-y", "-i", "in.mp4", "-vf"]
         assert cmd[5:8] == [cmd[5], "-c:a", "copy"] and cmd[-1] == "out.mp4"
+
+class TestArabicSubtitleLayout:
+    def test_arabic_karaoke_uses_segoe_ui_without_reordering_or_uppercasing_latin(self, tmp_path):
+        from subtitles import generate_ass
+
+        out = tmp_path / "arabic.ass"
+        transcript = self._transcript([
+            _w(" مرحبا", 0.0, 0.4),
+            _w(" YouTube", 0.4, 0.9),
+        ])
+        assert generate_ass(transcript, 0, 1.0, str(out), uppercase=True) is True
+        content = out.read_text(encoding="utf-8-sig")
+        assert "Style: Default,Segoe UI," in content
+        assert content.index("مرحبا") < content.index("YouTube")
+        assert "YOUTUBE" not in content
+
+    def test_arabic_srt_uses_rtl_font_and_complex_shaping(self, tmp_path):
+        from subtitles import subtitles_filter
+
+        srt = tmp_path / "arabic.srt"
+        srt.write_text(
+            "1\\n00:00:00,000 --> 00:00:01,000\\nمرحبا بالعالم\\n",
+            encoding="utf-8",
+        )
+        filter_graph = subtitles_filter(str(srt), font_name="Anton")
+        assert "Fontname=Segoe UI" in filter_graph
+        assert "shaping=complex" in filter_graph
+
+    @staticmethod
+    def _transcript(words):
+        return {"segments": [{"start": 0, "end": 1, "words": words}]}
+
