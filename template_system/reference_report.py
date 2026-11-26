@@ -173,7 +173,9 @@ class CompositionObservation(ReportModel):
 
 
 class ReferenceStyleReport(ReportModel):
-    schema_version: Literal[1] = 1
+    # google-genai's Pydantic schema converter rejects integer Literal[1] consts.
+    # Keep the version fixed with numeric bounds, which its schema supports.
+    schema_version: int = Field(default=1, ge=1, le=1)
     summary: str = Field(default="", max_length=2000)
     visual_identity: str = Field(default="", max_length=1500)
     editorial_style: str = Field(default="", max_length=1500)
