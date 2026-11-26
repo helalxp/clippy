@@ -1,8 +1,8 @@
 # Reference Analysis Workbench — Milestone 1
 
 **Status:** First end-to-end implementation slice in development  
-**Branch:** \`feature/template-reference-workbench\`  
-**API namespace:** \`/api/template-analysis\`  
+**Branch:** `feature/template-reference-workbench-current-main`  
+**API namespace:** `/api/template-analysis`  
 **Scope boundary:** Analyze an edited reference video and return an evidence-backed report. Do not modify normal clip generation or render a template onto generated clips in this milestone.
 
 ## 1. Product outcome
@@ -38,7 +38,7 @@ The visual-difference metric is not optical flow and must not be presented as su
 
 ### 3.2 Gemini report
 
-The provider returns a strict versioned \`ReferenceStyleReport\` containing:
+The provider returns a strict versioned `ReferenceStyleReport` containing:
 - Overall visual identity, editorial style and pacing summary.
 - Text regions: captions, hooks, titles, lower thirds and labels.
 - Typography: ranked font candidates, estimated weight/style/size, fill/highlight/outline colors, stroke, shadow, backing, alignment and line count.
@@ -58,36 +58,36 @@ Confidence values are qualitative. Bounding boxes and timing inferred by the vis
 
 The provider cannot cite arbitrary frame names or timestamps. After structured parsing, Clippy verifies every finding against the supplied evidence set. A claim with invalid evidence is rejected rather than shown as supported.
 
-The report contract describes observed treatment. It is deliberately separate from \`TemplateRecipe\`, which describes renderer-independent settings that Clippy can later apply.
+The report contract describes observed treatment. It is deliberately separate from `TemplateRecipe`, which describes renderer-independent settings that Clippy can later apply.
 
 ## 4. Gemini and media boundaries
 
-- Current visual interpreter default: \`gemini-3.1-flash-lite\`, overridden by \`GEMINI_MODEL\`.
+- Current visual interpreter default: `gemini-3.1-flash-lite`, overridden by `GEMINI_MODEL`.
 - The full source file remains local.
 - Only sampled, downscaled PNG frames are sent when consent is enabled.
 - The interpretation stage is bounded by frame-count and total-byte limits.
 - API keys are passed to the running worker but are not written into job manifests.
 - If Gemini fails, deterministic results are retained and the job becomes partial rather than discarding the work.
-- If consent is declined, the deterministic result remains available and AI status is \`not_consented\`.
+- If consent is declined, the deterministic result remains available and AI status is `not_consented`.
 
 ## 5. Durable job lifecycle
 
-Job data lives under \`CLIPPY_DATA_DIR/template-analysis/jobs/<job-id>/\`, outside \`OUTPUT_DIR\`. Each job contains:
-- \`job.json\`: source identity, progress/state, consent flag and status.
-- \`source.*\`: original uploaded reference.
-- \`evidence/\`: extracted evidence frames.
-- \`report.json\`: deterministic analysis and optional validated Gemini report.
+Job data lives under `CLIPPY_DATA_DIR/template-analysis/jobs/<job-id>/`, outside `OUTPUT_DIR`. Each job contains:
+- `job.json`: source identity, progress/state, consent flag and status.
+- `source.*`: original uploaded reference.
+- `evidence/`: extracted evidence frames.
+- `report.json`: deterministic analysis and optional validated Gemini report.
 
 Manifests are written atomically. Job identifiers and evidence asset identifiers are strictly validated. Interrupted jobs can be re-queued after backend restart. A retry starts deterministic analysis from the retained source and clears only the prior attempt's derived evidence directory first, preventing stale frame files from breaking recovery. Only one reference analysis is executed at a time by the current local worker semaphore. Analysis tasks are registered with the desktop maintenance tracker so data relocation and desktop updates wait for them to finish.
 
 ### Job statuses
 
-- \`queued\`: accepted and waiting for analysis.
-- \`running\`: probing, sampling, measuring or interpreting.
-- \`completed\`: deterministic and consented AI stages completed.
-- \`partial\`: deterministic report is available, but AI was not consented or failed.
-- \`failed\`: deterministic processing failed.
-- \`cancelled\`: safely cancelled at a stage boundary.
+- `queued`: accepted and waiting for analysis.
+- `running`: probing, sampling, measuring or interpreting.
+- `completed`: deterministic and consented AI stages completed.
+- `partial`: deterministic report is available, but AI was not consented or failed.
+- `failed`: deterministic processing failed.
+- `cancelled`: safely cancelled at a stage boundary.
 
 Deletion is allowed only for terminal states. Active jobs must be cancelled and allowed to finish first.
 
@@ -95,13 +95,13 @@ Deletion is allowed only for terminal states. Active jobs must be cancelled and 
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| POST | \`/api/template-analysis/jobs\` | Upload a reference and queue analysis |
-| GET | \`/api/template-analysis/jobs\` | List local analysis jobs |
-| GET | \`/api/template-analysis/jobs/{job_id}\` | Read job and report |
-| POST | \`/api/template-analysis/jobs/{job_id}/cancel\` | Request safe cancellation |
-| DELETE | \`/api/template-analysis/jobs/{job_id}\` | Delete a terminal analysis and its source/evidence |
-| GET | \`/api/template-analysis/jobs/{job_id}/source\` | Stream the original reference for inline playback |
-| GET | \`/api/template-analysis/jobs/{job_id}/evidence/{asset_id}\` | Serve a sampled evidence frame |
+| POST | `/api/template-analysis/jobs` | Upload a reference and queue analysis |
+| GET | `/api/template-analysis/jobs` | List local analysis jobs |
+| GET | `/api/template-analysis/jobs/{job_id}` | Read job and report |
+| POST | `/api/template-analysis/jobs/{job_id}/cancel` | Request safe cancellation |
+| DELETE | `/api/template-analysis/jobs/{job_id}` | Delete a terminal analysis and its source/evidence |
+| GET | `/api/template-analysis/jobs/{job_id}/source` | Stream the original reference for inline playback |
+| GET | `/api/template-analysis/jobs/{job_id}/evidence/{asset_id}` | Serve a sampled evidence frame |
 
 The source/evidence query-token exception is restricted to exact read-only paths and GET/HEAD. It exists because native HTML media/image elements cannot attach Clippy's desktop API header. It does not allow query-token access to arbitrary API endpoints.
 
@@ -109,9 +109,9 @@ Managed/billing mode remains disabled for this local analysis store until owner-
 
 ## 7. Sensitive integration areas intentionally untouched
 
-- \`/api/process\` and its upload/generation contract.
-- \`main.py\`, \`clip_selection.py\`, moment scoring/selection and clip boundaries.
-- \`recut.py\`, reframe/caption/hook/watermark editing paths.
+- `/api/process` and its upload/generation contract.
+- `main.py`, `clip_selection.py`, moment scoring/selection and clip boundaries.
+- `recut.py`, reframe/caption/hook/watermark editing paths.
 - Normal job metadata, rerender locks and clean canonical clip handling.
 - Browser Remotion preview composition and root Remotion final renderer.
 - Windows runtime dependency manifests and installer bootstrap.
@@ -147,7 +147,7 @@ Only after this milestone passes should the team connect approved analysis to te
 
 ## 10. Human review layer
 
-The visual report remains the immutable provider result. Human decisions are stored separately in \`review.json\`, keyed by finding type and stable finding ID.
+The visual report remains the immutable provider result. Human decisions are stored separately in `review.json`, keyed by finding type and stable finding ID.
 
 - Each supported finding can be accepted or rejected.
 - The decision stores a UTC timestamp and an optional note.
