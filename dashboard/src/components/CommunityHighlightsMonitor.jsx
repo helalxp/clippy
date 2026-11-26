@@ -7,7 +7,7 @@ import {
   parseCommunityHighlightsStreamUrl,
 } from '../lib/communityHighlights';
 
-const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error']);
+const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error', 'interrupted']);
 
 const statusLabel = (status) => ({
   connecting: 'Connecting',
@@ -16,6 +16,7 @@ const statusLabel = (status) => ({
   error: 'Needs attention',
   ended: 'Chat ended',
   stopped: 'Stopped',
+  interrupted: 'Interrupted',
 }[status] || status || 'Unknown');
 
 const formatDuration = (seconds) => {
@@ -279,6 +280,23 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
+  const stopOtherSession = async (item) => {
+    if (sessionActionBusy) return;
+    setSessionActionBusy(`other-stop:${item.id}`);
+    setError('');
+    try {
+      const endpoint = item.type === 'chat' ? 'sessions' : 'captures';
+      await apiJson(`/api/community-highlights/${endpoint}/${encodeURIComponent(item.id)}`, {
+        method: 'DELETE',
+      });
+      await refreshSessions();
+    } catch (stopError) {
+      setError(stopError?.detail || `Could not stop the other ${item.type} session.`);
+    } finally {
+      setSessionActionBusy('');
+    }
+  };
+
   const stopHighlighting = async () => {
     if (sessionActionBusy) return;
     setSessionActionBusy('workflow-stop');
@@ -479,6 +497,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             <input
               value={streamUrl}
               onChange={(event) => setStreamUrl(event.target.value)}
+              disabled={workflowReady || workflowPartial || busy}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && streamUrl.trim() && !busy && !workflowReady) startHighlighting();
               }}
@@ -489,7 +508,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
           </label>
           <button
             type="button"
-            disabled={busy || !!sessionActionBusy || !streamReference || connections == null || (!providerConnected && !workflowReady)}
+            disabled={busy || !!sessionActionBusy || !streamReference || (!workflowReady && (connections == null || !providerConnected))}
             onClick={workflowReady ? stopHighlighting : startHighlighting}
             className={workflowReady ? 'btn-ghost w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'}
             title={!providerConnected && !workflowReady ? connectionGuidance : undefined}
@@ -505,7 +524,11 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             ? 'rounded-input border border-warn/30 bg-paper2 px-3 py-2 text-xs text-warn'
             : 'text-xs leading-relaxed text-muted'}
         >
-          {connectionGuidance}
+          {workflowReady
+            ? 'Chat and recording are both active for this stream.'
+            : workflowPartial
+              ? 'One part is running. Finish setup to enable automatic highlights.'
+              : connectionGuidance}
         </p>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -564,7 +587,15 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
               {otherActiveSessions.map((item) => (
                 <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="text-ink2">{item.provider === 'twitch' ? 'Twitch' : 'YouTube'} · {item.stream_id} · {item.type}</span>
-                  <span className="readout">{item.status}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="readout">{item.status}</span>
+                    {item.type === 'buffer' && item.status === 'recording' && (
+                      <button type="button" onClick={() => triggerNow(item.id)} disabled={!!sessionActionBusy}
+                        className="text-xs text-muted underline underline-offset-2">Clip now</button>
+                    )}
+                    <button type="button" onClick={() => stopOtherSession(item)} disabled={!!sessionActionBusy}
+                      className="text-xs text-muted underline underline-offset-2">Stop</button>
+                  </div>
                 </div>
               ))}
             </div>
