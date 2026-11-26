@@ -578,11 +578,14 @@ def execute_reference_analysis_job(
         ai_report = None
         if item.get("gemini_consent"):
             store.update(job_id, stage="gemini_interpretation", progress=88, ai_status="running")
-            evidence_bytes = sum(int(sample.size_bytes) for sample in analysis_result.samples)
+            # Use the canonical assets returned above for metrics. Keeping
+            # instrumentation on this stable boundary avoids requiring test
+            # doubles (or future result adapters) to expose internal samples.
+            evidence_bytes = sum(int(asset.size_bytes) for asset in assets)
             logger.info(
                 "Gemini reference interpretation started: job_id=%s model=%s frame_count=%s evidence_bytes=%s",
                 job_id, os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite",
-                len(analysis_result.samples), evidence_bytes,
+                len(assets), evidence_bytes,
             )
             try:
                 analyzer = (
