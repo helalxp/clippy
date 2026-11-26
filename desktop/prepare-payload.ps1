@@ -130,8 +130,9 @@ if ($compiledBgutilMain -notmatch '127\.0\.0\.1' -or
 }
 Remove-Item $bgutilSource -Recurse -Force
 
-# Include all top-level Python modules and the Community Highlights package.
-# app.py imports both at backend startup; omitting a package breaks first run.
+# Include all top-level Python modules and the Python packages used by the backend.
+# Community Highlights is imported at startup; template_system is imported by the
+# Templates API routes. Both must ship with the managed backend payload.
 Get-ChildItem $repoRoot -File -Filter "*.py" | Copy-Item -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "requirements.txt") -Destination $stageRoot
 Copy-Item (Join-Path $repoRoot "VERSION") -Destination $stageRoot
