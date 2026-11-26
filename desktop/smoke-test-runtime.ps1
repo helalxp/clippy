@@ -262,8 +262,8 @@ import subprocess
 import sys
 
 sys.path.insert(0, sys.argv[3])
-from PIL import features
 from hooks import create_hook_image
+from PIL import features
 from subtitles import generate_ass, subtitles_filter
 
 root = pathlib.Path(sys.argv[1])
