@@ -1,8 +1,9 @@
 # Community Highlights: After Implementation
 
-**Status:** Initial feature merged; post-implementation corrections in progress  
+**Status:** Initial feature merged; correctness and UI refinements in progress  
 **Merged baseline:** `main` contains Community Highlights and version metadata `0.3.3`; tag/publication status must be verified separately.  
-**Active fix branch:** `fix/community-highlights-correctness`  
+**Active correctness branch:** `fix/community-highlights-correctness` (draft PR #42)  
+**Active UI branch:** `ui/community-highlights-workflow` (stacked on the correctness branch)  
 **Last updated:** 2026-11-26
 
 ## Purpose
@@ -133,7 +134,16 @@ The reliable next step is to persist/display requested bounds and actual candida
 
 ## Current UI scope
 
-The current branch adds the explicit trigger-mode selector only. It is **not** the requested full tab redesign. The complete redesign remains a separate implementation slice: one clear start/stop workflow for chat plus recording, streamlined main settings, collapsed advanced capture settings, visible state/errors, and compact candidate review with trigger reason/count and actual duration.
+The full workflow-first redesign is authored on `ui/community-highlights-workflow`:
+- Provider connections remain in their existing reusable section.
+- The stream URL and one coordinated start/stop action are now the primary workflow. A partial start remains visible and can be completed or stopped.
+- Capture quality/storage settings are collapsed by default and explain that they apply to the next recording.
+- Trigger modes and thresholds are grouped by purpose; unsaved changes are explicit, and “Clip now” uses the last saved pre/post window.
+- Candidate review is quieter and more compact, exposes the trigger reason and merged-trigger count, and keeps preview/download/generation actions available.
+- Rights confirmation and deletion confirmation are inline rather than browser popups.
+- Live chat messages and diagnostics are available in a collapsed section.
+
+This is implemented in source but has **not** passed dashboard CI or packaged-Windows/responsive acceptance yet. Candidate actual media duration is not shown as a measured value because the backend does not yet persist it; the UI shows the current window span and merged-trigger count without claiming frame accuracy.
 
 ## Release-prep verification record
 
@@ -150,4 +160,4 @@ These historical checks establish a merge baseline for the feature branch; they 
 
 ## Working rule
 
-Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep the full Community Highlights UI redesign separate from correctness fixes so it can be reviewed as one coherent workflow.
+Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep correctness fixes and the UI redesign in separate, reviewable PRs.

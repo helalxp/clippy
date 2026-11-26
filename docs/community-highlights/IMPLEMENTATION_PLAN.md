@@ -1,8 +1,8 @@
 # Community Highlights Implementation Plan
 
 **Status:** In progress  
-**Active working branch:** `fix/community-highlights-correctness`  
-**Base:** `main` at `c402e3adbe8205802c9d3786a660ca7285c1faef` (merged Community Highlights baseline; version metadata `0.3.3`)  
+**Active working branch:** `ui/community-highlights-workflow` (stacked on `fix/community-highlights-correctness`)  
+**Correctness base:** PR #42 from `fix/community-highlights-correctness`; original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
 **Last updated:** 2026-11-26  
@@ -23,7 +23,8 @@ This register records findings from the dated source audits below. A checked ite
 - [ ] Pass CI and packaged-Windows acceptance for all new regression tests and the trigger-mode UI.
 - [ ] Live-test YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
 - [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
-- [ ] Complete the full tab redesign as a separate UI slice: coordinated start/stop, simple primary settings, collapsed advanced controls, and compact candidate review.
+- [x] Implement the full workflow-first tab redesign in the stacked `ui/community-highlights-workflow` branch: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
+- [ ] Pass dashboard CI and perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 
 The checked items above mean code and focused regression tests have been authored on this branch. They do **not** mean CI or live-provider acceptance has passed.
