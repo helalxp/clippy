@@ -5,7 +5,7 @@
 **Base:** `main` at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e` (stable release `v0.3.2`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
-**Last updated:** 2026-11-25
+**Last updated:** 2026-11-26
 
 ## Code audit follow-up register
 
@@ -24,6 +24,7 @@ This register records findings from the dated source audits below. A checked ite
 - [ ] For Google production readiness, confirm the app audience/publishing status, test-user restrictions, consent-screen branding, verified homepage/privacy-policy/terms links on a domain controlled by the Clippy brand, requested-scope classification, and any required brand/scope verification. Google documents that External apps in Testing are limited to 100 test users and authorizations for non-basic scopes expire after seven days; production publication and verification requirements depend on the requested scopes and branding. See the Google OAuth production checklist in the work log below.
 
 ### Remaining audit work
+- [x] Preserve the normal generation BYOK contract when approved Community Highlights candidates enter `/api/process`: pass the saved Gemini key as `X-Gemini-Key`. The regular upload flow already did this, but the candidate handoff omitted it. A focused dashboard Node test covers header inclusion and the optional-key case.
 - [ ] Identify the historical Community Highlights `404 not found` on the user's installed RC. The original failing request trace was not available, so the precise cause is not yet established.
 - [x] Add HTTP-level tests against the actual FastAPI app for connection status, Twitch/Google OAuth start/status/cancel, desktop-session-token enforcement, known-flow 404s, and unknown-route 404s.
 - [x] Add targeted backend diagnostics for failed Community Highlights requests. Logs record method, matched route template (or redacted unmatched path), and status only; they omit request bodies, query strings, opaque flow/candidate IDs, and authorization headers.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import {
+  communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
   parseCommunityHighlightsStreamUrl,
 } from '../lib/communityHighlights';
@@ -17,7 +18,7 @@ const statusLabel = (status) => ({
   stopped: 'Stopped',
 }[status] || status || 'Unknown');
 
-export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
+export default function CommunityHighlightsMonitor({ connections, onOpenJob, geminiApiKey }) {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
@@ -329,7 +330,10 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob }) {
       if (approved) {
         const result = await apiJson('/api/process', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...communityHighlightsGeminiHeaders(geminiApiKey),
+          },
           body: JSON.stringify({
             community_candidate_id: candidateId,
             acknowledged: true,

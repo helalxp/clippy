@@ -1,4 +1,12 @@
 const TWITCH_CHANNEL = /^[A-Za-z0-9_]{1,25}$/;
+
+// Candidate approval enters the same BYOK generation endpoint as normal uploads.
+// Keep the Gemini header optional for managed and local-LLM configurations.
+export function communityHighlightsGeminiHeaders(apiKey) {
+  return typeof apiKey === "string" && apiKey
+    ? { "X-Gemini-Key": apiKey }
+    : {};
+}
 const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const RESERVED_TWITCH_PATHS = new Set([
   "directory", "downloads", "jobs", "p", "settings", "turbo", "wallet",

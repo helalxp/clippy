@@ -1705,7 +1705,7 @@ function App() {
                   </p>
                 </div>
                 <CommunityHighlightsConnections onConnectionsChange={setCommunityProviderConnections} />
-                <CommunityHighlightsMonitor connections={communityProviderConnections} onOpenJob={openCommunityHighlightJob} />
+                <CommunityHighlightsMonitor connections={communityProviderConnections} geminiApiKey={apiKey} onOpenJob={openCommunityHighlightJob} />
                 <div className="rounded-card border border-rule bg-paper2 p-5 sm:p-6">
                   <div className="flex items-center gap-2 mb-2 text-ink2">
                     <Activity size={16} className="text-brass" />

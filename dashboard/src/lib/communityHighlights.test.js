@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
   parseCommunityHighlightsStreamUrl,
 } from "./communityHighlights.js";
@@ -67,4 +68,12 @@ test("requires the provider matching the entered stream URL to be connected", ()
     isCommunityHighlightsProviderConnected(youtube, { youtube: { connected: true } }),
     true,
   );
+});
+
+test("builds the Gemini BYOK header for candidate generation when a key is saved", () => {
+  assert.deepEqual(communityHighlightsGeminiHeaders("AIza-test-key"), {
+    "X-Gemini-Key": "AIza-test-key",
+  });
+  assert.deepEqual(communityHighlightsGeminiHeaders(""), {});
+  assert.deepEqual(communityHighlightsGeminiHeaders(undefined), {});
 });
