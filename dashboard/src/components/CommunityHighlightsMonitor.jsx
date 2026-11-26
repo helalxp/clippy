@@ -452,335 +452,414 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   ];
 
   return (
-    <section className="card p-5 sm:p-7">
-      <div className="flex items-start gap-3 mb-5">
-        <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center shrink-0 text-brass">
-          <Radio size={19} />
-        </div>
-        <div className="min-w-0">
-          <h2 className="text-base font-medium text-ink">Monitor a live chat</h2>
-          <p className="text-xs sm:text-sm text-muted mt-1 leading-relaxed">
-            Paste a Twitch channel or YouTube live/video link. Start both chat monitoring and the rolling buffer on the same stream to let chat reactions create highlight candidates.
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-col sm:flex-row gap-2">
-        <input
-          value={streamUrl}
-          onChange={(event) => setStreamUrl(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter' && streamUrl.trim() && !busy) startMonitoring(); }}
-          placeholder="https://www.twitch.tv/channel or YouTube live URL"
-          aria-label="Twitch or YouTube stream URL"
-          className="min-w-0 flex-1 rounded-input border border-rule bg-paper2 px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:outline-none focus:border-brass"
-        />
-        <button
-          type="button"
-          disabled={!streamReference || !providerConnected || busy || !!matchingChatSession}
-          onClick={startMonitoring}
-          title={!providerConnected ? connectionGuidance : matchingChatSession ? 'Chat monitoring is already active for this stream.' : undefined}
-          className="rounded-input bg-brass text-white px-5 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-        >
-          {startingAction === 'chat' ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
-          {matchingChatSession ? 'Chat already active' : startingAction === 'chat' ? 'Starting…' : 'Monitor chat'}
-        </button>
-        <button
-          type="button"
-          disabled={!streamReference || !providerConnected || busy || !!matchingCaptureSession}
-          onClick={startCapture}
-          title={!providerConnected ? connectionGuidance : matchingCaptureSession ? 'A rolling buffer is already running for this stream.' : undefined}
-          className="rounded-input border border-rule text-ink px-5 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-        >
-          {startingAction === 'capture' ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />}
-          {matchingCaptureSession ? 'Buffer already recording' : startingAction === 'capture' ? 'Starting…' : 'Record rolling buffer'}
-        </button>
-      </div>
-      <p
-        role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected)) ? 'alert' : 'status'}
-        className={`mt-3 text-xs leading-relaxed ${streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected))
-          ? 'rounded-input border border-rule bg-paper2 px-3 py-2 text-warn'
-          : 'text-muted'}`}
-      >
-        {connectionGuidance}
-      </p>
-      <p className="text-[11px] text-muted mt-2">Capture settings apply to new rolling buffers. Keep the buffer longer than your combined pre/post-trigger window.</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-          {[
-            ['segment_seconds', 'Segment (s)', 1, 60],
-            ['retention_seconds', 'Buffer (s)', 8, 3600],
-            ['max_buffer_size_mb', 'Buffer cap (MB)', 16, 8192],
-          ].map(([key, label, min, max]) => (
-            <label key={key} className="text-xs text-muted">
-              <span className="block mb-1">{key === 'segment_seconds' ? 'Segment length (s)' : key === 'retention_seconds' ? 'Buffer retention (s)' : label}</span>
-              <input type="number" min={min} max={max} value={captureSettings[key]}
-                onChange={(event) => setCaptureSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
-            </label>
-          ))}
-          <label className="text-xs text-muted">
-            <span className="block mb-1">Stream quality</span>
-            <select value={captureSettings.quality}
-              onChange={(event) => setCaptureSettings((current) => ({ ...current, quality: event.target.value }))}
-              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink">
-              <option value="best">Best available</option>
-              <option value="1080p60">1080p60</option>
-              <option value="1080p">1080p</option>
-              <option value="720p60">720p60</option>
-              <option value="720p">720p</option>
-              <option value="480p">480p</option>
-              <option value="360p">360p</option>
-              <option value="worst">Lowest available</option>
-              <option value="audio_only">Audio only</option>
-            </select>
-          </label>
-        </div>
-
+    <div className="space-y-5">
       {error && (
-        <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
-          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+        <div role="alert" className="flex items-start gap-2 rounded-card border border-warn/30 bg-paper2 px-4 py-3 text-sm text-warn">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
-      <div className="mt-5 space-y-3">
-        {sessions.length === 0 ? (
-          <div className="rounded-card border border-dashed border-rule p-5 text-center">
-            <MessageCircle size={20} className="mx-auto text-muted mb-2" />
-            <p className="text-sm text-ink2">No chats are being monitored.</p>
-            <p className="text-xs text-muted mt-1">Connect the account for your stream above, then paste its Twitch channel or YouTube live/video URL.</p>
+      <section className="card p-5 sm:p-6 space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow mb-1">Live stream</p>
+            <h2 className="text-lg font-medium text-ink">Start highlighting</h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted">
+              One start action connects chat and begins the rolling recording for the same stream.
+            </p>
           </div>
-        ) : sessions.map((session) => (
-          <div key={session.session_id} className="rounded-card border border-rule bg-paper2 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium text-ink">{session.provider === 'twitch' ? 'Twitch' : 'YouTube'}</span>
-                  <span className={session.status === 'connected' ? 'badge-ok' : 'readout'}>{statusLabel(session.status)}</span>
-                </div>
-                <p className="text-xs text-muted mt-1 break-all">{session.stream_id}</p>
-                {session.error && <p className="text-xs text-warn mt-2">{session.error}</p>}
-                {session.diagnostic && (
-                  <p className="text-[11px] text-muted mt-1 break-words">
-                    API diagnostic: {session.diagnostic.operation} · HTTP {session.diagnostic.http_status} · reason {session.diagnostic.reason}
-                  </p>
-                )}
-              </div>
-              <button type="button" onClick={() => stopMonitoring(session.session_id)}
-                disabled={!!sessionActionBusy}
-                className="shrink-0 rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
-                <Square size={12} /> Stop
-              </button>
-            </div>
-            <div className="mt-3 pt-3 border-t border-rule">
-              <div className="flex items-center justify-between text-[11px] text-muted mb-2">
-                <span>Recent chat messages</span>
-                <span>{session.message_count || 0} buffered</span>
-              </div>
-              {session.messages?.length ? (
-                <div className="max-h-52 overflow-y-auto space-y-2 pr-1">
-                  {session.messages.slice(-12).map((message) => (
-                    <div key={message.message_id} className="text-xs leading-relaxed">
-                      <span className="font-medium text-ink2">{message.sender_name}: </span>
-                      <span className="text-muted break-words">{message.text}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted">Waiting for the first message…</p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-1">Rolling recording buffers</h3>
-        <p className="text-xs text-muted mb-3 leading-relaxed">
-          Streamlink and FFmpeg keep a bounded local buffer. When chat monitoring is active for the same stream, configured phrase or chat-volume triggers protect the pre-trigger footage and collect the post-trigger window.
+          {workflowReady && <span className="badge-ok">● Highlighting</span>}
+          {workflowPartial && <span className="badge-warn">Setup incomplete</span>}
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="min-w-0 flex-1">
+            <span className="mb-1.5 block text-xs font-medium text-ink2">Twitch channel or YouTube live/video URL</span>
+            <input
+              value={streamUrl}
+              onChange={(event) => setStreamUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && streamUrl.trim() && !busy && !workflowReady) startHighlighting();
+              }}
+              placeholder="Paste stream link"
+              aria-label="Twitch or YouTube stream URL"
+              className="input-field"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy || !!sessionActionBusy || !streamReference || connections == null || (!providerConnected && !workflowReady)}
+            onClick={workflowReady ? stopHighlighting : startHighlighting}
+            className={workflowReady ? 'btn-ghost w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'}
+            title={!providerConnected && !workflowReady ? connectionGuidance : undefined}
+          >
+            {busy || sessionActionBusy ? <Loader2 size={15} className="animate-spin" /> : workflowReady ? <Square size={14} /> : <Activity size={15} />}
+            {busy ? 'Starting…' : sessionActionBusy ? 'Stopping…' : workflowReady ? 'Stop highlighting' : workflowPartial ? 'Finish setup' : 'Start highlighting'}
+          </button>
+        </div>
+
+        <p
+          role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowReady)) ? 'alert' : 'status'}
+          className={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowReady))
+            ? 'rounded-input border border-warn/30 bg-paper2 px-3 py-2 text-xs text-warn'
+            : 'text-xs leading-relaxed text-muted'}
+        >
+          {connectionGuidance}
         </p>
-        {captures.length === 0 ? (
-          <p className="text-xs text-muted">No rolling captures are running.</p>
-        ) : (
-          <div className="space-y-2">
-            {captures.map((capture) => (
-              <div key={capture.session_id} className="rounded-card border border-rule bg-paper2 p-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-medium text-ink">{capture.provider === 'twitch' ? 'Twitch' : 'YouTube'}</span>
-                    <span className={capture.status === 'recording' ? 'badge-ok' : 'readout'}>{capture.status}</span>
-                  </div>
-                  <p className="text-xs text-muted mt-1">{capture.stream_id} · {capture.segment_seconds}s segments · {capture.retention_seconds}s buffer</p>
-                  {capture.error && <p className="text-xs text-warn mt-1">{capture.error}</p>}
-                </div>
-                <div className="flex flex-wrap justify-end gap-2 max-w-full">
-                  <button type="button" onClick={() => triggerNow(capture.session_id)}
-                    disabled={capture.status !== 'recording' || !!sessionActionBusy}
-                    className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="rounded-card border border-rule bg-paper2 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-sm font-medium text-ink">
+                <MessageCircle size={15} className="text-muted" /> Chat
+              </span>
+              <span className={matchingChatSession?.status === 'connected' ? 'badge-ok' : matchingChatSession ? 'badge-warn' : 'readout'}>
+                {matchingChatSession ? statusLabel(matchingChatSession.status) : 'Not started'}
+              </span>
+            </div>
+            {matchingChatSession?.error && <p className="mt-2 text-xs text-warn">{matchingChatSession.error}</p>}
+          </div>
+          <div className="rounded-card border border-rule bg-paper2 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-sm font-medium text-ink">
+                <Radio size={15} className="text-muted" /> Rolling buffer
+              </span>
+              <span className={matchingCaptureSession?.status === 'recording' ? 'badge-ok' : matchingCaptureSession ? 'badge-warn' : 'readout'}>
+                {matchingCaptureSession?.status || 'Not started'}
+              </span>
+            </div>
+            {matchingCaptureSession && (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted">
+                  {matchingCaptureSession.retention_seconds}s retained · {matchingCaptureSession.segment_seconds}s segments
+                </p>
+                {matchingCaptureSession.status === 'recording' && (
+                  <button type="button" onClick={() => triggerNow(matchingCaptureSession.session_id)}
+                    disabled={!!sessionActionBusy} className="btn-ghost text-xs">
                     Clip now
                   </button>
-                  <button type="button" onClick={() => stopCapture(capture.session_id)}
-                    disabled={['stopped', 'ended', 'error'].includes(capture.status) || !!sessionActionBusy}
-                    className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
-                    <Square size={12} /> Stop
-                  </button>
-                </div>
+                )}
               </div>
-            ))}
+            )}
+            {matchingCaptureSession?.error && <p className="mt-2 text-xs text-warn">{matchingCaptureSession.error}</p>}
+          </div>
+        </div>
+
+        {workflowPartial && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
+            <p className="text-xs text-muted">One part is already running. Finish setup to enable automatic highlights, or stop the active part.</p>
+            <button type="button" onClick={stopHighlighting} disabled={!!sessionActionBusy} className="btn-ghost text-xs">
+              Stop active sessions
+            </button>
           </div>
         )}
-      </div>
-      <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-2">Highlight trigger rules</h3>
-        <p className="text-xs text-muted mb-3">Choose exactly what is allowed to create a candidate. Either mode keeps the existing phrase OR chat-activity behavior.</p>
-        <label className="block text-xs text-muted mb-1">Create a highlight when</label>
-        <select
-          value={triggerSettings.mode || 'either'}
-          onChange={(event) => setTriggerSettings((current) => ({ ...current, mode: event.target.value }))}
-          className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink mb-3"
-        >
-          <option value="either">A phrase matches or chat activity spikes</option>
-          <option value="phrases">A configured phrase matches only</option>
-          <option value="chat_volume">Chat activity reaches its threshold only</option>
-        </select>
-        {triggerSettings.mode !== 'chat_volume' && (
-          <>
-            <label className="block text-xs text-muted mb-1">Trigger phrases, comma-separated</label>
-            <input
-              value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
-              onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
-              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink mb-3"
-            />
-          </>
+
+        {otherActiveSessions.length > 0 && (
+          <details className="border-t border-rule pt-3">
+            <summary className="cursor-pointer text-xs font-medium text-muted">
+              Other active streams ({otherActiveSessions.length})
+            </summary>
+            <div className="mt-3 space-y-2">
+              {otherActiveSessions.map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-ink2">{item.provider === 'twitch' ? 'Twitch' : 'YouTube'} · {item.stream_id} · {item.type}</span>
+                  <span className="readout">{item.status}</span>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {triggerSettings.mode !== 'phrases' && [
-            ['min_messages', 'Messages', 2, 500],
-            ['min_unique_users', 'Unique viewers', 1, 500],
-          ].map(([key, label, min, max]) => (
-            <label key={key} className="text-xs text-muted">
-              <span className="block mb-1">{label}</span>
-              <input type="number" min={min} max={max} value={triggerSettings[key]}
-                onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+
+        <details className="border-t border-rule pt-3">
+          <summary className="cursor-pointer text-sm font-medium text-ink">Capture quality and storage</summary>
+          <p className="mt-2 text-xs text-muted">These settings apply when the next rolling buffer starts. They do not change an active recording.</p>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              ['segment_seconds', 'Segment length', 1, 60],
+              ['retention_seconds', 'Buffer retention', 8, 3600],
+              ['max_buffer_size_mb', 'Buffer cap (MB)', 16, 8192],
+            ].map(([key, label, min, max]) => (
+              <label key={key} className="text-xs text-muted">
+                <span className="mb-1 block">{label}</span>
+                <input type="number" min={min} max={max} value={captureSettings[key]}
+                  onChange={(event) => setCaptureSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                  className="input-field" />
+              </label>
+            ))}
+            <label className="text-xs text-muted">
+              <span className="mb-1 block">Stream quality</span>
+              <select value={captureSettings.quality}
+                onChange={(event) => setCaptureSettings((current) => ({ ...current, quality: event.target.value }))}
+                className="input-field">
+                <option value="best">Best available</option>
+                <option value="1080p60">1080p60</option>
+                <option value="1080p">1080p</option>
+                <option value="720p60">720p60</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+                <option value="360p">360p</option>
+                <option value="worst">Lowest available</option>
+                <option value="audio_only">Audio only</option>
+              </select>
             </label>
-          ))}
+          </div>
+        </details>
+      </section>
+
+      <section className="card p-5 sm:p-6 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow mb-1">Preferences</p>
+            <h2 className="text-lg font-medium text-ink">Trigger rules</h2>
+            <p className="mt-1 text-sm text-muted">Choose what creates a highlight and how much footage to keep around it.</p>
+          </div>
+          {triggerSettingsDirty ? <span className="badge-warn">Unsaved changes</span> : <span className="badge-ok">Saved</span>}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="text-xs text-muted">
+            <span className="mb-1.5 block font-medium text-ink2">Create a highlight when</span>
+            <select value={triggerSettings.mode || 'either'}
+              onChange={(event) => setTriggerSettings((current) => ({ ...current, mode: event.target.value }))}
+              className="input-field">
+              <option value="either">A phrase matches or chat activity spikes</option>
+              <option value="phrases">A configured phrase matches only</option>
+              <option value="chat_volume">Chat activity reaches its threshold only</option>
+            </select>
+          </label>
+          {triggerSettings.mode !== 'chat_volume' && (
+            <label className="text-xs text-muted">
+              <span className="mb-1.5 block font-medium text-ink2">Trigger phrases</span>
+              <input
+                value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
+                onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
+                placeholder="clip it, clip that"
+                className="input-field"
+              />
+            </label>
+          )}
+        </div>
+
+        {triggerSettings.mode !== 'phrases' && (
+          <div className="rounded-card border border-rule bg-paper2 p-4">
+            <p className="text-sm font-medium text-ink">Chat activity threshold</p>
+            <p className="mb-3 mt-1 text-xs text-muted">A burst must reach both the message and unique-viewer thresholds inside this window.</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {[
+                ['min_messages', 'Messages', 2, 500],
+                ['min_unique_users', 'Unique viewers', 1, 500],
+                ['window_seconds', 'Window (seconds)', 1, 120],
+              ].map(([key, label, min, max]) => (
+                <label key={key} className="text-xs text-muted">
+                  <span className="mb-1 block">{label}</span>
+                  <input type="number" min={min} max={max} value={triggerSettings[key]}
+                    onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                    className="input-field" />
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {[
-            ['window_seconds', 'Chat window (s)', 1, 120],
-            ['cooldown_seconds', 'Cooldown (s)', 0, 3600],
-            ['pre_seconds', 'Seconds before', 0, 300],
-            ['post_seconds', 'Seconds after', 0, 300],
+            ['pre_seconds', 'Footage before (seconds)', 0, 300],
+            ['post_seconds', 'Footage after (seconds)', 0, 300],
+            ['cooldown_seconds', 'Cooldown (seconds)', 0, 3600],
           ].map(([key, label, min, max]) => (
             <label key={key} className="text-xs text-muted">
-              <span className="block mb-1">{label}</span>
+              <span className="mb-1 block">{label}</span>
               <input type="number" min={min} max={max} value={triggerSettings[key]}
                 onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+                className="input-field" />
             </label>
           ))}
         </div>
-        <button type="button" onClick={saveTriggerSettings} disabled={settingsBusy}
-          className="mt-3 rounded-input border border-rule px-4 py-2 text-xs text-ink disabled:opacity-50">
-          {settingsBusy ? 'Saving…' : 'Save trigger settings'}
-        </button>
-      </div>
-      <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-3">Review highlights</h3>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
+          <p className="text-xs text-muted">
+            {triggerSettingsDirty
+              ? 'Save changes before they are used by automatic triggers. Clip now uses the last saved window.'
+              : 'Saved settings apply to new triggers, including triggers from an active chat.'}
+          </p>
+          <button type="button" onClick={saveTriggerSettings} disabled={settingsBusy || !triggerSettingsDirty} className="btn-ghost">
+            {settingsBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+            {settingsBusy ? 'Saving…' : 'Save settings'}
+          </button>
+        </div>
+      </section>
+
+      <section className="card p-5 sm:p-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="eyebrow mb-1">Review</p>
+            <h2 className="text-lg font-medium text-ink">Highlights</h2>
+          </div>
+          <span className="readout">{candidates.filter((candidate) => candidate.status === 'ready').length} ready · {candidates.length} total</span>
+        </div>
+
         {candidates.length === 0 ? (
-          <p className="text-xs text-muted">No candidates yet. Chat reactions will appear here when both monitoring and recording are active for the same stream.</p>
+          <div className="mt-4 rounded-card border border-dashed border-rule px-5 py-8 text-center">
+            <Radio size={20} className="mx-auto text-muted" />
+            <p className="mt-2 text-sm font-medium text-ink">No highlights yet</p>
+            <p className="mt-1 text-xs text-muted">Start a stream above. New candidates will appear here when chat activity matches your rules.</p>
+          </div>
         ) : (
-          <div className="space-y-2">
-            {candidates.map((candidate) => (
-              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                  <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
-                    <span className={candidate.status === 'ready' ? 'badge-ok' : 'readout'}>{candidate.status}</span>
-                  </div>
-                  <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments · {candidate.review_status || 'pending review'}</p>
-                  {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
-                  {candidate.generation_error && <p className="text-xs text-warn mt-1">{candidate.generation_error}</p>}
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  {candidate.status === 'ready' && (
-                    <>
-                      {candidate.review_status !== 'rejected' && (
+          <div className="mt-4 divide-y divide-rule">
+            {[...candidates].sort((a, b) => String(b.triggered_at).localeCompare(String(a.triggered_at))).map((candidate) => {
+              const sourceSession = captures.find((capture) => capture.session_id === candidate.capture_session_id);
+              const triggerCount = Math.max(1, Number(candidate.trigger_count) || 1);
+              const windowSeconds = (Number(candidate.pre_seconds) || 0) + (Number(candidate.post_seconds) || 0);
+              const reason = candidate.reason === 'phrase'
+                ? 'Phrase matched'
+                : candidate.reason === 'chat_volume'
+                  ? 'Chat activity'
+                  : 'Manual highlight';
+              return (
+                <article key={candidate.candidate_id} className="py-4 first:pt-4 last:pb-0">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-ink">{reason}</span>
+                        <span className={candidate.status === 'ready' ? 'badge-ok' : candidate.status === 'error' ? 'badge-danger' : 'readout'}>
+                          {candidate.status === 'ready' ? 'Ready to review' : candidate.status}
+                        </span>
+                        {triggerCount > 1 && <span className="readout">{triggerCount} triggers merged</span>}
+                      </div>
+                      <p className="mt-1 text-xs text-muted">
+                        {sourceSession ? `${sourceSession.provider === 'twitch' ? 'Twitch' : 'YouTube'} · ${sourceSession.stream_id}` : 'Stream details unavailable'}
+                        {' · '}{formatDuration(windowSeconds)} window span
+                        {' · '}{candidate.segment_count || 0} segments
+                      </p>
+                      {candidate.error && <p className="mt-2 text-xs text-warn">{candidate.error}</p>}
+                      {candidate.generation_error && <p className="mt-1 text-xs text-warn">{candidate.generation_error}</p>}
+                      {candidate.generation_status === 'completed' && <p className="mt-1 text-xs text-ok">Short generated</p>}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {candidate.status === 'ready' && candidate.review_status !== 'rejected' && (
                         <>
                           <button type="button" onClick={() => openCandidatePreview(candidate.candidate_id)}
-                            disabled={!!previewBusy || reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                            {previewBusy === candidate.candidate_id ? 'Loading…' : 'Preview'}
+                            disabled={!!previewBusy || reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">
+                            {previewBusy === candidate.candidate_id ? <Loader2 size={14} className="animate-spin" /> : null}
+                            {previewBusy === candidate.candidate_id ? 'Loading' : 'Preview'}
                           </button>
-                          <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                            {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
-                          </button>
+                          <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)}
+                            disabled={reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">Download</button>
                         </>
                       )}
-                      {candidate.review_status === 'pending' && (
+                      {candidate.status === 'ready' && candidate.review_status === 'pending' && (
                         <>
-                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                            {reviewBusy === candidate.candidate_id ? 'Starting…' : 'Approve & Generate'}
-                          </button>
-                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
+                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)}
+                            disabled={reviewBusy === candidate.candidate_id} className="btn-primary text-xs">Approve & generate</button>
+                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)}
+                            disabled={reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">Reject</button>
                         </>
                       )}
                       {candidate.review_status === 'approved' && candidate.generation_status === 'not_started' && (
-                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Generate Short</button>
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-primary text-xs">Generate Short</button>
                       )}
                       {['staging', 'queued', 'processing'].includes(candidate.generation_status) && (
-                        <span className="text-xs text-muted">{candidate.generation_status === 'staging' ? 'Preparing source…' : 'Generating Short…'}</span>
+                        <span className="readout">{candidate.generation_status === 'staging' ? 'Preparing source' : 'Generating Short'}</span>
                       )}
                       {candidate.generation_status === 'failed' && (
-                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Retry Short</button>
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">Retry Short</button>
                       )}
                       {candidate.generation_status === 'completed' && candidate.generation_job_id && (
-                        <button type="button" onClick={() => { openedGenerationJobs.current.add(candidate.generation_job_id); onOpenJob?.(candidate.generation_job_id); }}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink">Open Short</button>
+                        <button type="button" onClick={() => {
+                          openedGenerationJobs.current.add(candidate.generation_job_id);
+                          onOpenJob?.(candidate.generation_job_id);
+                        }} className="btn-ghost text-xs">Open Short</button>
                       )}
-                    </>
-                  )}
-                  <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
-                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing' || ['staging', 'queued', 'processing'].includes(candidate.generation_status)}
-                    title="Delete candidate and local file"
-                    aria-label="Delete candidate"
-                    className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40">
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                </div>
-                {previewCandidateId === candidate.candidate_id && (
-                  <div className="mt-3 rounded-input border border-rule bg-paper3 p-3">
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <span className="text-xs font-medium text-ink">Clip preview</span>
-                      <button type="button" onClick={closeCandidatePreview}
-                        className="text-xs text-muted hover:text-ink">Close preview</button>
+                      <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
+                        disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing' || ['staging', 'queued', 'processing'].includes(candidate.generation_status)}
+                        title="Delete highlight and local video" aria-label="Delete highlight"
+                        className="btn-ghost !px-3 text-xs"><Trash2 size={14} /></button>
                     </div>
-                    {previewUrl ? (
-                      <video
-                        key={previewUrl}
-                        src={previewUrl}
-                        controls
-                        playsInline
-                        preload="metadata"
-                        className="w-full max-h-[420px] rounded-input bg-black"
-                      />
-                    ) : (
-                      <p className="text-xs text-muted">{previewBusy === candidate.candidate_id ? 'Preparing preview…' : 'Preview unavailable.'}</p>
-                    )}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {pendingApprovalCandidateId === candidate.candidate_id && (
+                    <div className="mt-3 rounded-card border border-rule bg-paper2 p-3">
+                      <p className="text-sm text-ink">Approve this highlight and generate one vertical Short?</p>
+                      <p className="mt-1 text-xs text-muted">Confirm that you own this content or have permission to process it.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-primary text-xs">Confirm & generate</button>
+                        <button type="button" onClick={() => setPendingApprovalCandidateId('')} className="btn-ghost text-xs">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {pendingDeleteCandidateId === candidate.candidate_id && (
+                    <div className="mt-3 rounded-card border border-rule bg-paper2 p-3">
+                      <p className="text-sm text-ink">Delete this highlight and its local video?</p>
+                      <p className="mt-1 text-xs text-muted">This cannot be undone.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => deleteCandidate(candidate.candidate_id, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-danger text-xs">Delete highlight</button>
+                        <button type="button" onClick={() => setPendingDeleteCandidateId('')} className="btn-ghost text-xs">Keep it</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {previewCandidateId === candidate.candidate_id && (
+                    <div className="mt-4 rounded-card border border-rule bg-paper2 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-ink">Preview</span>
+                        <button type="button" onClick={closeCandidatePreview} className="text-xs text-muted underline underline-offset-2">Close</button>
+                      </div>
+                      {previewUrl ? (
+                        <video key={previewUrl} src={previewUrl} controls playsInline preload="metadata"
+                          className="max-h-[420px] w-full rounded-input bg-black" />
+                      ) : (
+                        <p className="text-xs text-muted">{previewBusy === candidate.candidate_id ? 'Preparing preview…' : 'Preview unavailable.'}</p>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
-      </div>
-      <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Approving a candidate starts one vertical Short through Clippy's normal generation pipeline. The original highlight remains available locally; publishing is always a separate action.
-      </p>
-    </section>
+
+        <p className="mt-4 border-t border-rule pt-3 text-xs text-muted">
+          Approving a highlight creates one vertical Short in Clippy. Publishing remains a separate action.
+        </p>
+      </section>
+
+      <details className="card p-4">
+        <summary className="cursor-pointer text-sm font-medium text-ink">Live chat messages and diagnostics</summary>
+        <div className="mt-3 space-y-4">
+          {sessions.length === 0 ? (
+            <p className="text-xs text-muted">No chat sessions are currently visible.</p>
+          ) : sessions.map((session) => (
+            <div key={session.session_id} className="border-t border-rule pt-3 first:border-0 first:pt-0">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink2">{session.provider === 'twitch' ? 'Twitch' : 'YouTube'} · {session.stream_id}</p>
+                <span className="readout">{statusLabel(session.status)} · {session.message_count || 0} messages</span>
+              </div>
+              {session.error && <p className="mt-1 text-xs text-warn">{session.error}</p>}
+              {session.diagnostic && (
+                <p className="mt-1 text-xs text-muted">
+                  {session.diagnostic.operation} · HTTP {session.diagnostic.http_status} · {session.diagnostic.reason}
+                </p>
+              )}
+              {session.messages?.length ? (
+                <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
+                  {session.messages.slice(-8).map((message) => (
+                    <p key={message.message_id} className="break-words text-xs text-muted">
+                      <span className="font-medium text-ink2">{message.sender_name}: </span>{message.text}
+                    </p>
+                  ))}
+                </div>
+              ) : <p className="mt-2 text-xs text-muted">Waiting for messages.</p>}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
   );
 }
