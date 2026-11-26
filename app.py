@@ -3515,12 +3515,12 @@ def _public_template_analysis_job(
 
 
 async def _run_template_analysis_job(job_id: str, api_key: str | None = None):
-    from template_system.jobs import execute_reference_analysis_job
-    from template_system.providers.reference_video import GeminiReferenceAnalyzer
-
     async with _TEMPLATE_ANALYSIS_SEMAPHORE:
         store = None
         try:
+            from template_system.jobs import execute_reference_analysis_job
+            from template_system.providers.reference_video import GeminiReferenceAnalyzer
+
             store = _template_analysis_store()
             analyzer_factory = None
             if api_key:
