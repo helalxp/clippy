@@ -726,6 +726,10 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
               const sourceSession = captures.find((capture) => capture.session_id === candidate.capture_session_id);
               const triggerCount = Math.max(1, Number(candidate.trigger_count) || 1);
               const windowSeconds = (Number(candidate.pre_seconds) || 0) + (Number(candidate.post_seconds) || 0);
+              const measuredDuration = Number(candidate.actual_duration_seconds);
+              const measuredDurationLabel = Number.isFinite(measuredDuration) && measuredDuration > 0
+                ? `Actual MP4: ${measuredDuration.toFixed(1)}s`
+                : 'Actual duration unavailable';
               const reason = candidate.reason === 'phrase'
                 ? 'Phrase matched'
                 : candidate.reason === 'chat_volume'
@@ -745,6 +749,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
                       <p className="mt-1 text-xs text-muted">
                         {sourceSession ? `${sourceSession.provider === 'twitch' ? 'Twitch' : 'YouTube'} · ${sourceSession.stream_id}` : 'Stream details unavailable'}
                         {' · '}{formatDuration(windowSeconds)} window span
+                        {' · '}{measuredDurationLabel}
                         {' · '}{candidate.segment_count || 0} segments
                       </p>
                       {candidate.error && <p className="mt-2 text-xs text-warn">{candidate.error}</p>}
