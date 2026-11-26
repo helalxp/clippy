@@ -8,6 +8,7 @@ import {
   isCommunityHighlightsSessionActive,
   isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
+  shouldContinueCommunityHighlightsStatusPolling,
 } from '../lib/communityHighlights';
 
 const TERMINAL_SESSION_STATES = COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES;
@@ -33,6 +34,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
+  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
   const [captureSettings, setCaptureSettings] = useState({ segment_seconds: 4, retention_seconds: 180, max_buffer_size_mb: 512, quality: 'best' });
   const [candidates, setCandidates] = useState([]);
   const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], mode: 'either', min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
@@ -173,16 +175,22 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     || candidates.some((candidate) => candidate.status === 'capturing')
   );
 
-  const refreshSessions = async () => {
-    const [chatResult, captureResult, candidateResult] = await Promise.all([
-      apiJson('/api/community-highlights/sessions'),
-      apiJson('/api/community-highlights/captures'),
-      apiJson('/api/community-highlights/candidates'),
-    ]);
-    setSessions(chatResult.sessions || []);
-    setCaptures(captureResult.sessions || []);
-    setCandidates(candidateResult.candidates || []);
-  };
+  const refreshSessions = useCallback(async () => {
+    try {
+      const [chatResult, captureResult, candidateResult] = await Promise.all([
+        apiJson('/api/community-highlights/sessions'),
+        apiJson('/api/community-highlights/captures'),
+        apiJson('/api/community-highlights/candidates'),
+      ]);
+      setSessions(chatResult.sessions || []);
+      setCaptures(captureResult.sessions || []);
+      setCandidates(candidateResult.candidates || []);
+      setStatusLoadFailed(false);
+    } catch (requestError) {
+      setStatusLoadFailed(true);
+      throw requestError;
+    }
+  }, []);
 
   useEffect(() => {
     // No readable provider status means the protected feature API cannot be
@@ -192,28 +200,23 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     let active = true;
     const refresh = async () => {
       try {
-        const [chatResult, captureResult, candidateResult] = await Promise.all([
-          apiJson('/api/community-highlights/sessions'),
-          apiJson('/api/community-highlights/captures'),
-          apiJson('/api/community-highlights/candidates'),
-        ]);
-        if (active) {
-          setSessions(chatResult.sessions || []);
-          setCaptures(captureResult.sessions || []);
-          setCandidates(candidateResult.candidates || []);
-        }
+        await refreshSessions();
       } catch (requestError) {
         if (active) setError(requestError?.detail || 'Could not load Community Highlights status.');
       }
     };
 
     refresh();
-    const interval = hasActiveWork ? setInterval(refresh, 3000) : null;
+    const shouldPoll = shouldContinueCommunityHighlightsStatusPolling(
+      hasActiveWork,
+      statusLoadFailed,
+    );
+    const interval = shouldPoll ? setInterval(refresh, 3000) : null;
     return () => {
       active = false;
       if (interval) clearInterval(interval);
     };
-  }, [connections, hasActiveWork]);
+  }, [connections, hasActiveWork, statusLoadFailed, refreshSessions]);
 
   useEffect(() => {
     if (!connections) return undefined;

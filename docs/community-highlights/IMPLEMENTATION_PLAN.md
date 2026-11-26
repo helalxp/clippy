@@ -28,6 +28,7 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Apply one shared terminal-session policy to stream matching and polling; restored `interrupted` sessions no longer appear active in the workflow. Add a focused unit test for terminal and in-flight statuses.
 - [x] Show the success badge only when chat is `connected` and the rolling buffer is `recording`; connecting, reconnecting, and stopping states are not described as active. Add focused helper tests.
 - [x] Pass dashboard CI for the terminal-state and workflow-health UI corrections. Updated UI head `f664f835` passed backend tests, dashboard unit tests, and production build in GitHub Actions run [#45875358353](https://github.com/helalxp/clippy/actions/runs/45875358353).
+- [x] Retry status loading after a transient request failure, then stop polling again when status recovers and no active work remains. Add a focused polling-policy test.
 - [ ] Perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
 - [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
 

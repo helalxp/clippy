@@ -77,3 +77,7 @@ export function isCommunityHighlightsSessionActive(session) {
 export function isCommunityHighlightsWorkflowActive(chatSession, captureSession) {
   return chatSession?.status === "connected" && captureSession?.status === "recording";
 }
+
+export function shouldContinueCommunityHighlightsStatusPolling(hasActiveWork, statusLoadFailed) {
+  return Boolean(hasActiveWork || statusLoadFailed);
+}

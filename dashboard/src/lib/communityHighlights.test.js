@@ -7,6 +7,7 @@ import {
   isCommunityHighlightsSessionActive,
   isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
+  shouldContinueCommunityHighlightsStatusPolling,
 } from "./communityHighlights.js";
 
 test("parses Twitch channel URLs and normalizes provider identity", () => {
@@ -122,4 +123,12 @@ test("reports highlighting as active only when chat is connected and recording i
 
   assert.equal(isCommunityHighlightsWorkflowActive(null, { status: "recording" }), false);
   assert.equal(isCommunityHighlightsWorkflowActive({ status: "connected" }, null), false);
+});
+
+
+test("retries status polling after a failed load, then allows idle polling to stop", () => {
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(false, false), false);
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(false, true), true);
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(true, false), true);
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(true, true), true);
 });
