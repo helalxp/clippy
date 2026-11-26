@@ -33,7 +33,8 @@ import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
-                            snap_clip_to_words, trim_to_best)
+                            snap_clip_to_words, trim_to_best,
+                            validate_detail_clip_proposals)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, cut_clip, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB)
 from dotenv import load_dotenv
@@ -2135,6 +2136,11 @@ def get_viral_clips(transcript_result, video_duration):
         shorts = _run_stage_split(client, model_name, shortlist,
                                   _detail_prompt_for(min_clips, max_clips),
                                   gemini_worker.DetailResponse, "shorts", costs, "detail")
+        valid_shorts = validate_detail_clip_proposals(shorts, shortlist, video_duration)
+        if len(valid_shorts) != len(shorts):
+            print(f"   ⚠️ Rejected {len(shorts) - len(valid_shorts)} invalid detail proposal(s) "
+                  f"with non-finite timestamps or an unknown/out-of-window source id.")
+        shorts = valid_shorts
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
@@ -2153,6 +2159,7 @@ def get_viral_clips(transcript_result, video_duration):
                     client, model_name, spare,
                     _detail_prompt_for(missing, max(missing, len(spare))),
                     gemini_worker.DetailResponse, "shorts", costs, "detail-floor")
+                extra = validate_detail_clip_proposals(extra, spare, video_duration)
                 if extra:
                     shorts = sorted(shorts + extra,
                                     key=lambda s: float(s.get("start") or 0))
@@ -2167,6 +2174,7 @@ def get_viral_clips(transcript_result, video_duration):
             print(f"   Kept the {max_clips} best-scoring clip(s) of "
                   f"{max_clips + dropped}.")
         # Snap each proposed clip onto real word boundaries (+ a bit of silence).
+        snapped_shorts = []
         for s in shorts:
             # Keep the model's raw proposal: it is how boundary accuracy is
             # measured (distance to the nearest word before the snap; p90 was
@@ -2174,7 +2182,15 @@ def get_viral_clips(transcript_result, video_duration):
             s["proposed"] = [s.get("start", 0), s.get("end", 0)]
             ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
                                         min_duration=min_secs, max_duration=max_secs)
+            if (not math.isfinite(ns) or not math.isfinite(ne)
+                    or ns < 0 or ne > video_duration or ne <= ns
+                    or ne - ns < min_secs - 1e-3 or ne - ns > max_secs + 1e-3):
+                print(f"   ⚠️ Dropped clip from {s.get('source_window_id')} after word snapping: "
+                      f"invalid {ns!r}-{ne!r}s boundaries.")
+                continue
             s["start"], s["end"] = ns, ne
+            snapped_shorts.append(s)
+        shorts = snapped_shorts
         deduped = dedupe_overlapping(shorts)
         if len(deduped) < len(shorts):
             print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
@@ -2510,10 +2526,32 @@ if __name__ == '__main__':
     else:
         # Get duration (needed by both the transcript and the vision path).
         cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
         cap.release()
+        duration = frame_count / fps if math.isfinite(fps) and fps > 0 else 0.0
+        if not math.isfinite(duration) or duration <= 0:
+            # OpenCV occasionally reports zero/invalid FPS for otherwise
+            # readable containers. Ask the packaged FFprobe before rejecting
+            # the source; never divide by zero or pass NaN downstream.
+            try:
+                probed = subprocess.check_output(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", input_video],
+                    stderr=subprocess.DEVNULL, timeout=30, text=True,
+                ).strip()
+                duration = float(probed)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Could not determine the source video duration: OpenCV reported "
+                    f"fps={fps}, frames={frame_count}, and FFprobe failed ({exc})."
+                ) from exc
+            if not math.isfinite(duration) or duration <= 0:
+                raise RuntimeError(
+                    "Could not determine a positive, finite source video duration."
+                )
+            print(f"   ℹ️ OpenCV reported an invalid frame rate ({fps:g}); "
+                  f"using FFprobe duration ({duration:.3f}s).")
 
         # 3. Transcribe — unless the video has no audio, in which case fall back
         # to Gemini vision (picks clips from the imagery instead of the speech).
@@ -2557,6 +2595,11 @@ if __name__ == '__main__':
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
 
+        # Preserve the detected language before the sparse-speech fallback
+        # drops the transcript. Vision prompts for sparse Arabic speech should
+        # not silently revert to English.
+        visual_language = str((transcript or {}).get("language") or "en")
+
         # Music-only or wordless footage transcribes to a handful of words.
         # Clip it by what is on screen instead, like a video with no audio.
         if transcript is not None and speech_is_sparse(transcript, duration):
@@ -2574,7 +2617,7 @@ if __name__ == '__main__':
         elif transcript is not None:
             clips_data = get_viral_clips(transcript, duration)
         else:
-            clips_data = get_visual_clips(input_video, duration)
+            clips_data = get_visual_clips(input_video, duration, language=visual_language)
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path
