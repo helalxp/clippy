@@ -455,7 +455,7 @@ class TestArabicSubtitleLayout:
 
         srt = tmp_path / "arabic.srt"
         srt.write_text(
-            "1\\n00:00:00,000 --> 00:00:01,000\\nمرحبا بالعالم\\n",
+            "1\n00:00:00,000 --> 00:00:01,000\nمرحبا بالعالم\n",
             encoding="utf-8",
         )
         filter_graph = subtitles_filter(str(srt), font_name="Anton")
