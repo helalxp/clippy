@@ -3518,9 +3518,10 @@ async def _run_template_analysis_job(job_id: str, api_key: str | None = None):
     from template_system.jobs import execute_reference_analysis_job
     from template_system.providers.reference_video import GeminiReferenceAnalyzer
 
-    store = _template_analysis_store()
     async with _TEMPLATE_ANALYSIS_SEMAPHORE:
+        store = None
         try:
+            store = _template_analysis_store()
             analyzer_factory = None
             if api_key:
                 analyzer_factory = lambda **kwargs: GeminiReferenceAnalyzer(api_key=api_key, **kwargs)
@@ -3528,16 +3529,22 @@ async def _run_template_analysis_job(job_id: str, api_key: str | None = None):
                 execute_reference_analysis_job, store, job_id,
                 analyzer_factory=analyzer_factory,
             )
-        except Exception as exc:
-            _TEMPLATE_ANALYSIS_LOG.exception("Unexpected reference-analysis worker failure: job_id=%s", job_id)
-            try:
-                store.update(
-                    job_id, status="failed", stage="failed",
-                    error=f"{type(exc).__name__}: {str(exc)[:1500]}",
-                    completed_at=datetime.now(timezone.utc).isoformat(),
-                )
-            except Exception:
-                pass
+        except Exception:
+            _TEMPLATE_ANALYSIS_LOG.exception(
+                "Unexpected reference-analysis worker failure: job_id=%s", job_id
+            )
+            if store is not None:
+                try:
+                    store.update(
+                        job_id, status="failed", stage="failed",
+                        error="Unexpected worker failure. See backend.log for its traceback.",
+                        completed_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                except Exception:
+                    _TEMPLATE_ANALYSIS_LOG.exception(
+                        "Could not persist reference-analysis worker failure: job_id=%s",
+                        job_id,
+                    )
 
 
 def _schedule_template_analysis_job(job_id: str, api_key: str | None = None) -> None:
@@ -3588,43 +3595,62 @@ async def create_template_analysis_job(
     gemini_consent: bool = Form(False),
 ):
     """Queue reference-video analysis without coupling it to /api/process."""
-    _assert_data_storage_available()
-    _reference_templates_local_only()
-    if not rights_confirmed:
-        await video.close()
-        raise HTTPException(
-            status_code=400,
-            detail="Confirm that you own this reference video or have permission to analyze it.",
-        )
-
-    original_name = os.path.basename(video.filename or "reference.mp4")
-    suffix = os.path.splitext(original_name)[1].lower()
-    if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}:
-        await video.close()
-        raise HTTPException(
-            status_code=400,
-            detail="Upload an MP4, MOV, MKV, WebM, M4V, or AVI reference video.",
-        )
-
-    api_key = None
-    if gemini_consent:
-        try:
-            api_key = await resolve_gemini(request)
-        except Exception:
-            await video.close()
-            raise
-        if not api_key and not os.environ.get("GEMINI_API_KEY"):
-            await video.close()
+    diagnostic_id = uuid.uuid4().hex[:12]
+    staged = None
+    stage = "request_validation"
+    try:
+        _assert_data_storage_available()
+        _reference_templates_local_only()
+        if not rights_confirmed:
             raise HTTPException(
                 status_code=400,
-                detail="Add a Gemini API key before enabling AI visual analysis.",
+                detail="Confirm that you own this reference video or have permission to analyze it.",
             )
 
-    store = _template_analysis_store()
-    staged = store.new_upload_path(suffix)
-    size = 0
-    limit = MAX_FILE_SIZE_MB * 1024 * 1024
-    try:
+        original_name = os.path.basename(video.filename or "reference.mp4")
+        suffix = os.path.splitext(original_name)[1].lower()
+        if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Upload an MP4, MOV, MKV, WebM, M4V, or AVI reference video.",
+            )
+
+        api_key = None
+        if gemini_consent:
+            stage = "gemini_key_resolution"
+            header_key_present = bool(request.headers.get("X-Gemini-Key"))
+            environment_key_present = bool(os.environ.get("GEMINI_API_KEY"))
+            api_key = await resolve_gemini(request)
+            key_source = (
+                "request_header" if header_key_present and api_key
+                else "environment" if environment_key_present and api_key
+                else "missing"
+            )
+            _TEMPLATE_ANALYSIS_LOG.info(
+                "Template analysis Gemini credential resolution: diagnostic_id=%s header_present=%s environment_present=%s resolved=%s source=%s",
+                diagnostic_id, header_key_present, environment_key_present,
+                bool(api_key), key_source,
+            )
+            if not api_key:
+                _TEMPLATE_ANALYSIS_LOG.warning(
+                    "Template analysis requested Gemini without a resolved key: diagnostic_id=%s",
+                    diagnostic_id,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Gemini visual analysis is enabled, but Clippy did not receive a Gemini API key. "
+                        "Save the key in Settings and retry. "
+                        f"(diagnostic ID: {diagnostic_id})"
+                    ),
+                )
+
+        stage = "template_analysis_storage"
+        store = _template_analysis_store()
+        staged = store.new_upload_path(suffix)
+        size = 0
+        limit = MAX_FILE_SIZE_MB * 1024 * 1024
+        stage = "reference_upload"
         with staged.open("xb") as output:
             while chunk := await video.read(1024 * 1024):
                 size += len(chunk)
@@ -3636,6 +3662,8 @@ async def create_template_analysis_job(
                 output.write(chunk)
         if size <= 0:
             raise HTTPException(status_code=400, detail="The reference video is empty.")
+
+        stage = "job_creation"
         try:
             job = store.create(
                 staged,
@@ -3646,14 +3674,38 @@ async def create_template_analysis_job(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        stage = "job_scheduling"
         _schedule_template_analysis_job(job["id"], api_key)
-        _TEMPLATE_ANALYSIS_LOG.info("Reference-analysis job queued: job_id=%s size_bytes=%s gemini_consent=%s", job["id"], size, bool(gemini_consent))
+        _TEMPLATE_ANALYSIS_LOG.info(
+            "Reference-analysis job queued: diagnostic_id=%s job_id=%s size_bytes=%s gemini_consent=%s",
+            diagnostic_id, job["id"], size, bool(gemini_consent),
+        )
         return {"job": _public_template_analysis_job(store, job)}
+    except HTTPException:
+        raise
+    except Exception:
+        _TEMPLATE_ANALYSIS_LOG.exception(
+            "Reference-analysis upload failed: diagnostic_id=%s stage=%s",
+            diagnostic_id, stage,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not start reference analysis. Check Clippy's backend.log "
+                f"(diagnostic ID: {diagnostic_id})."
+            ),
+        ) from None
     finally:
-        try:
-            staged.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if staged is not None:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                _TEMPLATE_ANALYSIS_LOG.warning(
+                    "Could not remove staged reference upload: diagnostic_id=%s",
+                    diagnostic_id,
+                    exc_info=True,
+                )
         await video.close()
 
 
@@ -3661,8 +3713,21 @@ async def create_template_analysis_job(
 async def list_template_analysis_jobs():
     _assert_data_storage_available()
     _reference_templates_local_only()
-    store = _template_analysis_store()
-    return {"jobs": [_public_template_analysis_job(store, job) for job in store.list()]}
+    diagnostic_id = uuid.uuid4().hex[:12]
+    try:
+        store = _template_analysis_store()
+        return {"jobs": [_public_template_analysis_job(store, job) for job in store.list()]}
+    except Exception:
+        _TEMPLATE_ANALYSIS_LOG.exception(
+            "Could not list reference-analysis jobs: diagnostic_id=%s", diagnostic_id
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not load reference analyses. Check Clippy's backend.log "
+                f"(diagnostic ID: {diagnostic_id})."
+            ),
+        ) from None
 
 
 @app.get("/api/template-analysis/jobs/{job_id}")
@@ -3758,11 +3823,21 @@ async def save_template_analysis_draft(job_id: str, request: TemplateAnalysisDra
 async def list_template_system_documents():
     _assert_data_storage_available()
     _reference_templates_local_only()
+    diagnostic_id = uuid.uuid4().hex[:12]
     try:
         documents = await asyncio.to_thread(_template_system_storage().list)
         return {"templates": [_public_template_system_document(item) for item in documents]}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not read local template library: {exc}") from exc
+    except Exception:
+        _TEMPLATE_ANALYSIS_LOG.exception(
+            "Could not read local template library: diagnostic_id=%s", diagnostic_id
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not read local template library. Check Clippy's backend.log "
+                f"(diagnostic ID: {diagnostic_id})."
+            ),
+        ) from None
 
 
 @app.get("/api/template-library/templates/{template_id}/compatibility")
