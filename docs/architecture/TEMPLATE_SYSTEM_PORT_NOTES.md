@@ -38,13 +38,13 @@ The API and edit-locking tests from PR #6 are also withheld for now because they
 
 ## Explicit non-claims
 
-This port now includes the Templates workbench screen and its local reference-analysis workflow: durable jobs, deterministic media analysis, optional consent-gated Gemini interpretation, evidence review/correction, and saving an accepted subset as a local template draft. It does **not** provide precise original-font identification or exhaustive frame-by-frame reverse engineering. The saved-draft area is currently a read-only list, not a complete template detail/editor workflow; renderer compatibility is not yet surfaced in the UI; preview/final parity and generation integration are not implemented. Managed/cloud template storage remains disabled until account-scoped storage and media delivery exist.
+This port now includes the Templates workbench screen and its local reference-analysis workflow: durable jobs, deterministic media analysis, optional consent-gated Gemini interpretation, evidence review/correction, and saving an accepted subset as a local template draft. It does **not** provide precise original-font identification or exhaustive frame-by-frame reverse engineering. The saved-draft area is currently a read-only list, not a complete template detail/editor workflow; a read-only renderer-compatibility preflight is now surfaced for Python/FFmpeg, Remotion preview and Remotion render; the template detail/editor workflow is still missing. Preview/final parity and generation integration are not implemented. Managed/cloud template storage remains disabled until account-scoped storage and media delivery exist.
 
 ## Next implementation sequence
 
 1. Keep the fresh-main port green across focused template tests, backend CI, frontend build and Windows installer validation; address failures before widening scope.
 2. Validate analysis quality against a representative manually labeled reference-video corpus, including false claims, missed findings, geometry/timing error and top-k font-candidate accuracy.
-3. Complete the local template library/editor workflow: detail inspection, supported metadata/recipe editing, revision-safe saves, safe deletion and visible compatibility reports for each renderer.
+3. Complete the local template library/editor workflow: detail inspection, supported metadata/recipe editing, revision-safe saves and safe deletion. Build on the now-visible compatibility reports for each renderer.
 4. Unify preview/final rendering contracts and close unsupported or approximate capability gaps without silently dropping requested behavior.
 5. Add explicit user-approved single-clip template application; only then consider batch or normal generation-pipeline integration. Keep managed/cloud storage deferred until ownership and media-delivery boundaries are designed.
 
