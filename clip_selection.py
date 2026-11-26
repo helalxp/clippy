@@ -3,6 +3,8 @@ Pure helpers for the Gemini clip-selection pipeline.
 
 Standard-library only so both main.py and gemini_worker.py can import it and
 the logic stays unit-testable without the heavy video dependencies.
+
+import math
 """
 
 # USD per 1M tokens (input, output incl. thinking), from ai.google.dev pricing.
@@ -298,6 +300,63 @@ def dedupe_overlapping(shorts, ratio=0.25):
         if not clash:
             kept.append((idx, clip))
     return [c for _, c in sorted(kept, key=lambda p: p[0])]
+
+
+def validate_detail_clip_proposals(shorts, windows, video_duration, tolerance=0.5):
+    """Keep only finite clip proposals tied to a real, in-bounds source window.
+
+    The model prompt asks for these constraints, but generated JSON is not a
+    trust boundary. A half-second tolerance absorbs harmless decimal rounding
+    while still preventing cuts from escaping their candidate window.
+    """
+    try:
+        duration = float(video_duration)
+    except (TypeError, ValueError):
+        return []
+    if not math.isfinite(duration) or duration <= 0:
+        return []
+
+    by_id = {
+        str(window.get("id")): window
+        for window in (windows or [])
+        if isinstance(window, dict) and window.get("id") is not None
+    }
+    valid = []
+    for clip in shorts or []:
+        if not isinstance(clip, dict):
+            continue
+        raw_start, raw_end = clip.get("start"), clip.get("end")
+        if isinstance(raw_start, bool) or isinstance(raw_end, bool):
+            continue
+        try:
+            start, end = float(raw_start), float(raw_end)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(start) or not math.isfinite(end):
+            continue
+        if start < 0 or end <= start or end > duration:
+            continue
+
+        window_id = clip.get("source_window_id")
+        window = by_id.get(str(window_id)) if window_id is not None else None
+        if window is None:
+            continue
+        try:
+            window_start = float(window["start"])
+            window_end = float(window["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(window_start) or not math.isfinite(window_end):
+            continue
+        if start < window_start - tolerance or end > window_end + tolerance:
+            continue
+
+        normalized = dict(clip)
+        normalized["start"] = start
+        normalized["end"] = end
+        valid.append(normalized)
+
+    return valid
 
 
 def snap_clip_to_words(start, end, words, video_duration,
