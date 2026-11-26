@@ -233,40 +233,24 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
 
     setError('');
     setStartingAction('workflow');
-    let createdCaptureId = null;
     try {
+      // Capture and chat starts are both idempotent. Do not attempt rollback if
+      // chat start fails: the returned capture ID does not tell us whether this
+      // click created the buffer or reused an existing one.
       if (!matchingCaptureSession) {
-        const capture = await apiJson('/api/community-highlights/captures', {
+        await apiJson('/api/community-highlights/captures', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
         });
-        createdCaptureId = capture?.session_id || null;
       }
 
       if (!matchingChatSession) {
-        try {
-          await apiJson('/api/community-highlights/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stream_url: streamUrl.trim() }),
-          });
-        } catch (chatError) {
-          // Roll back only a buffer created by this click; never stop an
-          // existing recording if starting chat fails.
-          if (createdCaptureId) {
-            try {
-              await apiJson(`/api/community-highlights/captures/${encodeURIComponent(createdCaptureId)}`, {
-                method: 'DELETE',
-              });
-            } catch {
-              throw new Error(
-                `${chatError?.detail || chatError.message || 'Chat monitoring could not start.'} The new rolling buffer may still be running; stop it from this page.`,
-              );
-            }
-          }
-          throw chatError;
-        }
+        await apiJson('/api/community-highlights/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stream_url: streamUrl.trim() }),
+        });
       }
 
       await refreshSessions().catch((refreshError) => {
