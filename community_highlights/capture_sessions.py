@@ -718,10 +718,10 @@ class CaptureSessionManager:
                 None,
             )
             if session is None:
-                log_event("candidate.trigger.ignored", level=logging.WARNING, provider=provider, outcome="no_active_capture")
+                log_event("candidate.trigger.ignored", level=logging.WARNING, provider=provider, outcome="no_active_capture", failure_code="no_active_capture")
                 return None
             if session.config.retention_seconds < pre_seconds + post_seconds + session.config.segment_seconds:
-                log_event("candidate.trigger.rejected", level=logging.WARNING, provider=provider, session_id=session.session_id, reason=reason, outcome="retention_too_short")
+                log_event("candidate.trigger.rejected", level=logging.WARNING, provider=provider, session_id=session.session_id, reason=reason, outcome="retention_too_short", failure_code="retention_too_short")
                 raise ValueError("Increase rolling-buffer retention to cover the requested highlight window.")
 
             indexed = session.capture.read_segment_index()
@@ -1210,7 +1210,6 @@ class CaptureSessionManager:
                         "A committed Community Highlights deletion needs filesystem cleanup (error_type=%s)",
                         type(error).__name__,
                     )
-            log_event("candidate.deleted", candidate_id=candidate_id)
             log_event("candidate.deleted", candidate_id=candidate_id)
             return True
 

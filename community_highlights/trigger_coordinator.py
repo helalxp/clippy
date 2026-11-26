@@ -7,12 +7,40 @@ from typing import Any
 
 from .capture_sessions import capture_sessions
 from .models import ChatMessage
-from .state_store import get_state_store
+from .state_store import StateStoreError, get_state_store
+from .rolling_capture import RollingCaptureError
 from .diagnostics import log_event
 from .triggers import TriggerEngine, TriggerRule
 
 
 _LOG = logging.getLogger(__name__)
+
+
+def _trigger_failure_code(error: Exception) -> str:
+    """Map known capture failures to stable, content-free diagnostic outcomes."""
+    if isinstance(error, StateStoreError):
+        return "state_store_error"
+    message = str(error).lower()
+    if isinstance(error, RollingCaptureError):
+        if "storage budget" in message:
+            return "protected_buffer_limit"
+        return "capture_storage_error"
+    if isinstance(error, ValueError):
+        if "retention" in message:
+            return "retention_too_short"
+        if "queue is full" in message:
+            return "candidate_queue_full"
+        if any(term in message for term in (
+            "pre-trigger window",
+            "post-trigger footage",
+            "recording gap",
+            "no completed segments overlap",
+        )):
+            return "capture_window_unavailable"
+        return "invalid_trigger"
+    if isinstance(error, OSError):
+        return "capture_io_error"
+    return "unexpected_error"
 
 
 class TriggerCoordinator:
@@ -183,11 +211,14 @@ class TriggerCoordinator:
                 # it came from validation, capture I/O, or durable-state storage.
                 # Log only fixed labels and the exception type, never chat content,
                 # stream identifiers/URLs, or credential data.
+                failure_code = _trigger_failure_code(error)
                 _LOG.warning(
-                    "Community Highlights trigger was not captured (provider=%s, reason=%s, error_type=%s)",
+                    "Community Highlights trigger was not captured "
+                    "(provider=%s, reason=%s, error_type=%s, failure_code=%s)",
                     match.provider,
                     match.reason,
                     type(error).__name__,
+                    failure_code,
                 )
                 log_event(
                     "trigger.capture.failed",
@@ -195,6 +226,7 @@ class TriggerCoordinator:
                     provider=match.provider,
                     reason=match.reason,
                     error_type=type(error).__name__,
+                    failure_code=failure_code,
                 )
 
 

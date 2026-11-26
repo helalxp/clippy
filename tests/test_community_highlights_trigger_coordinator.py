@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from community_highlights.models import ChatMessage, ChatProvider
 from community_highlights.state_store import StateStoreError
+from community_highlights.rolling_capture import RollingCaptureError
 from community_highlights.trigger_coordinator import TriggerCoordinator
 
 
@@ -118,9 +119,40 @@ def test_trigger_creation_failure_is_logged_without_chat_content_or_identity(cap
     assert "provider=twitch" in caplog.text
     assert "reason=phrase" in caplog.text
     assert "ValueError" in caplog.text
+    assert '"failure_code":"capture_window_unavailable"' in caplog.text
     assert private_text not in caplog.text
     assert private_message_id not in caplog.text
     assert item.stream_id not in caplog.text
+
+def test_trigger_failures_include_stable_diagnostic_outcomes(caplog):
+    cases = [
+        (
+            ValueError("Increase rolling-buffer retention to cover the requested highlight window."),
+            "retention_too_short",
+        ),
+        (
+            ValueError("The highlight queue is full. Delete an existing candidate before creating another."),
+            "candidate_queue_full",
+        ),
+        (
+            RollingCaptureError("The requested highlight window exceeds the configured protected-segment storage budget."),
+            "protected_buffer_limit",
+        ),
+    ]
+    for error, expected_code in cases:
+        manager = FakeCaptureManager()
+
+        def reject(_error=error, **_kwargs):
+            raise _error
+
+        manager.trigger = reject
+        coordinator = TriggerCoordinator(manager)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="community_highlights.trigger_coordinator"):
+            coordinator.on_message(message("please clip it"))
+
+        assert f'"failure_code":"{expected_code}"' in caplog.text
+
 
 def test_state_store_trigger_failure_is_logged_safely(caplog):
     manager = FakeCaptureManager()
@@ -138,6 +170,7 @@ def test_state_store_trigger_failure_is_logged_safely(caplog):
     assert "provider=twitch" in caplog.text
     assert "reason=phrase" in caplog.text
     assert "StateStoreError" in caplog.text
+    assert '"failure_code":"state_store_error"' in caplog.text
     assert private_text not in caplog.text
     assert "private-trigger-id" not in caplog.text
     assert "private data-directory path" not in caplog.text
