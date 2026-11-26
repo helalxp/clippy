@@ -90,6 +90,21 @@ def test_failed_assembly_logs_a_redacted_ffmpeg_diagnostic(tmp_path, caplog):
     assert not output.exists()
 
 
+def test_successful_ffmpeg_exit_without_output_is_classified(tmp_path, caplog):
+    records = _records(tmp_path)
+    output = tmp_path / "candidate.mp4"
+
+    def runner(_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    with caplog.at_level(40, logger="clippy.community_highlights"):
+        with pytest.raises(RollingCaptureError, match="browser-playable MP4"):
+            assemble_segments(records, output, runner=runner)
+
+    assert '"failure_code":"output_missing"' in caplog.text
+    assert not output.exists()
+
+
 def test_assembly_rejects_non_mp4_output_and_duplicate_or_external_segments(tmp_path):
     records = _records(tmp_path)
     with pytest.raises(RollingCaptureError, match="requires an .mp4"):

@@ -843,3 +843,18 @@ The following are **not** claimed complete by this integration:
 - Full managed-cloud integration.
 - Exact-one output guarantee; one is the selector target, while the normal selector may return fewer when it cannot find a valid clip.
 
+
+
+## 2026-11-26 diagnostics gap closure
+
+The focused diagnostics pass is implemented on the Community Highlights branch without adding a logging service or a new persistence layer:
+
+- Live FFmpeg rolling capture and candidate MP4 assembly drain stderr while the process runs and retain only a bounded tail. This avoids blocking on a full stderr pipe and does not accumulate unbounded process output.
+- FFmpeg failures include a stable category and a short excerpt sanitized for URLs, credentials, Windows/POSIX paths, UUIDs, and long hexadecimal identifiers. Raw stderr is never logged.
+- Trigger-to-capture failures distinguish missing active capture, insufficient retention, a full candidate queue, unavailable capture windows, protected-buffer limits, state-store failures, I/O errors, and unexpected failures.
+- The duplicate candidate-deletion event was removed.
+- Added regression coverage for bounded stderr, FFmpeg classification/redaction, missing output after a zero exit, and stable trigger failure categories.
+
+These tests are authored on the branch but have not been run in this editing environment. CI results and packaged-Windows checks remain acceptance gates.
+
+Still separate from this diagnostics pass: packaged-Windows restart/media acceptance, Twitch live acceptance, measured frame-boundary accuracy, and candidate-media retention limits.

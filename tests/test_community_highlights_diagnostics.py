@@ -13,6 +13,7 @@ def test_ffmpeg_summary_classifies_timestamps_and_redacts_private_values():
         b"Non-monotonous DTS in output stream 0:0; previous: 4, current: 3\n"
         b"Opening https://viewer:password@example.test/live?access_token=secret\n"
         b"Error reading C:\\Users\\private\\candidate.ts\n"
+        b"Error reading C:/Users/private/candidate-forward-slash.ts\n"
         b"candidate id 12345678-1234-1234-1234-123456789abc\n"
     )
 
@@ -20,7 +21,7 @@ def test_ffmpeg_summary_classifies_timestamps_and_redacts_private_values():
 
     assert fields["failure_code"] == "timestamp_error"
     assert "Non-monotonous DTS" in fields["ffmpeg_detail"]
-    for private_value in ("viewer:password", "access_token", "secret", "C:\\Users", "12345678-1234"):
+    for private_value in ("viewer:password", "access_token", "secret", "C:\\Users", "C:/Users", "12345678-1234"):
         assert private_value not in fields["ffmpeg_detail"]
 
 

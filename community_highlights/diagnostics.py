@@ -34,7 +34,7 @@ _SECRET_RE = re.compile(
     r"client[_-]?secret|api[_-]?key|password)\b\s*[:=]\s*"
     r"(?:bearer\s+)?[^\s,;]+|\bbearer\s+[A-Za-z0-9._~+/=-]+"
 )
-_WINDOWS_PATH_RE = re.compile(r"(?i)(?:\b[A-Z]:\\|\\\\)[^'\"<>|\r\n]+")
+_WINDOWS_PATH_RE = re.compile(r"(?i)(?:\b[A-Z]:[\\/]|\\\\)[^'\"<>|\r\n]+")
 _POSIX_PATH_RE = re.compile(r"(?<![A-Za-z0-9:])/(?:[^\s'\"<>]+)")
 _UUID_RE = re.compile(
     r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"

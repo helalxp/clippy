@@ -135,10 +135,10 @@ def assemble_segments(
         return_code, diagnostic_fields = _run_ffmpeg(args, runner=runner, timeout=120)
         output_missing = not output_path.is_file() or output_path.stat().st_size == 0
         if return_code != 0 or output_missing:
-            if not diagnostic_fields:
-                diagnostic_fields = {
-                    "failure_code": "output_missing" if output_missing and return_code == 0 else "ffmpeg_unknown"
-                }
+            if output_missing and return_code == 0:
+                diagnostic_fields = {"failure_code": "output_missing"}
+            elif not diagnostic_fields:
+                diagnostic_fields = {"failure_code": "ffmpeg_unknown"}
             log_event(
                 "candidate.assembly.ffmpeg_failed",
                 level=40,
