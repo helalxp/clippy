@@ -2,8 +2,6 @@
 visual styles, bitmap-emoji scaling, image generation)."""
 import os
 
-from PIL import Image, ImageDraw, ImageFont
-
 from hooks import (
     HOOK_STYLES,
     _break_long_word,
@@ -17,6 +15,8 @@ from hooks import (
     _EMOJI_RE,
     create_hook_image,
 )
+
+from PIL import Image, ImageDraw, ImageFont
 
 
 def _draw_and_font():
