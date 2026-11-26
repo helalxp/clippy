@@ -725,7 +725,8 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             {[...candidates].sort((a, b) => String(b.triggered_at).localeCompare(String(a.triggered_at))).map((candidate) => {
               const sourceSession = captures.find((capture) => capture.session_id === candidate.capture_session_id);
               const triggerCount = Math.max(1, Number(candidate.trigger_count) || 1);
-              const windowSeconds = (Number(candidate.pre_seconds) || 0) + (Number(candidate.post_seconds) || 0);
+              const preSeconds = Number(candidate.pre_seconds) || 0;
+              const postSeconds = Number(candidate.post_seconds) || 0;
               const measuredDuration = Number(candidate.actual_duration_seconds);
               const measuredDurationLabel = Number.isFinite(measuredDuration) && measuredDuration > 0
                 ? `Actual MP4: ${measuredDuration.toFixed(1)}s`
@@ -748,7 +749,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
                       </div>
                       <p className="mt-1 text-xs text-muted">
                         {sourceSession ? `${sourceSession.provider === 'twitch' ? 'Twitch' : 'YouTube'} · ${sourceSession.stream_id}` : 'Stream details unavailable'}
-                        {' · '}{formatDuration(windowSeconds)} window span
+                        {' · '}Window: {formatDuration(preSeconds)} before + {formatDuration(postSeconds)} after
                         {' · '}{measuredDurationLabel}
                         {' · '}{candidate.segment_count || 0} segments
                       </p>
