@@ -103,8 +103,10 @@ def probe_media_duration_seconds(
         probe_path = os.environ.get("FFPROBE_PATH", "").strip()
         if not probe_path:
             ffmpeg_resolved = ffmpeg_path
-            if not os.path.isabs(ffmpeg_resolved) and os.path.dirname(ffmpeg_resolved) == "":
+            if not os.path.isabs(ffmpeg_resolved):
                 ffmpeg_resolved = shutil.which(ffmpeg_resolved) or ""
+                if not ffmpeg_resolved and Path(ffmpeg_path).is_file():
+                    ffmpeg_resolved = str(Path(ffmpeg_path).resolve())
 
             if ffmpeg_resolved:
                 sibling_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
