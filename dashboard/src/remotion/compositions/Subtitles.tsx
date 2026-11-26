@@ -83,7 +83,10 @@ const SubtitleBlock: React.FC<SubtitleBlockProps> = ({
   const activeIndex = getActiveWordIndex(block.words, currentTimeMs);
 
   const positionStyle = POSITION_MAP[position] ?? POSITION_MAP.bottom;
-  const fontStack = getFontStack(style.fontFamily);
+  const isRtl = block.words.some((w) => RTL_CHARS.test(w.text));
+  // Match the Windows export path: Segoe UI has Arabic glyph coverage and
+  // does not inherit a Latin-only custom caption face for RTL blocks.
+  const fontStack = isRtl ? "Segoe UI, Arial, sans-serif" : getFontStack(style.fontFamily);
 
   // Background box style
   const hasBg = style.bgOpacity > 0;
@@ -114,9 +117,11 @@ const SubtitleBlock: React.FC<SubtitleBlockProps> = ({
           clip says "KNEW ME LIKE". The container carries the font so that
           space has the right width. */}
       <div
+        dir={isRtl ? "rtl" : "ltr"}
         style={{
           textAlign: "center",
-          direction: block.words.some((w) => RTL_CHARS.test(w.text)) ? "rtl" : "ltr",
+          direction: isRtl ? "rtl" : "ltr",
+          unicodeBidi: "plaintext",
           fontFamily: fontStack,
           fontSize: style.fontSize,
           fontWeight: 700,
