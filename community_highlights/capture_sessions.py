@@ -12,6 +12,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,11 @@ from .diagnostics import log_event
 MAX_CAPTURE_SESSIONS = 2
 STOP_JOIN_SECONDS = 45
 MAX_HIGHLIGHT_CANDIDATES = 20
+# Candidate MP4s are kept until the user rejects or explicitly deletes them.
+# The byte budget limits new media without expiring saved highlights.
+MAX_CANDIDATE_MEDIA_BYTES = 5 * 1024 * 1024 * 1024
+MIN_CANDIDATE_FREE_BYTES = 2 * 1024 * 1024 * 1024
+CANDIDATE_MEDIA_ESTIMATE_OVERHEAD_BYTES = 16 * 1024 * 1024
 _LOG = logging.getLogger(__name__)
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _GENERATION_JOB_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.IGNORECASE)
@@ -151,6 +157,9 @@ class CaptureSessionManager:
         self._max_sessions = max_sessions
         self._sessions: dict[str, CaptureSession] = {}
         self._candidates: dict[str, HighlightCandidate] = {}
+        # Reservations stop concurrent candidate workers from spending the same
+        # remaining byte budget before their MP4s appear on disk.
+        self._candidate_storage_reservations: dict[str, int] = {}
         self._lock = threading.RLock()
         self._restored = False
 
@@ -849,11 +858,114 @@ class CaptureSessionManager:
             log_event("candidate.created", provider=provider, session_id=session.session_id, candidate_id=candidate_id, reason=reason, segment_count=len(candidate.protected_segments))
             return candidate.snapshot()
 
+    def _candidate_media_usage_locked(self) -> int:
+        """Count all MP4 media under trusted capture folders, including orphaned files."""
+        root = self._output_root_path()
+        if not root.exists():
+            return 0
+        if root.is_symlink() or not root.is_dir():
+            raise RollingCaptureError(
+                "Clippy could not verify the Community Highlights storage folder safely."
+            )
+
+        total_bytes = 0
+        try:
+            for session_dir in root.iterdir():
+                if (
+                    session_dir.is_symlink()
+                    or not session_dir.is_dir()
+                    or not _SESSION_ID_RE.fullmatch(session_dir.name)
+                    or session_dir.resolve().parent != root
+                ):
+                    continue
+
+                highlights_dir = session_dir / "highlights"
+                if (
+                    highlights_dir.is_symlink()
+                    or not highlights_dir.is_dir()
+                    or highlights_dir.resolve().parent != session_dir.resolve()
+                ):
+                    continue
+
+                resolved_highlights = highlights_dir.resolve()
+                for media_path in highlights_dir.iterdir():
+                    if (
+                        media_path.suffix.lower() != ".mp4"
+                        or media_path.is_symlink()
+                        or not media_path.is_file()
+                        or media_path.resolve().parent != resolved_highlights
+                    ):
+                        continue
+                    total_bytes += media_path.stat().st_size
+        except OSError as error:
+            raise RollingCaptureError(
+                "Clippy could not inspect saved highlight storage safely. Check the output drive and try again."
+            ) from error
+
+        return total_bytes
+
+    def _reserve_candidate_media_locked(
+        self,
+        candidate_id: str,
+        records: list[Any],
+        output_dir: Path,
+    ) -> None:
+        """Reserve a conservative stream-copy estimate before writing a candidate MP4."""
+        if candidate_id in self._candidate_storage_reservations:
+            return
+
+        source_bytes = 0
+        try:
+            for record in records:
+                source_path = Path(record.path)
+                if source_path.is_symlink() or not source_path.is_file():
+                    raise OSError("captured segment is not a regular file")
+                source_bytes += source_path.stat().st_size
+        except (OSError, TypeError, ValueError) as error:
+            raise RollingCaptureError(
+                "Clippy could not verify the captured media size, so it skipped this highlight to protect disk space."
+            ) from error
+
+        if source_bytes <= 0:
+            raise RollingCaptureError(
+                "The captured highlight contains no readable media segments."
+            )
+
+        estimated_output_bytes = source_bytes + max(
+            CANDIDATE_MEDIA_ESTIMATE_OVERHEAD_BYTES,
+            source_bytes // 20,
+        )
+        saved_bytes = self._candidate_media_usage_locked()
+        reserved_bytes = sum(self._candidate_storage_reservations.values())
+        if saved_bytes + reserved_bytes + estimated_output_bytes > MAX_CANDIDATE_MEDIA_BYTES:
+            budget_gib = MAX_CANDIDATE_MEDIA_BYTES / (1024 ** 3)
+            raise RollingCaptureError(
+                f"Community Highlights has reached its {budget_gib:.0f} GiB saved-highlight limit. "
+                "Delete one or more saved highlights before creating another."
+            )
+
+        try:
+            free_bytes = shutil.disk_usage(output_dir).free
+        except OSError as error:
+            raise RollingCaptureError(
+                "Clippy could not verify free disk space for this highlight. Check the output drive and try again."
+            ) from error
+
+        if free_bytes - reserved_bytes < estimated_output_bytes + MIN_CANDIDATE_FREE_BYTES:
+            reserve_gib = MIN_CANDIDATE_FREE_BYTES / (1024 ** 3)
+            raise RollingCaptureError(
+                f"Not enough free disk space to save this highlight while keeping {reserve_gib:.0f} GiB free. "
+                "Free up space or move Clippy's output folder, then capture it again."
+            )
+
+        self._candidate_storage_reservations[candidate_id] = estimated_output_bytes
+
     def _finish_candidate(
         self,
         session: CaptureSession,
         candidate: HighlightCandidate,
     ) -> None:
+        output_path: Path | None = None
         try:
             log_event("candidate.assembly.waiting_for_window", provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id)
             flush_timeout = max(30, session.config.segment_seconds * 4)
@@ -923,6 +1035,10 @@ class CaptureSessionManager:
                 window_end=sealed_end,
             )
             output_path = session.config.output_dir / "highlights" / f"{candidate.candidate_id}.mp4"
+            with self._lock:
+                self._reserve_candidate_media_locked(
+                    candidate.candidate_id, records, session.config.output_dir
+                )
             assemble_segments(records, output_path, ffmpeg_path=session.config.ffmpeg_path)
             with self._lock:
                 candidate.output_path = output_path
@@ -935,6 +1051,8 @@ class CaptureSessionManager:
             log_event("candidate.ready", provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, segment_count=len(records))
         except StateStoreError as error:
             with self._lock:
+                if output_path is not None and output_path.is_file() and not output_path.is_symlink():
+                    candidate.output_path = output_path
                 candidate.error = (
                     "The highlight video was created, but Clippy could not save its ready status. "
                     "It is unavailable until local storage is working again."
@@ -944,18 +1062,23 @@ class CaptureSessionManager:
             log_event("candidate.ready_persist_failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, error_type=type(error).__name__)
         except (RollingCaptureError, ValueError, OSError) as error:
             with self._lock:
+                if output_path is not None and output_path.is_file() and not output_path.is_symlink():
+                    candidate.output_path = output_path
                 candidate.error = str(error)
                 candidate.status = "error"
                 self._persist_locked()
             log_event("candidate.assembly.failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, error_type=type(error).__name__)
         except Exception as error:
             with self._lock:
+                if output_path is not None and output_path.is_file() and not output_path.is_symlink():
+                    candidate.output_path = output_path
                 candidate.error = "Clippy could not finish this highlight. Check the capture and FFmpeg logs."
                 candidate.status = "error"
                 self._persist_locked()
             log_event("candidate.assembly.failed", level=logging.ERROR, provider=session.provider.value, session_id=session.session_id, candidate_id=candidate.candidate_id, error_type=type(error).__name__)
         finally:
             with self._lock:
+                self._candidate_storage_reservations.pop(candidate.candidate_id, None)
                 protected = list(candidate.protected_segments)
                 candidate.protected_segments.clear()
             session.capture.release_segments(protected)
