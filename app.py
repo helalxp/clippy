@@ -3765,6 +3765,37 @@ async def list_template_system_documents():
         raise HTTPException(status_code=500, detail=f"Could not read local template library: {exc}") from exc
 
 
+@app.get("/api/template-library/templates/{template_id}/compatibility")
+async def get_template_system_compatibility(template_id: str):
+    """Return conservative compatibility for every renderer without applying a template."""
+    _assert_data_storage_available()
+    _reference_templates_local_only()
+    from template_system.capabilities import check_compatibility
+    from template_system.storage import TemplateNotFound
+
+    try:
+        document = await asyncio.to_thread(_template_system_storage().get, template_id)
+    except TemplateNotFound:
+        raise HTTPException(status_code=404, detail="Template not found.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    backends = ("python_ffmpeg", "remotion_preview", "remotion_render")
+    reports = {
+        backend: check_compatibility(document.recipe, backend).as_dict()
+        for backend in backends
+    }
+    _TEMPLATE_ANALYSIS_LOG.info(
+        "Template renderer compatibility inspected: template_id=%s revision=%s",
+        document.id, document.revision,
+    )
+    return {
+        "template_id": document.id,
+        "revision": document.revision,
+        "reports": reports,
+    }
+
+
 @app.post("/api/template-analysis/jobs/{job_id}/cancel")
 async def cancel_template_analysis_job(job_id: str):
     _assert_data_storage_available()
