@@ -3546,7 +3546,6 @@ def _schedule_template_analysis_job(job_id: str, api_key: str | None = None) -> 
         return
     task = _create_data_background_task(
         _run_template_analysis_job(job_id, api_key),
-        name=f"template-analysis-{job_id}",
     )
     _TEMPLATE_ANALYSIS_TASKS[job_id] = task
 
