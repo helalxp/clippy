@@ -12,11 +12,17 @@ from pathlib import Path
 _APP_ROOT = Path(__file__).resolve().parent
 _APP_BIN_DIR = _APP_ROOT / "bin"
 _DLL_DIRECTORY_HANDLES = []
-if os.name == "nt" and _APP_BIN_DIR.is_dir() and hasattr(os, "add_dll_directory"):
-    try:
-        _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(_APP_BIN_DIR)))
-    except OSError:
-        pass
+if os.name == "nt" and _APP_BIN_DIR.is_dir():
+    # Pillow's Windows FriBiDi shim uses LoadLibrary(), which searches PATH.
+    # AddDllDirectory alone does not cover that legacy lookup.
+    _app_bin_path = str(_APP_BIN_DIR)
+    if _app_bin_path not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _app_bin_path + os.pathsep + os.environ.get("PATH", "")
+    if hasattr(os, "add_dll_directory"):
+        try:
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_app_bin_path))
+        except OSError:
+            pass
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, features as PILFeatures
 
