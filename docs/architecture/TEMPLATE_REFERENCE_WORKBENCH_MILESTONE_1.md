@@ -126,7 +126,7 @@ No template ID or recipe is passed into normal generation at this stage.
 - A vision model looking at still frames cannot prove motion paths, speed ramps or transition duration unless the evidence supports those claims.
 - Audio content, music, sound effects, voice processing and audio ducking are **not analyzed** in this milestone. The visual report schema excludes audio claims; only audio stream metadata is measured.
 - The report now has a separate human review/correction layer and a reviewed-draft save action. Draft synthesis intentionally maps only the currently supported subset of observations into the canonical recipe; it is not yet a complete visual editor.
-- The saved local-template list is currently read-only in the workbench: there is no template detail/editor screen, recipe editing, revision-aware update/delete UI, or surfaced renderer-compatibility report. There is no managed/cloud template library, template application, preview/final renderer parity or clip-generation integration.
+- The saved local-template list now exposes a read-only compatibility preflight for Python/FFmpeg, Remotion preview and Remotion render. It still has no template detail/editor screen, recipe editing, revision-aware update/delete UI, or template-application UI. There is no managed/cloud template library, template application, preview/final renderer parity or clip-generation integration.
 - Job data currently persists until the user deletes it. A configurable automatic retention policy is a follow-up.
 - The UI has a technical/pixel analysis fallback without Gemini; this is not equivalent to the full visual interpretation.
 
@@ -171,7 +171,7 @@ The reference-analysis and human-review slice is now present in the branch. The 
 
 1. Keep backend CI, frontend build and Windows installer validation green; fix regressions in the owning layer before expanding scope.
 2. Validate analysis quality against a manually labeled reference corpus spanning the formats and visual cases in section 9. Treat this as the accuracy gate, not as an optional demo exercise.
-3. Complete the local template-library workflow: inspect a saved template, edit its metadata and supported recipe fields, save with expected-revision conflict handling, and delete safely. Surface the existing capability registry as a per-renderer compatibility report; partial or unsupported behavior must never be silently dropped.
+3. Complete the remaining local template-library workflow: inspect a saved template, edit its metadata and supported recipe fields, save with expected-revision conflict handling, and delete safely. Extend the now-visible capability preflight only when actual adapter support changes; partial or unsupported behavior must never be silently dropped.
 4. Establish one shared preview/final-render contract and close the currently reported capability gaps before claiming parity.
 5. Add explicit, user-approved single-clip template application with a clear compatibility preflight and a reversible result. Do not couple it to automatic clip selection yet.
 6. Only after single-clip behavior is reliable, consider batch application and normal generation-pipeline integration. Managed/cloud storage remains deferred until account-scoped storage and media delivery are designed.
