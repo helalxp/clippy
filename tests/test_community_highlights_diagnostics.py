@@ -48,3 +48,13 @@ def test_log_event_rejects_arbitrary_failure_codes_and_sanitizes_ffmpeg_detail(c
     assert "https://example.test" not in caplog.text
     assert '"failure_code"' not in caplog.text
     assert "[url]" in caplog.text
+
+
+
+def test_unknown_ffmpeg_summary_falls_back_to_the_recent_stderr_lines():
+    fields = summarize_ffmpeg_stderr(
+        b"initial output\nordinary progress\nlast useful context\nfinal context"
+    )
+
+    assert fields["failure_code"] == "ffmpeg_unknown"
+    assert fields["ffmpeg_detail"] == "ordinary progress | last useful context | final context"

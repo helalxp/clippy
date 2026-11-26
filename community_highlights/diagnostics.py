@@ -96,8 +96,36 @@ def summarize_ffmpeg_stderr(stderr: bytes | str | None) -> dict[str, str]:
         code = "ffmpeg_unknown"
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    detail_hints = {
+        "invalid_data": ("invalid data found", "moov atom not found", "corrupt input"),
+        "timestamp_error": (
+            "non-monotonous", "invalid pts", "invalid dts",
+            "invalid timestamp", "timestamp discontinuity",
+        ),
+        "muxer_error": (
+            "could not write header", "error writing trailer",
+            "muxer does not support", "could not write trailer",
+        ),
+        "codec_error": (
+            "unknown decoder", "decoder not found", "codec not found",
+            "codec is not supported", "unsupported codec", "no decoder",
+        ),
+        "segment_error": ("segment",),
+        "io_error": (
+            "no such file or directory", "permission denied", "i/o error",
+            "error opening input", "broken pipe", "input/output error",
+        ),
+    }
+    hints = detail_hints.get(code, ())
+    relevant_lines = [
+        line for line in lines
+        if any(hint in line.lower() for hint in hints)
+    ]
+    # Keep the lines that explain the classified failure ahead of trailing
+    # path/cleanup noise. Fall back to the last lines for unknown diagnostics.
+    selected_lines = (relevant_lines or lines[-3:])[:3]
     excerpts = [
-        detail for line in lines[-3:]
+        detail for line in selected_lines
         if (detail := _sanitize_ffmpeg_detail(line)) is not None
     ]
     fields = {"failure_code": code}
