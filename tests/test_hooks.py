@@ -10,6 +10,10 @@ from hooks import (
     _emoji_scale,
     _measure_width,
     _split_emoji_runs,
+    _visual_text_runs,
+    _contains_rtl,
+    _arabic_font_path,
+    PILFeatures,
     _EMOJI_RE,
     create_hook_image,
 )
@@ -145,3 +149,29 @@ def test_pill_hook_image_stacks_one_box_per_line(tmp_path):
     alpha_rows = [any(img.getpixel((x, y))[3] > 200 for x in range(0, img.width, 4))
                   for y in range(img.height)]
     assert sum(alpha_rows) > 0
+
+class TestArabicTextLayout:
+    def test_arabic_text_keeps_logical_words_but_places_trailing_emoji_visually_first(self):
+        text = "مرحبا بالعالم 🔥"
+        runs = _visual_text_runs(text)
+        assert runs[0] == (True, "🔥")
+        assert runs[1] == (False, "مرحبا بالعالم ")
+        assert _contains_rtl(text)
+
+    def test_arabic_long_words_are_not_split_into_unshaped_codepoints(self):
+        draw, font = _draw_and_font()
+        word = "المعالجةالعربية"
+        assert _break_long_word(draw, word, font, None, 1) == [word]
+
+    def test_arabic_hook_image_uses_raqm_when_available(self, tmp_path):
+        import pytest
+
+        if not PILFeatures.check_feature("raqm") or not _arabic_font_path():
+            pytest.skip("This test host does not have RAQM and an Arabic-capable font.")
+        out = tmp_path / "arabic-hook.png"
+        path, width, height = create_hook_image(
+            "مرحبا Clippy 🔥", 600, str(out), style="pill")
+        assert os.path.exists(path)
+        assert width > 0 and height > 0
+        assert Image.open(path).size == (width, height)
+
