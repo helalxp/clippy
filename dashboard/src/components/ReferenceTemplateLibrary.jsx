@@ -200,6 +200,9 @@ export default function ReferenceTemplateLibrary() {
   const [selectedJobDetail, setSelectedJobDetail] = useState(null);
   const [reviewBusyKey, setReviewBusyKey] = useState('');
   const [savedTemplates, setSavedTemplates] = useState([]);
+  const [templateCompatibility, setTemplateCompatibility] = useState({});
+  const [compatibilityBusyIds, setCompatibilityBusyIds] = useState({});
+  const [compatibilityErrors, setCompatibilityErrors] = useState({});
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaveMessage, setDraftSaveMessage] = useState('');
   const videoRef = useRef(null);
@@ -359,6 +362,22 @@ export default function ReferenceTemplateLibrary() {
     }
   };
 
+  const inspectTemplateCompatibility = async (templateId) => {
+    setCompatibilityBusyIds((current) => ({ ...current, [templateId]: true }));
+    setCompatibilityErrors((current) => ({ ...current, [templateId]: '' }));
+    try {
+      const data = await apiJson('/api/template-library/templates/' + templateId + '/compatibility');
+      setTemplateCompatibility((current) => ({ ...current, [templateId]: data }));
+    } catch (e) {
+      setCompatibilityErrors((current) => ({
+        ...current,
+        [templateId]: e?.detail || e?.message || 'Could not inspect renderer compatibility.',
+      }));
+    } finally {
+      setCompatibilityBusyIds((current) => ({ ...current, [templateId]: false }));
+    }
+  };
+
   const saveDraftTemplate = async () => {
     if (!selectedJob || savingDraft || acceptedReviewCount < 1) return;
     setSavingDraft(true);
@@ -480,13 +499,65 @@ export default function ReferenceTemplateLibrary() {
             <span className="readout">{savedTemplates.length} templates</span>
           </div>
           <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-2">
-            {savedTemplates.map((template) => (
-              <div key={template.id} className="rounded-input border border-rule p-3 min-w-0">
-                <p className="text-sm font-medium text-ink truncate">{template.name}</p>
-                <p className="readout mt-1 truncate">{template.category} · revision {template.revision}</p>
-                <p className="text-[11px] text-muted mt-2">Local draft · {new Date(template.updated_at).toLocaleDateString()}</p>
-              </div>
-            ))}
+            {savedTemplates.map((template) => {
+              const compatibility = templateCompatibility[template.id];
+              return (
+                <div key={template.id} className="rounded-input border border-rule p-3 min-w-0">
+                  <p className="text-sm font-medium text-ink truncate">{template.name}</p>
+                  <p className="readout mt-1 truncate">{template.category} · revision {template.revision}</p>
+                  <p className="text-[11px] text-muted mt-2">Local draft · {new Date(template.updated_at).toLocaleDateString()}</p>
+                  <button
+                    type="button"
+                    onClick={() => inspectTemplateCompatibility(template.id)}
+                    disabled={Boolean(compatibilityBusyIds[template.id])}
+                    className="btn-ghost mt-3 px-2.5 py-1.5 text-xs disabled:opacity-50"
+                  >
+                    {compatibilityBusyIds[template.id] ? 'Checking renderers…' : compatibility ? 'Refresh compatibility' : 'Check renderer compatibility'}
+                  </button>
+                  {compatibilityErrors[template.id] && (
+                    <p className="text-xs text-danger mt-2">{compatibilityErrors[template.id]}</p>
+                  )}
+                  {compatibility?.reports && (
+                    <div className="mt-3 space-y-2">
+                      {Object.entries(compatibility.reports).map(([backend, report]) => {
+                        const issues = [
+                          ...(report.approximate || []).map((item) => ({ ...item, level: 'approximate' })),
+                          ...(report.unsupported || []).map((item) => ({ ...item, level: 'unsupported' })),
+                        ];
+                        const statusTone = report.status === 'compatible'
+                          ? 'text-emerald-700'
+                          : report.status === 'partial' ? 'text-amber-700' : 'text-danger';
+                        return (
+                          <div key={backend} className="border-t border-rule pt-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-ink">{titleCase(backend)}</span>
+                              <span className={'text-[11px] font-medium ' + statusTone}>{titleCase(report.status)}</span>
+                            </div>
+                            <p className="readout mt-1">
+                              {(report.exact || []).length} exact · {(report.approximate || []).length} approximate · {(report.unsupported || []).length} unsupported
+                            </p>
+                            {issues.length > 0 ? (
+                              <ul className="mt-1.5 space-y-1">
+                                {issues.map((item) => (
+                                  <li key={item.feature} className="text-[11px] text-muted">
+                                    <strong className={item.level === 'unsupported' ? 'text-danger' : 'text-amber-700'}>
+                                      {titleCase(item.feature)} · {titleCase(item.level)}:
+                                    </strong>{' '}
+                                    {item.explanation}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-[11px] text-muted mt-1">All requested recipe features are exact for this renderer.</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       )}
