@@ -289,6 +289,10 @@ class TestBurnFilterFonts:
         # ASS carries its own styles; force_style must NOT override them
         assert "force_style" not in cmd
 
+    def test_english_srt_does_not_require_complex_shaping_option(self, monkeypatch, tmp_path):
+        cmd = self._captured_cmd(monkeypatch, tmp_path, "subs.srt")
+        assert "shaping=complex" not in cmd
+
 
 class TestAutoCaptionDefaults:
     """The caption look every clip now ships with (chosen 25-jul-2026)."""
