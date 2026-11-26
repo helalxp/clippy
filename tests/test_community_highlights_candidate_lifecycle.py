@@ -1,13 +1,13 @@
 import asyncio
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import community_highlights.capture_sessions as capture_sessions_module
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from community_highlights.capture_sessions import CaptureSessionManager
 from community_highlights.rolling_capture import RollingCaptureError, SegmentRecord
@@ -550,7 +550,8 @@ def test_candidate_media_usage_counts_saved_orphaned_and_pending_delete_files(tm
 
     manager = CaptureSessionManager(output_root=root)
 
-    assert manager._candidate_media_usage_locked() == 23
+    with manager._lock:
+        assert manager._candidate_media_usage_locked() == 23
 
 
 def test_candidate_media_reservations_enforce_total_budget_without_deleting_saved_media(

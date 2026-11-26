@@ -121,7 +121,7 @@ The following items remain open after the source audit and are not covered by th
 
 ### Candidate media storage and retention policy
 
-Candidate MP4 storage is capped at 5 GiB across Community Highlights capture folders. Before stream-copy assembly, Clippy estimates output size from the selected TS segments with a 5%/16 MiB overhead allowance, accounts for concurrent in-flight reservations, and requires at least 2 GiB of free space to remain on the output drive. If either limit would be exceeded, only the new candidate fails with an actionable message. Existing ready, approved, or pending MP4s are never removed to make room. There is no automatic age expiry; candidate media remains until the user rejects or explicitly deletes it. Orphaned and deletion-pending MP4 files are included in the byte count and are not silently removed.
+Candidate MP4 storage is capped at 5 GiB across Community Highlights capture folders. Before stream-copy assembly, Clippy estimates output size from the selected TS segments using the larger of 5% or 16 MiB as overhead, accounts for concurrent in-flight reservations, and requires at least 2 GiB of free space to remain on the output drive. If either limit would be exceeded, only the new candidate fails with an actionable message. Existing ready, approved, or pending MP4s are never removed to make room. There is no automatic age expiry; candidate media remains until the user rejects or explicitly deletes it. Orphaned and deletion-pending MP4 files are included in the byte count and are not silently removed.
 
 ## Lifecycle and restart clarification
 
