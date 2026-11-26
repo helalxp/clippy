@@ -433,10 +433,13 @@ class CaptureSessionManager:
                 window_start = self._parse_saved_datetime(row.get("window_start"))
                 window_end = self._parse_saved_datetime(row.get("window_end"))
                 actual_duration_seconds = row.get("actual_duration_seconds")
-                try:
-                    actual_duration_seconds = float(actual_duration_seconds)
-                except (TypeError, ValueError, OverflowError):
+                if isinstance(actual_duration_seconds, bool):
                     actual_duration_seconds = None
+                else:
+                    try:
+                        actual_duration_seconds = float(actual_duration_seconds)
+                    except (TypeError, ValueError, OverflowError):
+                        actual_duration_seconds = None
                 if (
                     actual_duration_seconds is not None
                     and (
