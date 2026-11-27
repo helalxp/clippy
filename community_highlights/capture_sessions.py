@@ -21,7 +21,7 @@ from typing import Any, Callable
 from .models import ChatProvider
 from .rolling_capture import RollingCapture, RollingCaptureConfig, RollingCaptureError
 from .extraction import assemble_segments, probe_media_duration_seconds
-from .timeline import segment_wall_interval, select_segments_for_interval, validate_contiguous_interval
+from .timeline import segment_wall_intervals, select_segments_for_interval, validate_contiguous_interval
 from .urls import parse_stream_url
 from .state_store import StateStoreError, get_state_store
 from .diagnostics import log_event
@@ -120,6 +120,13 @@ class CaptureSession:
     capture_finished: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
+        buffer_status = {}
+        get_buffer_status = getattr(self.capture, "buffer_status", None)
+        if self.status == "recording" and callable(get_buffer_status):
+            try:
+                buffer_status = get_buffer_status()
+            except (OSError, ValueError):
+                buffer_status = {}
         return {
             "session_id": self.session_id,
             "provider": self.provider.value,
@@ -131,6 +138,8 @@ class CaptureSession:
             "retention_seconds": self.config.retention_seconds,
             "max_buffer_size_mb": self.config.max_buffer_size_mb,
             "quality": self.config.quality,
+            "buffered_seconds": buffer_status.get("buffered_seconds", 0.0),
+            "latest_segment_age_seconds": buffer_status.get("latest_segment_age_seconds"),
         }
 
 
@@ -760,6 +769,24 @@ class CaptureSessionManager:
                 raise ValueError("Increase rolling-buffer retention to cover the requested highlight window.")
 
             indexed = session.capture.read_segment_index()
+            get_buffer_status = getattr(session.capture, "buffer_status", None)
+            if pre_seconds > 0 and callable(get_buffer_status):
+                buffer_status = get_buffer_status()
+                buffered_seconds = float(buffer_status.get("buffered_seconds") or 0.0)
+                latest_segment_age = buffer_status.get("latest_segment_age_seconds")
+                required_seconds = pre_seconds + session.config.segment_seconds
+                max_latest_age = max(10.0, session.config.segment_seconds * 3)
+                if (
+                    buffered_seconds + 0.1 < required_seconds
+                    or not isinstance(latest_segment_age, (int, float))
+                    or latest_segment_age > max_latest_age
+                ):
+                    available = max(0, int(buffered_seconds))
+                    raise ValueError(
+                        "The rolling buffer is still warming up or is too small for the requested pre-trigger window. "
+                        f"It currently has {available} seconds of continuous recent footage; "
+                        f"{required_seconds} seconds are needed. Increase the Buffer cap (MB) or choose a lower stream quality."
+                    )
             merge_gap = timedelta(seconds=session.config.segment_seconds)
 
             # Only merge candidates that have not been sealed for assembly. A
@@ -910,15 +937,10 @@ class CaptureSessionManager:
                     self._protect_candidate_window_locked(
                         session, candidate, current_index, window_start, window_end
                     )
-                    completed_end = 0.0
-                    for item in current_index:
-                        try:
-                            completed_end = max(
-                                completed_end,
-                                segment_wall_interval(item)[1].timestamp(),
-                            )
-                        except (OSError, ValueError):
-                            continue
+                    completed_end = max(
+                        (end.timestamp() for _record, _start, end in segment_wall_intervals(current_index)),
+                        default=0.0,
+                    )
 
                     window_complete = completed_end >= window_end.timestamp()
                     capture_stopped = session.stop_event.is_set()

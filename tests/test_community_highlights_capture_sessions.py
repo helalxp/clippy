@@ -481,3 +481,40 @@ def test_natural_end_cleans_rolling_sources_after_simultaneous_candidate_workers
     assert all(not worker.is_alive() for worker in candidate_workers)
     assert not segment.exists()
     assert not index.exists()
+
+
+
+def test_trigger_rejects_when_pre_roll_has_not_warmed_up(tmp_path):
+    class WarmingCapture(FakeCapture):
+        def buffer_status(self):
+            return {
+                "buffered_seconds": 20.0,
+                "latest_segment_age_seconds": 1.0,
+            }
+
+        def read_segment_index(self):
+            return []
+
+    manager = CaptureSessionManager(
+        capture_factory=WarmingCapture,
+        output_root=tmp_path,
+    )
+    started = manager.start("https://www.twitch.tv/warming")
+    session_id = started["session_id"]
+    session = manager._sessions[session_id]
+    deadline = time.time() + 1
+    while session.status != "recording" and time.time() < deadline:
+        time.sleep(0.01)
+
+    from datetime import datetime, timezone
+    with pytest.raises(ValueError, match="still warming up"):
+        manager.trigger(
+            provider="twitch",
+            stream_id="warming",
+            triggered_at=datetime.now(timezone.utc),
+            pre_seconds=45,
+            post_seconds=15,
+        )
+
+    assert manager.list_candidates(session_id) == []
+    assert asyncio.run(manager.stop(session_id)) is True
