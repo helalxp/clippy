@@ -357,7 +357,9 @@ def test_merged_window_selects_and_assembles_exact_union_once_and_seals(tmp_path
         path.write_bytes(b"mpeg-ts")
         end_time = origin + timedelta(seconds=end_offset)
         os.utime(path, (end_time.timestamp(), end_time.timestamp()))
-        records.append(SegmentRecord(path.resolve(), 0, 4))
+        # FFmpeg's CSV keeps the source PTS timeline monotonic across files,
+        # even though reset_timestamps makes each individual TS file start near zero.
+        records.append(SegmentRecord(path.resolve(), end_offset, end_offset + 4))
 
     class IndexedCapture:
         def __init__(self, _url, _config):
