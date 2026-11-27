@@ -78,8 +78,16 @@ def select_segments_for_interval(
         raise ValueError("window_end must not precede window_start.")
 
     selected: list[tuple[datetime, SegmentRecord]] = []
+    zero_length_window = start_utc == end_utc
     for record, segment_start, segment_end in segment_wall_intervals(records):
-        if segment_start <= end_utc and segment_end >= start_utc:
+        # For non-empty windows, touching only at an edge is not overlap.
+        # Keep point-in-time selection defined for the allowed zero-second case.
+        overlaps = (
+            segment_start <= start_utc <= segment_end
+            if zero_length_window
+            else segment_start < end_utc and segment_end > start_utc
+        )
+        if overlaps:
             selected.append((segment_start, record))
     selected.sort(key=lambda item: (item[0], item[1].start_seconds))
     return [record for _, record in selected]

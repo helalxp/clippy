@@ -167,3 +167,32 @@ def test_real_pts_discontinuity_is_still_rejected_despite_smooth_file_mtimes(tmp
             window_start=datetime.fromtimestamp(1000, timezone.utc),
             window_end=datetime.fromtimestamp(1012, timezone.utc),
         )
+
+
+
+def test_interval_selection_excludes_segments_that_only_touch_window_edges(tmp_path):
+    records = [
+        make_record(tmp_path / "before.ts", 0, 4, 1004),
+        make_record(tmp_path / "inside.ts", 4, 8, 1008),
+        make_record(tmp_path / "after.ts", 8, 12, 1012),
+    ]
+
+    selected = select_segments_for_interval(
+        records,
+        window_start=datetime.fromtimestamp(1004, timezone.utc),
+        window_end=datetime.fromtimestamp(1008, timezone.utc),
+    )
+
+    assert [item.path.name for item in selected] == ["inside.ts"]
+
+
+def test_zero_length_window_still_selects_the_segment_covering_its_timestamp(tmp_path):
+    record = make_record(tmp_path / "point.ts", 0, 4, 1004)
+
+    selected = select_segments_for_interval(
+        [record],
+        window_start=datetime.fromtimestamp(1002, timezone.utc),
+        window_end=datetime.fromtimestamp(1002, timezone.utc),
+    )
+
+    assert selected == [record]
