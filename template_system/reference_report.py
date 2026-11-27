@@ -28,8 +28,8 @@ class NormalizedBox(ReportModel):
     """Estimated rectangle in source-frame coordinates, normalized to 0..1."""
     x: float = Field(ge=0, le=1)
     y: float = Field(ge=0, le=1)
-    width: float = Field(gt=0, le=1)
-    height: float = Field(gt=0, le=1)
+    width: float = Field(ge=0.000001, le=1)
+    height: float = Field(ge=0.000001, le=1)
 
     @model_validator(mode="after")
     def fits_frame(self) -> "NormalizedBox":
@@ -48,7 +48,7 @@ class TypographyObservation(ReportModel):
     font_candidates: list[FontCandidate] = Field(default_factory=list, max_length=5)
     weight: str | None = Field(default=None, max_length=40)
     style: Literal["normal", "italic", "oblique", "unknown"] = "unknown"
-    size_ratio: float | None = Field(default=None, gt=0, le=0.3)
+    size_ratio: float | None = Field(default=None, ge=0.000001, le=0.3)
     fill_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     highlight_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
     outline_color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
@@ -130,7 +130,7 @@ class TransitionObservation(ReportModel):
 class SceneObservation(ReportModel):
     index: int = Field(ge=0)
     start_ms: int = Field(ge=0)
-    end_ms: int = Field(gt=0)
+    end_ms: int = Field(ge=1)
     description: str = Field(min_length=1, max_length=500)
     content_type: str = Field(default="unknown", max_length=80)
     mood: str = Field(default="unknown", max_length=80)
