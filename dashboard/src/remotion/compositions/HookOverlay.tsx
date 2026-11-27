@@ -15,6 +15,9 @@ import {
   HOOK_FONTS,
 } from "../lib/fonts";
 
+// Keep the browser preview's RTL script detection in sync with subtitles.tsx.
+const RTL_CHARS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/;
+
 interface HookOverlayProps {
   config: HookConfig;
 }
@@ -130,6 +133,9 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
   // Typeface and size as hooks.py: the chosen font, else the style's own;
   // font size = factor x the 90%-of-width box.
   const typeface = HOOK_FONTS[config.font ?? (look.pills ? "montserrat" : "serif")] ?? HOOK_FONTS.serif;
+  const isRtl = RTL_CHARS.test(config.text);
+  // The same Windows system font is selected by hooks.py for Pillow/RAQM.
+  const renderFontFamily = isRtl ? "Segoe UI, Arial, sans-serif" : typeface.family;
   const fontSize = Math.round(1080 * 0.9 * typeface.factor * scale);
   const outlinePx = Math.round(look.outlinePx * scale);
 
@@ -158,7 +164,9 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
         >
           <span
             style={{
-              fontFamily: typeface.family,
+              fontFamily: renderFontFamily,
+              direction: isRtl ? "rtl" : "ltr",
+              unicodeBidi: "plaintext",
               fontSize,
               fontWeight: typeface.weight,
               color: look.text,
@@ -202,7 +210,9 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
       >
         <span
           style={{
-            fontFamily: typeface.family,
+            fontFamily: renderFontFamily,
+              direction: isRtl ? "rtl" : "ltr",
+              unicodeBidi: "plaintext",
             fontSize,
             fontWeight: typeface.weight,
             color: look.text,

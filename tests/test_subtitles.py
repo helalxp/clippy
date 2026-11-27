@@ -289,6 +289,10 @@ class TestBurnFilterFonts:
         # ASS carries its own styles; force_style must NOT override them
         assert "force_style" not in cmd
 
+    def test_english_srt_does_not_require_complex_shaping_option(self, monkeypatch, tmp_path):
+        cmd = self._captured_cmd(monkeypatch, tmp_path, "subs.srt")
+        assert "shaping=complex" not in cmd
+
 
 class TestAutoCaptionDefaults:
     """The caption look every clip now ships with (chosen 25-jul-2026)."""
@@ -434,3 +438,71 @@ class TestBurnWithMark:
         cmd = captured["cmd"]
         assert cmd[:5] == ["ffmpeg", "-y", "-i", "in.mp4", "-vf"]
         assert cmd[5:8] == [cmd[5], "-c:a", "copy"] and cmd[-1] == "out.mp4"
+
+class TestArabicSubtitleLayout:
+    def test_arabic_karaoke_uses_segoe_ui_without_reordering_or_uppercasing_latin(self, tmp_path):
+        from subtitles import generate_ass
+
+        out = tmp_path / "arabic.ass"
+        transcript = self._transcript([
+            _w(" مرحبا", 0.0, 0.4),
+            _w(" YouTube", 0.4, 0.9),
+        ])
+        assert generate_ass(transcript, 0, 1.0, str(out), uppercase=True) is True
+        content = out.read_text(encoding="utf-8-sig")
+        assert "Style: Default,Segoe UI," in content
+        assert content.index("مرحبا") < content.index("YouTube")
+        assert "YOUTUBE" not in content
+
+    def test_arabic_srt_uses_rtl_font_and_complex_shaping(self, tmp_path):
+        from subtitles import subtitles_filter
+
+        srt = tmp_path / "arabic.srt"
+        srt.write_text(
+            "1\n00:00:00,000 --> 00:00:01,000\nمرحبا بالعالم\n",
+            encoding="utf-8",
+        )
+        filter_graph = subtitles_filter(str(srt), font_name="Anton")
+        assert "Fontname=Segoe UI" in filter_graph
+        assert "shaping=complex" in filter_graph
+
+    def test_arabic_ass_sets_rtl_base_direction_before_inline_overrides(self, tmp_path):
+        from subtitles import generate_ass
+
+        out = tmp_path / "arabic-rtl-base.ass"
+        transcript = self._transcript([
+            _w(" انا", 0.0, 0.4),
+            _w(" بآمنب", 0.4, 0.8),
+        ])
+        assert generate_ass(
+            transcript, 0, 1.0, str(out), effect="pop",
+            split_ranges=[(0.0, 1.0)],
+        ) is True
+        event = next(
+            line for line in out.read_text(encoding="utf-8-sig").splitlines()
+            if line.startswith("Dialogue:")
+        )
+        event_text = event.rsplit(",,", 1)[1]
+        # The marker must precede both the split-scene alignment override and
+        # the active-word styling override so libass resolves the whole line RTL.
+        assert event_text.startswith("\u200f{\\an5}{\\c")
+
+    def test_english_ass_does_not_get_rtl_base_direction_marker(self, tmp_path):
+        from subtitles import generate_ass
+
+        out = tmp_path / "english-no-rtl-marker.ass"
+        transcript = self._transcript([
+            _w(" hello", 0.0, 0.4),
+            _w(" world", 0.4, 0.8),
+        ])
+        assert generate_ass(transcript, 0, 1.0, str(out), effect="pop") is True
+        event = next(
+            line for line in out.read_text(encoding="utf-8-sig").splitlines()
+            if line.startswith("Dialogue:")
+        )
+        assert not event.rsplit(",,", 1)[1].startswith("\u200f")
+
+    @staticmethod
+    def _transcript(words):
+        return {"segments": [{"start": 0, "end": 1, "words": words}]}
+

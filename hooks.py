@@ -4,7 +4,27 @@ import textwrap
 import subprocess
 import urllib.request
 import uuid
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from pathlib import Path
+
+# Pillow's Windows wheels expose RAQM through libraqm but load FriBiDi at
+# runtime. Keep the app-payload DLL directory registered before Pillow imports
+# its native extensions; retain the handle for the lifetime of this module.
+_APP_ROOT = Path(__file__).resolve().parent
+_APP_BIN_DIR = _APP_ROOT / "bin"
+_DLL_DIRECTORY_HANDLES = []
+if os.name == "nt" and _APP_BIN_DIR.is_dir():
+    # Pillow's Windows FriBiDi shim uses LoadLibrary(), which searches PATH.
+    # AddDllDirectory alone does not cover that legacy lookup.
+    _app_bin_path = str(_APP_BIN_DIR)
+    if _app_bin_path not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _app_bin_path + os.pathsep + os.environ.get("PATH", "")
+    if hasattr(os, "add_dll_directory"):
+        try:
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(_app_bin_path))
+        except OSError:
+            pass
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, features as PILFeatures
 
 from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB, finished_before_crash
 import gpu_decode
@@ -22,8 +42,53 @@ def _truncate_bytes(text, max_bytes):
     return encoded[:max_bytes].decode("utf-8", "ignore")
 
 FONT_URL = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerif/NotoSerif-Bold.ttf"
-FONT_DIR = "fonts"
+FONT_DIR = str(_APP_ROOT / "fonts")
 FONT_PATH = os.path.join(FONT_DIR, "NotoSerif-Bold.ttf")
+_RTL_TEXT_RE = re.compile(r"[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]")
+_ARABIC_FONT_CANDIDATES = (
+    r"C:\Windows\Fonts\segoeuib.ttf",
+    r"C:\Windows\Fonts\arialbd.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+)
+
+
+def _contains_rtl(text):
+    return bool(_RTL_TEXT_RE.search(str(text or "")))
+
+
+def _require_raqm():
+    """Fail clearly instead of exporting malformed Arabic when shaping is absent."""
+    try:
+        available = PILFeatures.check_feature("raqm")
+    except Exception:
+        available = False
+    if not available:
+        raise RuntimeError(
+            "Arabic hook rendering requires Pillow's RAQM layout engine. "
+            "The packaged FriBiDi DLL is missing or could not be loaded."
+        )
+
+
+def _arabic_font_path():
+    for candidate in _ARABIC_FONT_CANDIDATES:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _visual_text_runs(text):
+    """Return drawing runs in visual order; keep each text run in logical order."""
+    runs = _split_emoji_runs(text)
+    return list(reversed(runs)) if _contains_rtl(text) else runs
+
+
+def _rtl_kwargs(text):
+    if not _contains_rtl(text):
+        return {}
+    _require_raqm()
+    return {"direction": "rtl", "language": "ar"}
 # Bundled (SIL OFL, see fonts/Montserrat-OFL.txt): the "pill" look's sans.
 PILL_FONT_PATH = os.path.join(FONT_DIR, "Montserrat-ExtraBold.ttf")
 
@@ -113,13 +178,16 @@ def _measure_width(draw, text, font, emoji_font):
     """Pixel width of a line, measuring emoji runs with the emoji font.
 
     emoji_font is the (font, native_size) pair from _load_emoji_font, or None."""
+    is_rtl = _contains_rtl(text)
+    if is_rtl:
+        _require_raqm()
     width = 0.0
-    for is_emoji, chunk in _split_emoji_runs(text):
+    for is_emoji, chunk in _visual_text_runs(text):
         if is_emoji and emoji_font:
             width += (draw.textlength(chunk, font=emoji_font[0])
                       * _emoji_scale(font, emoji_font))
         else:
-            width += draw.textlength(chunk, font=font)
+            width += draw.textlength(chunk, font=font, **_rtl_kwargs(chunk))
     return width
 
 
@@ -151,7 +219,7 @@ def _draw_mixed(img, draw, xy, text, font, emoji_font, fill, outline=None):
     x, y = xy
     stroke_w = outline[1] if outline else 0
     stroke_fill = outline[0] if outline else None
-    for is_emoji, chunk in _split_emoji_runs(text):
+    for is_emoji, chunk in _visual_text_runs(text):
         if is_emoji and emoji_font:
             scale = _emoji_scale(font, emoji_font)
             rendered = _render_emoji_chunk(chunk, emoji_font, scale, fill)
@@ -159,16 +227,23 @@ def _draw_mixed(img, draw, xy, text, font, emoji_font, fill, outline=None):
                 img.alpha_composite(rendered, (int(x), int(y)))
                 x += draw.textlength(chunk, font=emoji_font[0]) * scale
         else:
+            text_kwargs = _rtl_kwargs(chunk)
             if stroke_w:
                 draw.text((x, y), chunk, font=font, fill=fill,
-                          stroke_width=stroke_w, stroke_fill=stroke_fill)
+                          stroke_width=stroke_w, stroke_fill=stroke_fill,
+                          **text_kwargs)
             else:
-                draw.text((x, y), chunk, font=font, fill=fill)
-            x += draw.textlength(chunk, font=font)
+                draw.text((x, y), chunk, font=font, fill=fill, **text_kwargs)
+            x += draw.textlength(chunk, font=font, **text_kwargs)
 
 
 def _break_long_word(draw, word, font, emoji_font, max_width):
     """Character-level hard wrap for a single word wider than max_width."""
+    # Never split an Arabic word at arbitrary code points: doing so can break
+    # joining forms and combining marks. Let the complete word exceed the line
+    # rather than emit visually corrupted fragments.
+    if _contains_rtl(word):
+        return [word]
     pieces = []
     current = ""
     for ch in word:
@@ -232,7 +307,9 @@ def _draw_pills(lines, font, emoji_font, font_size, box_fill, text_fill, output_
     pad_y = int(font_size * 0.24)
     radius = int(font_size * 0.36)
     probe = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
-    top, bottom = probe.textbbox((0, 0), "ÁÉÍÓÚÑgjpqy", font=font)[1::2]
+    sample = "العربية" if any(_contains_rtl(line) for line in lines) else "ÁÉÍÓÚÑgjpqy"
+    top, bottom = probe.textbbox((0, 0), sample, font=font,
+                                 **_rtl_kwargs(sample))[1::2]
     line_h = (bottom - top) + 2 * pad_y
     widths = [int(_measure_width(probe, ln, font, emoji_font)) for ln in lines]
     canvas_w = max(widths) + 2 * pad_x + 40
@@ -284,9 +361,25 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     base_font_size = int(target_width * size_factor)
     font_size = int(base_font_size * font_scale)
     
+    has_rtl_text = _contains_rtl(text)
     try:
-        font = ImageFont.truetype(font_path, font_size)
+        if has_rtl_text:
+            _require_raqm()
+            arabic_font_path = _arabic_font_path()
+            if not arabic_font_path:
+                raise RuntimeError(
+                    "No Arabic-capable font is installed. Expected Segoe UI or Arial "
+                    "in the Windows Fonts directory."
+                )
+            font = ImageFont.truetype(
+                arabic_font_path, font_size,
+                layout_engine=ImageFont.Layout.RAQM,
+            )
+        else:
+            font = ImageFont.truetype(font_path, font_size)
     except Exception as e:
+        if has_rtl_text:
+            raise RuntimeError(f"Could not initialize Arabic hook text layout: {e}") from e
         print(f"⚠️ Warning: Could not load font {font_path}, using default. Error: {e}")
         font = ImageFont.load_default()
 
@@ -357,7 +450,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
             continue
 
         w = _measure_width(draw, line, font, emoji_font)
-        bbox = draw.textbbox((0, 0), line, font=font)
+        bbox = draw.textbbox((0, 0), line, font=font, **_rtl_kwargs(line))
         h = bbox[3] - bbox[1]
         max_line_width = max(max_line_width, int(w))
         text_heights.append(h)
@@ -411,7 +504,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
             continue
 
         line_w = _measure_width(draw_final, line, font, emoji_font)
-        bbox = draw_final.textbbox((0, 0), line, font=font)
+        bbox = draw_final.textbbox((0, 0), line, font=font, **_rtl_kwargs(line))
         line_h = text_heights[i] if i < len(text_heights) else bbox[3] - bbox[1]
 
         # Center X

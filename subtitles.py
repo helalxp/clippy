@@ -421,7 +421,22 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     def seam_prefix(t):
         return "{\\an5}" if any(a <= t < b for a, b in seam_ranges) else ""
 
-    safe_font = _sanitize_font_name(font_name)
+    has_rtl_text = any(
+        _contains_rtl_text(word.get("word", ""))
+        for block in blocks for word in block
+    )
+
+    # ASS inline overrides before the first strong character can make libass
+    # resolve an Arabic dialogue event as LTR. Set its paragraph base direction
+    # before scene-alignment and per-word style tags are encountered.
+    rtl_prefix = "\u200f" if has_rtl_text else ""
+    # Segoe UI is present on supported Windows installations and has Arabic
+    # glyph coverage. libass + the complex shaping engine handles bidi and
+    # joining; the word/timestamp sequence remains in transcript order.
+    safe_font = "Segoe UI" if has_rtl_text else _sanitize_font_name(font_name)
+    # Uppercasing Latin fragments inside an Arabic sentence changes the user's
+    # text unexpectedly. Arabic itself has no case, so preserve mixed casing.
+    uppercase = bool(uppercase and not has_rtl_text)
     base_opacity = _clamp_number(base_opacity, 0.05, 1.0, 1.0)
     # Dim inactive words via a fully-opaque scaled color (NOT alpha — see
     # _dim_hex_color); the active word overrides the color inline.
@@ -527,7 +542,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
             events.append(
                 f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
-                f"{seam_prefix(ev_start)}{' '.join(parts)}"
+                f"{rtl_prefix}{seam_prefix(ev_start)}{' '.join(parts)}"
             )
 
     if not events:
@@ -550,6 +565,21 @@ def format_srt_block(index, start, end, text):
 
 _HEX_COLOR_RE = re.compile(r'^[0-9A-Fa-f]{6}$')
 _FONT_NAME_RE = re.compile(r'[^A-Za-z0-9 _-]')
+_RTL_TEXT_RE = re.compile(r"[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]")
+
+
+def _contains_rtl_text(value):
+    """Whether text contains a character from a right-to-left writing system."""
+    return bool(_RTL_TEXT_RE.search(str(value or "")))
+
+
+def _file_contains_rtl_text(path):
+    """Inspect an SRT file for RTL text without changing its logical order."""
+    try:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as source:
+            return any(_contains_rtl_text(line) for line in source)
+    except OSError:
+        return False
 
 
 def hex_to_ass_color(hex_color, opacity=1.0, fallback="FFFFFF"):
@@ -615,7 +645,10 @@ def subtitles_filter(srt_path, alignment=2, fontsize=16,
     if final_fontsize < 10:
         final_fontsize = 10
 
+    has_rtl_text = _file_contains_rtl_text(srt_path)
     safe_font_name = _sanitize_font_name(font_name)
+    if not str(srt_path).lower().endswith(".ass") and has_rtl_text:
+        safe_font_name = "Segoe UI"
     bg_opacity = _clamp_number(bg_opacity, 0.0, 1.0, 0.0)
     border_width = _clamp_number(border_width, 0, 10, 2)
 
@@ -661,13 +694,15 @@ def subtitles_filter(srt_path, alignment=2, fontsize=16,
     # ffmpeg 8's filtergraph parser rejects a quoted positional value that is
     # followed by more :name=value options ("No option name near ..."), while
     # the named form parses on every version back to 4.x.
+    shaping_option = ":shaping=complex" if has_rtl_text else ""
     if str(srt_path).lower().endswith('.ass'):
         # ASS files (karaoke style) carry their own styles; force_style would
         # override the per-word color tags.
-        vf = f"ass=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
+        vf = (f"ass=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
+              f"{shaping_option}")
     else:
         vf = (f"subtitles=filename='{safe_srt_path}':fontsdir='{safe_fonts_dir}'"
-              f":charenc=UTF-8:force_style='{style_string}'")
+              f":charenc=UTF-8{shaping_option}:force_style='{style_string}'")
 
     return vf
 

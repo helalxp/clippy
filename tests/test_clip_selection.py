@@ -13,6 +13,7 @@ from clip_selection import (
     compact_words,
     lookup_model_prices,
     trim_to_best,
+    validate_detail_clip_proposals,
 )
 
 
@@ -308,3 +309,36 @@ class TestShortlistTarget:
     def test_degenerate_input_does_not_crash(self):
         assert shortlist_target(None) == 3
         assert shortlist_target("nonsense") == 3
+
+class TestValidateDetailClipProposals:
+    def test_rejects_non_finite_out_of_range_and_unknown_window_proposals(self):
+        windows = [{"id": "w1", "start": 0, "end": 90}]
+        shorts = [
+            {"start": 10, "end": 30, "source_window_id": "w1"},
+            {"start": float("nan"), "end": 30, "source_window_id": "w1"},
+            {"start": 30, "end": float("inf"), "source_window_id": "w1"},
+            {"start": -1, "end": 30, "source_window_id": "w1"},
+            {"start": 30, "end": 91, "source_window_id": "w1"},
+            {"start": 10, "end": 30, "source_window_id": "missing"},
+            {"start": 40, "end": 20, "source_window_id": "w1"},
+        ]
+        kept = validate_detail_clip_proposals(shorts, windows, 120)
+        assert len(kept) == 1
+        assert kept[0]["start"] == 10.0
+        assert kept[0]["end"] == 30.0
+
+    def test_allows_only_small_rounding_outside_candidate_window(self):
+        windows = [{"id": "w1", "start": 10, "end": 40}]
+        kept = validate_detail_clip_proposals([
+            {"start": 9.8, "end": 40.2, "source_window_id": "w1"},
+            {"start": 9.4, "end": 30, "source_window_id": "w1"},
+            {"start": 20, "end": 40.6, "source_window_id": "w1"},
+        ], windows, 100)
+        assert len(kept) == 1
+        assert kept[0]["source_window_id"] == "w1"
+
+    def test_invalid_video_duration_rejects_every_proposal(self):
+        shorts = [{"start": 1, "end": 20, "source_window_id": "w1"}]
+        windows = [{"id": "w1", "start": 0, "end": 50}]
+        assert validate_detail_clip_proposals(shorts, windows, float("nan")) == []
+
