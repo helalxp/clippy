@@ -5,6 +5,7 @@ import {
   COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES,
   communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
+  isCommunityHighlightsBufferReady,
   isCommunityHighlightsSessionActive,
   isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
@@ -47,6 +48,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const previewObjectUrl = useRef(null);
   const previewAbort = useRef(null);
   const [startingAction, setStartingAction] = useState('');
+  const [bufferWarmup, setBufferWarmup] = useState(null);
   const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
   const [pendingApprovalCandidateId, setPendingApprovalCandidateId] = useState('');
@@ -233,6 +235,51 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     return () => { active = false; };
   }, [connections]);
 
+  const waitForCaptureBuffer = async (captureSessionId, preSeconds) => {
+    const deadline = Date.now() + Math.max(45000, (preSeconds + 34) * 1000);
+    let latest = null;
+    while (Date.now() < deadline) {
+      const currentCapture = await apiJson('/api/community-highlights/captures/' + encodeURIComponent(captureSessionId));
+      latest = currentCapture;
+      setCaptures((current) => {
+        const exists = current.some((item) => item.session_id === currentCapture.session_id);
+        return exists
+          ? current.map((item) => item.session_id === currentCapture.session_id ? currentCapture : item)
+          : [...current, currentCapture];
+      });
+
+      const segmentSeconds = Number(currentCapture.segment_seconds) || 4;
+      const requiredSeconds = Math.max(0, preSeconds) + segmentSeconds;
+      const requiredRetention = requiredSeconds + (Number(savedTriggerSettings.post_seconds) || 0);
+      if ((Number(currentCapture.retention_seconds) || 0) < requiredRetention) {
+        throw new Error(
+          'This rolling buffer retains only ' + currentCapture.retention_seconds +
+          ' seconds, but the saved pre/post window needs at least ' + requiredRetention +
+          ' seconds. Increase Buffer retention and restart the rolling buffer.',
+        );
+      }
+      setBufferWarmup({
+        available: Number(currentCapture.buffered_seconds) || 0,
+        required: requiredSeconds,
+      });
+      if (isCommunityHighlightsBufferReady(currentCapture, preSeconds)) {
+        setBufferWarmup(null);
+        return currentCapture;
+      }
+      if (TERMINAL_SESSION_STATES.has(currentCapture.status)) {
+        throw new Error(currentCapture.error || 'The rolling buffer stopped before it could prepare the pre-trigger window.');
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+
+    const available = Math.max(0, Math.floor(Number(latest?.buffered_seconds) || 0));
+    const required = Math.max(0, preSeconds) + (Number(latest?.segment_seconds) || 4);
+    throw new Error(
+      'The rolling buffer prepared only ' + available + ' of the ' + required +
+      ' seconds needed for pre-trigger footage. Increase Buffer cap (MB) or choose a lower stream quality, then restart the buffer.',
+    );
+  };
+
   const startHighlighting = async () => {
     if (!streamReference || !providerConnected || connections == null) {
       setError(connectionGuidance);
@@ -241,19 +288,30 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
 
     setError('');
     setStartingAction('workflow');
+    setBufferWarmup(null);
     try {
-      // Capture and chat starts are both idempotent. Do not attempt rollback if
-      // chat start fails: the returned capture ID does not tell us whether this
-      // click created the buffer or reused an existing one.
-      if (!matchingCaptureSession) {
-        await apiJson('/api/community-highlights/captures', {
+      // A partial setup may have chat running without a rolling buffer. Stop
+      // that chat first so it cannot trigger while its pre-roll is being built.
+      if (matchingChatSession && !matchingCaptureSession) {
+        await apiJson('/api/community-highlights/sessions/' + encodeURIComponent(matchingChatSession.session_id), {
+          method: 'DELETE',
+        });
+      }
+
+      let captureSession = matchingCaptureSession;
+      if (!captureSession) {
+        captureSession = await apiJson('/api/community-highlights/captures', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
         });
       }
 
-      if (!matchingChatSession) {
+      // Chat starts only after completed segments provide the full pre-trigger
+      // window plus one segment of safety margin.
+      await waitForCaptureBuffer(captureSession.session_id, Number(savedTriggerSettings.pre_seconds) || 0);
+
+      if (!matchingChatSession || !matchingCaptureSession) {
         await apiJson('/api/community-highlights/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -268,6 +326,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
       setError(requestError?.detail || requestError.message || 'Could not start Community Highlights.');
       await refreshSessions().catch(() => {});
     } finally {
+      setBufferWarmup(null);
       setStartingAction('');
     }
   };
@@ -507,7 +566,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             title={!providerConnected && !workflowSessionsPresent ? connectionGuidance : undefined}
           >
             {busy || sessionActionBusy ? <Loader2 size={15} className="animate-spin" /> : workflowSessionsPresent ? <Square size={14} /> : <Activity size={15} />}
-            {busy ? 'Starting…' : sessionActionBusy ? 'Stopping…' : workflowSessionsPresent ? 'Stop highlighting' : workflowPartial ? 'Finish setup' : 'Start highlighting'}
+            {busy ? (bufferWarmup ? 'Preparing buffer…' : 'Starting…') : sessionActionBusy ? 'Stopping…' : workflowSessionsPresent ? 'Stop highlighting' : workflowPartial ? 'Finish setup' : 'Start highlighting'}
           </button>
         </div>
 
@@ -517,7 +576,10 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             ? 'rounded-input border border-warn/30 bg-paper2 px-3 py-2 text-xs text-warn'
             : 'text-xs leading-relaxed text-muted'}
         >
-          {workflowActive
+          {bufferWarmup
+            ? 'Preparing the pre-trigger buffer: ' + Math.floor(bufferWarmup.available) + ' / ' +
+              Math.ceil(bufferWarmup.required) + ' seconds. Chat monitoring starts when the rolling buffer is ready.'
+            : workflowActive
             ? 'Chat and recording are both active for this stream.'
             : workflowSessionsPresent
               ? 'Both sessions are present, but the workflow is not fully active. Check the chat and recording statuses below.'
@@ -550,11 +612,14 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             {matchingCaptureSession && (
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted">
-                  {matchingCaptureSession.retention_seconds}s retained · {matchingCaptureSession.segment_seconds}s segments
+                  {matchingCaptureSession.retention_seconds}s max retention · {matchingCaptureSession.segment_seconds}s segments
+                  {' · '}Pre-roll: {Math.floor(Number(matchingCaptureSession.buffered_seconds) || 0)}s
                 </p>
                 {matchingCaptureSession.status === 'recording' && (
                   <button type="button" onClick={() => triggerNow(matchingCaptureSession.session_id)}
-                    disabled={!!sessionActionBusy} className="btn-ghost text-xs">
+                    disabled={!!sessionActionBusy || !isCommunityHighlightsBufferReady(matchingCaptureSession, savedTriggerSettings.pre_seconds)}
+                    title={!isCommunityHighlightsBufferReady(matchingCaptureSession, savedTriggerSettings.pre_seconds) ? 'Wait until the rolling buffer contains the full pre-trigger window.' : undefined}
+                    className="btn-ghost text-xs">
                     Clip now
                   </button>
                 )}
@@ -585,7 +650,11 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
                   <div className="flex items-center gap-2">
                     <span className="readout">{item.status}</span>
                     {item.type === 'buffer' && item.status === 'recording' && (
-                      <button type="button" onClick={() => triggerNow(item.id)} disabled={!!sessionActionBusy}
+                      <button type="button" onClick={() => triggerNow(item.id)}
+                        disabled={!!sessionActionBusy || !isCommunityHighlightsBufferReady(
+                          captures.find((capture) => capture.session_id === item.id),
+                          savedTriggerSettings.pre_seconds,
+                        )}
                         className="text-xs text-muted underline underline-offset-2">Clip now</button>
                     )}
                     <button type="button" onClick={() => stopOtherSession(item)} disabled={!!sessionActionBusy}

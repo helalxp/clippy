@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   communityHighlightsGeminiHeaders,
+  isCommunityHighlightsBufferReady,
   isCommunityHighlightsProviderConnected,
   isCommunityHighlightsSessionActive,
   isCommunityHighlightsWorkflowActive,
@@ -131,4 +132,20 @@ test("retries status polling after a failed load, then allows idle polling to st
   assert.equal(shouldContinueCommunityHighlightsStatusPolling(false, true), true);
   assert.equal(shouldContinueCommunityHighlightsStatusPolling(true, false), true);
   assert.equal(shouldContinueCommunityHighlightsStatusPolling(true, true), true);
+});
+
+
+test("buffer readiness requires full recent pre-roll plus one segment", () => {
+  const capture = {
+    status: "recording",
+    segment_seconds: 4,
+    buffered_seconds: 49,
+    latest_segment_age_seconds: 3,
+  };
+
+  assert.equal(isCommunityHighlightsBufferReady(capture, 45), true);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, buffered_seconds: 48 }, 45), false);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, latest_segment_age_seconds: 20 }, 45), false);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, status: "starting" }, 45), false);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, latest_segment_age_seconds: null }, 45), false);
 });

@@ -12,6 +12,14 @@
 
 This register records findings from the dated source audits below. A checked item means the code change is implemented; it does not imply that automated tests, live-provider acceptance, or packaged-Windows behavior have passed.
 
+### Batch 4 — rolling-buffer pre-roll and segment-gap reliability (2026-11-27)
+
+- [x] Replace per-file wall-clock reconstruction with one capture-wide median offset over FFmpeg's segment PTS index. Individual file-mtime jitter no longer creates artificial gaps between otherwise contiguous segments; actual PTS discontinuities remain rejected.
+- [x] Expose the latest continuous buffered duration and newest completed-segment age through capture status.
+- [x] Warm the rolling ring to the saved pre-trigger window plus one segment before starting chat. Stop an existing chat-only partial workflow before pre-roll warm-up.
+- [x] Disable manual “Clip now” until the buffer is ready and reject direct trigger requests when continuous pre-roll is unavailable.
+- [ ] Verify on packaged Windows with real YouTube and Twitch streams; a provider/network interruption can still create a genuine PTS gap.
+
 ### Batch 2 — post-implementation correctness (2026-11-26)
 
 - [x] Separate approved Community Highlights candidate duration validation from the generic `MIN_SOURCE_SECONDS` guard. Preserve the ordinary URL/upload minimum and validate candidates against the clip selector's actual minimum. A focused 30-second handoff regression test is authored and passed in the former PR #42 backend CI run.

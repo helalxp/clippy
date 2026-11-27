@@ -81,3 +81,21 @@ export function isCommunityHighlightsWorkflowActive(chatSession, captureSession)
 export function shouldContinueCommunityHighlightsStatusPolling(hasActiveWork, statusLoadFailed) {
   return Boolean(hasActiveWork || statusLoadFailed);
 }
+
+
+export function isCommunityHighlightsBufferReady(capture, preSeconds) {
+  if (!capture || capture.status !== "recording" || capture.latest_segment_age_seconds == null) return false;
+  const segmentSeconds = Number(capture.segment_seconds);
+  const bufferedSeconds = Number(capture.buffered_seconds);
+  const latestAge = Number(capture.latest_segment_age_seconds);
+  const requiredSeconds = Math.max(0, Number(preSeconds) || 0) + segmentSeconds;
+  const maxLatestAge = Math.max(10, segmentSeconds * 3);
+
+  return Number.isFinite(segmentSeconds)
+    && segmentSeconds > 0
+    && Number.isFinite(bufferedSeconds)
+    && bufferedSeconds >= requiredSeconds
+    && Number.isFinite(latestAge)
+    && latestAge >= 0
+    && latestAge <= maxLatestAge;
+}

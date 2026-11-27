@@ -166,3 +166,25 @@ These historical checks establish a merge baseline for the feature branch. The c
 ## Working rule
 
 Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep the Community Highlights correctness, timing, and UI changes together in one reviewable PR; continue with one stable fix at a time.
+
+
+## 2026-11-27 rolling-buffer pre-roll and segment-gap repair
+
+### Root cause
+
+The timeline previously estimated every completed segment independently as `file_mtime - segment_duration`. A delayed or jittered file-close timestamp could therefore make contiguous FFmpeg PTS segments appear to have artificial gaps, or make the oldest segment appear later than it really was. Both reported errors came from the same validator using those per-file wall-clock estimates.
+
+A second, independent startup race existed: the workflow started chat immediately after FFmpeg reported the capture as recording. That status meant the process had started, not that the ring had accumulated the configured pre-trigger history. With a 45-second pre-roll, an early phrase or volume trigger could never contain the requested footage. The 512 MiB default byte cap can also shorten effective retention on high-bitrate streams; `retention_seconds` is a ceiling, not a guarantee when the byte cap is reached.
+
+### Fix included in consolidated PR #43
+
+- Map all segment CSV PTS intervals onto wall time using a single median offset from segment file mtimes, rather than applying each file's mtime independently. Individual timestamp jitter no longer creates artificial gaps; real PTS discontinuities remain detectable and are still rejected.
+- Expose the latest continuous PTS-buffer duration and age of the newest completed segment in capture status.
+- Do not start chat monitoring until the rolling ring has the saved pre-trigger duration plus one complete segment and recent segment activity.
+- Stop a chat-only partial workflow before warming the newly created rolling buffer, then restart chat after the pre-roll is ready.
+- Disable manual “Clip now” until the same pre-roll readiness condition is met, and reject direct trigger requests when the required buffer is unavailable.
+- If the byte cap prevents the buffer from reaching the requested duration, the workflow now reports the measured available duration and asks the user to increase the buffer cap or choose a lower stream quality instead of creating a doomed candidate.
+
+### Remaining external failure mode
+
+The application cannot manufacture missing source packets. If a provider/network interruption creates a genuine discontinuity in FFmpeg's input PTS, the candidate is still rejected rather than silently concatenating over missing footage. That case requires stable live delivery or a later bounded capture-reconnect design; it is not fixed by relaxing the gap check.
