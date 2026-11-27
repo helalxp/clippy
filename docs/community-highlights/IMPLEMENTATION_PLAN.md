@@ -1,16 +1,58 @@
 # Community Highlights Implementation Plan
 
 **Status:** In progress  
-**Active working branch:** `fix/community-highlights-google-oauth`  
-**Base:** `main` at `38fe25cadcc7709ea69f9761a815b3f29ff25d1e` (stable release `v0.3.2`)  
+**Active working branch:** `ui/community-highlights-workflow` (consolidated draft PR #43, targeting `main`)  
+**Consolidated scope:** correctness changes from former PR #42, workflow UI changes from former PR #43, and requested-window/actual-duration metrics from former PR #44. Original `main` baseline `c402e3adbe8205802c9d3786a660ca7285c1faef` (version metadata `0.3.3`)  
 **Historical branch:** `feature/community-highlights` (superseded; retained for history)  
 **Product:** Clippy  
-**Last updated:** 2026-11-26  
+**Last updated:** 2026-11-27  
 **Post-implementation backlog:** [`AFTER_IMPLEMENTATION.md`](AFTER_IMPLEMENTATION.md)
 
 ## Code audit follow-up register
 
 This register records findings from the dated source audits below. A checked item means the code change is implemented; it does not imply that automated tests, live-provider acceptance, or packaged-Windows behavior have passed.
+
+### Batch 4 — rolling-buffer pre-roll and segment-gap reliability (2026-11-27)
+
+- [x] Replace per-file wall-clock reconstruction with one capture-wide median offset over FFmpeg's segment PTS index. Individual file-mtime jitter no longer creates artificial gaps between otherwise contiguous segments; actual PTS discontinuities remain rejected.
+- [x] Expose the latest continuous buffered duration and newest completed-segment age through capture status.
+- [x] Warm the rolling ring to the saved pre-trigger window plus one segment before starting chat. Stop an existing chat-only partial workflow before pre-roll warm-up.
+- [x] Disable manual “Clip now” until the buffer is ready and reject direct trigger requests when continuous pre-roll is unavailable.
+- [ ] Verify on packaged Windows with real YouTube and Twitch streams; a provider/network interruption can still create a genuine PTS gap.
+
+### Batch 2 — post-implementation correctness (2026-11-26)
+
+- [x] Separate approved Community Highlights candidate duration validation from the generic `MIN_SOURCE_SECONDS` guard. Preserve the ordinary URL/upload minimum and validate candidates against the clip selector's actual minimum. A focused 30-second handoff regression test is authored and passed in the former PR #42 backend CI run.
+- [x] Evaluate trigger windows and cooldowns against provider publication timestamps, while keeping local receipt timestamps for trigger-to-capture coordination. Older out-of-order events cannot rewind the trigger clock.
+- [x] Normalize Unicode, punctuation, and whitespace before whole-phrase matching, avoiding substring false positives.
+- [x] Add explicit `phrases`, `chat_volume`, and `either` modes. Older persisted settings default to `either`; saving settings preserves message deduplication and cooldown state.
+- [x] Retain YouTube's live-chat ID, continuation token, and latest publication timestamp across transient retries within the same in-memory chat session. Replayed older backlog remains visible but is not sent to trigger evaluation.
+- [x] Handle Twitch IRC `RECONNECT` by returning from the current transport to the existing bounded reconnect loop.
+- [x] Previous PR #42 correctness checks passed backend/frontend CI and Windows desktop validation. Previous PR #43 dashboard/backend checks passed; packaged-Windows UI acceptance remains pending.
+- [ ] Live-test YouTube reconnect/backlog suppression and Twitch IRC reconnect, chat, capture, and candidate extraction.
+- [ ] Measure real trigger-to-media drift. Event-time trigger detection does not make the segment mtime/duration estimate frame-accurate.
+- [x] Include the full workflow-first tab redesign in consolidated PR #43: one coordinated start/stop action, simplified primary settings, collapsed advanced capture controls, explicit saved trigger settings, compact candidate review, inline confirmations, and collapsed diagnostics.
+- [x] Pass backend tests, dashboard unit tests, and production dashboard build for the current UI head in GitHub Actions run #45872885434.
+- [x] Apply one shared terminal-session policy to stream matching and polling; restored `interrupted` sessions no longer appear active in the workflow. Add a focused unit test for terminal and in-flight statuses.
+- [x] Show the success badge only when chat is `connected` and the rolling buffer is `recording`; connecting, reconnecting, and stopping states are not described as active. Add focused helper tests.
+- [x] Pass dashboard CI for the terminal-state and workflow-health UI corrections. Updated UI head `f664f835` passed backend tests, dashboard unit tests, and production build in GitHub Actions run [#45875358353](https://github.com/helalxp/clippy/actions/runs/45875358353).
+- [x] Retry status loading after a transient request failure, then stop polling again when status recovers and no active work remains. Add a focused polling-policy test.
+- [ ] Perform packaged-Windows/responsive acceptance for the redesigned tab and combined start/stop behavior.
+- [ ] Add total candidate-media byte/age limits and disk-pressure policy; complete setup/troubleshooting documentation and final OAuth production readiness.
+
+The correctness, workflow UI, and timing-metrics implementations are now combined in one branch and one PR. Their constituent branch checks passed as recorded in the post-implementation register; live-provider acceptance and packaged-Windows UI/FFprobe acceptance remain pending.
+
+### Batch 3 — requested-window persistence and measured candidate duration (2026-11-26)
+
+- [x] Persist requested/effective UTC candidate window bounds (`window_start`, `window_end`) in candidate snapshots and state storage; old records without bounds remain compatible.
+- [x] Measure the completed candidate MP4's duration with FFprobe after assembly and expose it as optional `actual_duration_seconds`. Probe failure is fail-open and must not fail a successfully assembled candidate.
+- [x] Restore only finite, positive duration measurements and valid, ordered window-bound pairs; malformed legacy or edited values become unavailable.
+- [x] Backend CI and dashboard build passed for the metrics implementation on the former timing-metrics branch before consolidation.
+- [x] Add a conditional actual-duration readout to the consolidated UI; it reports “Actual duration unavailable” when the optional field is null.
+- [ ] Complete packaged-Windows validation for consolidated PR #43 and verify FFprobe discovery, or confirm that the metric safely remains unavailable when FFprobe is absent.
+- [ ] Measure trigger-to-media drift on real authorized YouTube and Twitch streams before deciding whether final-stage trimming is necessary.
+
+This batch measures the assembled media file. It does not correct the mtime-based clock estimate or whole-segment boundaries and does not claim frame-accurate pre/post timing.
 
 ### Batch 1 — desktop OAuth configuration and Windows data paths
 - [x] Package Twitch and Google public OAuth client IDs into the desktop payload, load them in the Tauri supervisor, and pass them explicitly to the managed backend. Release publishing must fail before runtime builds when either required public ID is missing.
@@ -31,8 +73,8 @@ This register records findings from the dated source audits below. A checked ite
 - [x] Add targeted backend diagnostics for failed Community Highlights requests. Logs record method, matched route template (or redacted unmatched path), and status only; they omit request bodies, query strings, opaque flow/candidate IDs, and authorization headers.
 - [x] Fix approved-candidate queue exhaustion with an explicit candidate DELETE API and dashboard control. Delete removes the candidate's local media before its metadata, refuses in-progress workers, validates the generated path remains under the capture root, and preserves metadata if Windows refuses to unlink a locked file. No candidate status is silently pruned when the queue reaches its cap.
 - [x] Persist trigger settings, capture/candidate metadata, review decisions, and recovery state across backend restart. Restore through the actual FastAPI lifespan, mark interrupted captures/extractions explicitly, and preserve completed MP4s. Keep provider tokens in Windows Credential Manager; no credentials or chat history enter the JSON metadata store.
-- [ ] Complete provider/capture lifecycle verification after the latest chat repair. **YouTube:** packaged-Windows chat messages, one-message/one-viewer trigger, capture, candidate extraction, and inline preview are now user-verified; the account-level YouTube ban was the cause of the earlier access failure. **Still pending:** Twitch remains intentionally untested; long-running reconnect, provider-specific terminal/rate-limit recovery, and full stop/disconnect acceptance still need coverage.
-- [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger windows now use local receipt timestamps consistently; segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
+- [ ] Complete provider/capture lifecycle verification after the latest chat repair. **YouTube:** packaged-Windows chat, capture, candidate extraction, inline preview, and the approval-to-results handoff are user-verified. YouTube continuation/cursor recovery has been updated on the current branch and needs packaged-Windows retesting. **Twitch:** live chat/capture remains unverified; test IRC `RECONNECT`, terminal/rate-limit behavior, and full stop/disconnect.
+- [ ] Verify the current trigger-to-media timeline against real captured streams. Trigger rules now use provider publication timestamps; capture requests still use local receipt time. Segment boundaries still use filesystem modification time plus FFmpeg duration and are not frame-accurate.
 - [x] Merge overlapping or nearby trigger windows into one candidate while it is still collecting. Hold the candidate through the original pre-window plus one segment interval to catch a later overlapping pre-window; atomically seal before assembly. The union is bounded by the capture's configured retention, and newly included segments are pinned before the union is published.
 - [x] Add inline candidate preview using an MP4 remux and browser video controls. Frame-accurate trimming, analysis/suggested boundaries, and renderer handoff remain open.
 - [x] Remove rolling source segments, FFmpeg indexes, and abandoned concat manifests after normal capture termination and candidate workers finish; preserve candidate MP4s until rejection or explicit deletion.
@@ -128,7 +170,7 @@ The gaps in this section were accurate for the 2026-11-24 baseline. The current 
 - Candidate workers pin their selected segments. Newly completed segments overlapping the pending post-trigger window are now pinned incrementally, not only at the final extraction step.
 - Pruning now performs its final protected check and unlink under the same lock as pinning; a segment cannot become protected after prune has committed to deleting it.
 - After the capture terminates and all candidate workers for that session finish, the manager removes disposable `segment-*.ts` files, FFmpeg CSV indexes, and abandoned `highlight-*.ffconcat` manifests. Candidate MP4s are preserved until rejection or explicit candidate deletion.
-- Normal stop/end/error cleanup is covered with regression tests. An abrupt process crash or forced kill can bypass Python cleanup; startup reconciliation is still not implemented. Candidate metadata is in memory and is not recoverable after restart. A bounded total candidate-media byte/age policy also remains open.
+- Normal stop/end/error cleanup is covered with regression tests. Candidate metadata and review decisions are persisted/restored; completed candidate MP4s are preserved after path validation. Active chat/capture/extraction workers do not resume after a backend process restart and are explicitly marked interrupted/failed. Abrupt termination can still bypass normal worker cleanup, so startup reconciliation handles disposable rolling files. A bounded total candidate-media byte/age policy remains open.
 
 ### Validation and acceptance status for this batch
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
-from typing import Any
+from typing import Any, Literal
 
 from .chat import chat_sessions
 from .capture_sessions import CaptureSettings, capture_sessions
@@ -243,6 +243,7 @@ class StartCaptureSessionRequest(BaseModel):
 
 class TriggerSettingsRequest(BaseModel):
     phrases: list[str] = Field(default_factory=lambda: ["clip it", "clip that"], max_length=30)
+    mode: Literal["phrases", "chat_volume", "either"] = "either"
     min_messages: int = Field(default=12, ge=2, le=500)
     min_unique_users: int = Field(default=5, ge=1, le=500)
     window_seconds: float = Field(default=10, ge=1, le=120)

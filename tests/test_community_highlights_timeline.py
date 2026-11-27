@@ -131,3 +131,68 @@ def test_selects_and_validates_exact_merged_interval(tmp_path):
         select_segments_for_interval(
             records, window_start=end, window_end=start
         )
+
+
+
+def test_contiguous_pts_segments_do_not_appear_gapped_when_one_file_mtime_jitters(tmp_path):
+    records = [
+        make_record(tmp_path / "a.ts", 0, 4, 1004),
+        make_record(tmp_path / "b.ts", 4, 8, 1012),
+        make_record(tmp_path / "c.ts", 8, 12, 1012),
+    ]
+
+    selected = select_segments_for_interval(
+        records,
+        window_start=datetime.fromtimestamp(1000, timezone.utc),
+        window_end=datetime.fromtimestamp(1012, timezone.utc),
+    )
+
+    assert [item.path.name for item in selected] == ["a.ts", "b.ts", "c.ts"]
+    validate_contiguous_interval(
+        selected,
+        window_start=datetime.fromtimestamp(1000, timezone.utc),
+        window_end=datetime.fromtimestamp(1012, timezone.utc),
+    )
+
+
+def test_real_pts_discontinuity_is_still_rejected_despite_smooth_file_mtimes(tmp_path):
+    records = [
+        make_record(tmp_path / "a.ts", 0, 4, 1004),
+        make_record(tmp_path / "b.ts", 8, 12, 1012),
+    ]
+
+    with pytest.raises(ValueError, match="recording gap"):
+        validate_contiguous_interval(
+            records,
+            window_start=datetime.fromtimestamp(1000, timezone.utc),
+            window_end=datetime.fromtimestamp(1012, timezone.utc),
+        )
+
+
+
+def test_interval_selection_excludes_segments_that_only_touch_window_edges(tmp_path):
+    records = [
+        make_record(tmp_path / "before.ts", 0, 4, 1004),
+        make_record(tmp_path / "inside.ts", 4, 8, 1008),
+        make_record(tmp_path / "after.ts", 8, 12, 1012),
+    ]
+
+    selected = select_segments_for_interval(
+        records,
+        window_start=datetime.fromtimestamp(1004, timezone.utc),
+        window_end=datetime.fromtimestamp(1008, timezone.utc),
+    )
+
+    assert [item.path.name for item in selected] == ["inside.ts"]
+
+
+def test_zero_length_window_still_selects_the_segment_covering_its_timestamp(tmp_path):
+    record = make_record(tmp_path / "point.ts", 0, 4, 1004)
+
+    selected = select_segments_for_interval(
+        [record],
+        window_start=datetime.fromtimestamp(1002, timezone.utc),
+        window_end=datetime.fromtimestamp(1002, timezone.utc),
+    )
+
+    assert selected == [record]

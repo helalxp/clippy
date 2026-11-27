@@ -1,6 +1,6 @@
 import asyncio
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from community_highlights.capture_sessions import CaptureSessionManager
 from community_highlights.state_store import CommunityHighlightsStateStore, StateStoreError
@@ -75,7 +75,10 @@ def test_restart_marks_active_capture_and_partial_candidate_and_preserves_approv
     abandoned_manifest = highlights_dir / "highlight-abandoned.ffconcat"
     abandoned_manifest.write_text("ffconcat version 1.0\n", encoding="utf-8")
 
-    now = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(timezone.utc)
+    now = started_at.isoformat()
+    requested_start = (started_at - timedelta(seconds=30)).isoformat()
+    requested_end = (started_at + timedelta(seconds=25)).isoformat()
     store.update_sections(
         capture_sessions=[{
             "session_id": SESSION_ID,
@@ -93,8 +96,11 @@ def test_restart_marks_active_capture_and_partial_candidate_and_preserves_approv
                 "candidate_id": READY_ID,
                 "capture_session_id": SESSION_ID,
                 "triggered_at": now,
+                "window_start": requested_start,
+                "window_end": requested_end,
                 "pre_seconds": 30,
                 "post_seconds": 25,
+                "actual_duration_seconds": 57.75,
                 "reason": "phrase",
                 "status": "ready",
                 "review_status": "approved",
@@ -129,6 +135,9 @@ def test_restart_marks_active_capture_and_partial_candidate_and_preserves_approv
     assert ready[0]["status"] == "ready"
     assert ready[0]["review_status"] == "approved"
     assert ready[0]["trigger_count"] == 2
+    assert ready[0]["window_start"] == requested_start
+    assert ready[0]["window_end"] == requested_end
+    assert ready[0]["actual_duration_seconds"] == pytest.approx(57.75)
     assert ready[1] == ready_video
     assert ready_video.read_bytes() == b"complete-approved-mp4"
 

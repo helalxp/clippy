@@ -364,6 +364,157 @@ def test_youtube_backlog_is_visible_but_does_not_trigger_old_chat(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_youtube_reconnect_resumes_page_token_and_suppresses_old_backlog(monkeypatch):
+    async def scenario():
+        from datetime import timedelta
+        import httpx
+        from community_highlights import chat as chat_module
+
+        now = datetime.now(timezone.utc)
+        video_calls = []
+        list_params = []
+        seen_by_trigger = []
+        list_call_count = 0
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, url, **kwargs):
+                nonlocal list_call_count
+                if url.endswith("/videos"):
+                    video_calls.append(url)
+                    return httpx.Response(200, json={
+                        "items": [{
+                            "liveStreamingDetails": {"activeLiveChatId": "live-chat-id"},
+                        }],
+                    })
+
+                list_params.append(dict(kwargs["params"]))
+                list_call_count += 1
+                if list_call_count == 1:
+                    session.stop_event.set()
+                    items = [{
+                        "id": "first-message",
+                        "snippet": {
+                            "publishedAt": now.isoformat(),
+                            "displayMessage": "hello",
+                        },
+                        "authorDetails": {"channelId": "user-1", "displayName": "Viewer"},
+                    }]
+                    next_token = "resume-token"
+                else:
+                    session.stop_event.set()
+                    items = [
+                        {
+                            "id": "outage-backlog",
+                            "snippet": {
+                                "publishedAt": (now - timedelta(seconds=10)).isoformat(),
+                                "displayMessage": "clip it",
+                            },
+                            "authorDetails": {"channelId": "old-user", "displayName": "Old"},
+                        },
+                        {
+                            "id": "new-message",
+                            "snippet": {
+                                "publishedAt": (now + timedelta(seconds=2)).isoformat(),
+                                "displayMessage": "new event",
+                            },
+                            "authorDetails": {"channelId": "new-user", "displayName": "New"},
+                        },
+                    ]
+                    next_token = "next-token"
+                return httpx.Response(200, json={
+                    "items": items,
+                    "nextPageToken": next_token,
+                    "pollingIntervalMillis": 1000,
+                })
+
+        monkeypatch.setattr(chat_module.httpx, "AsyncClient", FakeClient)
+        original_sleep = asyncio.sleep
+
+        async def no_wait(_seconds):
+            await original_sleep(0)
+
+        monkeypatch.setattr(chat_module.asyncio, "sleep", no_wait)
+        manager = ChatSessionManager(
+            token_provider=lambda *_args, **_kwargs: original_sleep(0, result="token"),
+            message_callback=seen_by_trigger.append,
+        )
+        session = ChatSession(
+            session_id="youtube-reconnect",
+            reference=StreamReference(ChatProvider.YOUTUBE, "abcdefghijk"),
+            started_at=now - timedelta(seconds=1),
+        )
+
+        await manager._run_youtube(session)
+        assert session.youtube_page_token == "resume-token"
+        session.stop_event.clear()
+        await manager._run_youtube(session)
+
+        assert len(video_calls) == 1
+        assert list_params[1]["pageToken"] == "resume-token"
+        assert [message.message_id for message in seen_by_trigger] == [
+            "first-message", "new-message",
+        ]
+        assert session.youtube_page_token == "next-token"
+
+    asyncio.run(scenario())
+
+
+def test_twitch_reconnect_command_returns_to_outer_reconnect_loop(monkeypatch):
+    async def scenario():
+        from community_highlights import chat as chat_module
+
+        class Store:
+            def load(self, _provider):
+                return {"login": "bot"}
+
+        class Socket:
+            def __init__(self):
+                self.frames = [
+                    ":tmi.twitch.tv 366 bot #channel :End of NAMES list",
+                    ":tmi.twitch.tv RECONNECT",
+                ]
+                self.closed = False
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                self.closed = True
+
+            async def send(self, _message):
+                return None
+
+            async def recv(self):
+                return self.frames.pop(0)
+
+        socket = Socket()
+        monkeypatch.setattr(chat_module, "WindowsCredentialStore", Store)
+        monkeypatch.setattr(chat_module.websockets, "connect", lambda *_args, **_kwargs: socket)
+        manager = ChatSessionManager(
+            token_provider=lambda *_args, **_kwargs: asyncio.sleep(0, result="token")
+        )
+        session = ChatSession(
+            session_id="twitch-reconnect",
+            reference=StreamReference(ChatProvider.TWITCH, "channel"),
+        )
+
+        await manager._run_twitch(session)
+
+        assert socket.closed is True
+        assert session.status == "connected"
+
+    asyncio.run(scenario())
+
+
 def test_youtube_rate_limit_retries_the_same_chat_without_resolving_video_again(monkeypatch):
     async def scenario():
         from datetime import timedelta

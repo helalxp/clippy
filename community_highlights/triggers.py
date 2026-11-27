@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
+import unicodedata
 
 from .models import ChatMessage
 
@@ -46,24 +47,50 @@ class TriggerMatch:
 
 
 def _normalise(text: str) -> str:
-    return re.sub(r"\s+", " ", text).casefold().strip()
+    """Normalize Unicode and punctuation so phrases match as whole words."""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE).strip()
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    normalized_text = _normalise(text)
+    normalized_phrase = _normalise(phrase)
+    if not normalized_text or not normalized_phrase:
+        return False
+    return f" {normalized_phrase} " in f" {normalized_text} "
 
 
 class TriggerEngine:
-    """Evaluate phrase and chat-volume rules with deduplication and cooldowns."""
+    """Evaluate phrase and chat-volume rules with bounded deduplication and cooldowns.
+
+    Provider event timestamps determine how close chat messages occurred. Local
+    receipt timestamps are retained for trigger-to-capture coordination, because
+    the rolling media timeline uses the same local host clock.
+    """
 
     def __init__(self, rules: tuple[TriggerRule, ...] | list[TriggerRule], *, max_messages: int = 5000):
         if max_messages < 1:
             raise ValueError("max_messages must be at least 1")
-        ids = [rule.rule_id for rule in rules]
-        if len(ids) != len(set(ids)):
-            raise ValueError("rule_id values must be unique")
-        self._rules = tuple(rules)
         self._max_messages = max_messages
+        self._rules: tuple[TriggerRule, ...] = ()
         self._messages: dict[tuple[str, str], deque[ChatMessage]] = {}
         self._seen: dict[tuple[str, str], set[str]] = {}
         self._seen_order: dict[tuple[str, str], deque[str]] = {}
         self._last_trigger: dict[tuple[str, str], datetime] = {}
+        self._latest_event_at: dict[tuple[str, str], datetime] = {}
+        self.set_rules(rules)
+
+    @staticmethod
+    def _validated_rules(rules: tuple[TriggerRule, ...] | list[TriggerRule]) -> tuple[TriggerRule, ...]:
+        validated = tuple(rules)
+        ids = [rule.rule_id for rule in validated]
+        if len(ids) != len(set(ids)):
+            raise ValueError("rule_id values must be unique")
+        return validated
+
+    def set_rules(self, rules: tuple[TriggerRule, ...] | list[TriggerRule]) -> None:
+        """Replace rules without discarding message deduplication or cooldown state."""
+        self._rules = self._validated_rules(rules)
 
     def add(self, message: ChatMessage) -> list[TriggerMatch]:
         key = (message.provider.value, message.stream_id)
@@ -78,26 +105,34 @@ class TriggerEngine:
         while len(seen_order) > self._max_messages:
             seen.discard(seen_order.popleft())
 
+        event_at = message.provider_timestamp.astimezone(timezone.utc)
+        latest_event_at = self._latest_event_at.get(key)
+        # Providers normally deliver chronological chat. A late event must not
+        # rewind the rule clock or fire a phrase from an old reconnect backlog.
+        if latest_event_at is not None and event_at < latest_event_at:
+            return []
+        self._latest_event_at[key] = event_at
+
         history.append(message)
         max_window = max((rule.window_seconds for rule in self._rules), default=0)
-        # Trigger windows must use the local receipt clock shared with capture.
-        # Provider timestamps are still retained for display, but can be skewed
-        # or arrive out of order and must not suppress real-time chat activity.
-        global_cutoff = message.received_at - timedelta(seconds=max_window)
+        global_cutoff = event_at - timedelta(seconds=max_window)
         history = deque(
-            (item for item in history
-             if global_cutoff <= item.received_at <= message.received_at),
+            (
+                item for item in history
+                if global_cutoff <= item.provider_timestamp.astimezone(timezone.utc) <= event_at
+            ),
             maxlen=self._max_messages,
         )
         self._messages[key] = history
+
         matches: list[TriggerMatch] = []
         for rule in self._rules:
-            cutoff = message.received_at - timedelta(seconds=rule.window_seconds)
-            recent = [item for item in history if cutoff <= item.received_at <= message.received_at]
-            phrase_hit = any(
-                _normalise(phrase) in _normalise(message.text)
-                for phrase in rule.phrases
-            )
+            cutoff = event_at - timedelta(seconds=rule.window_seconds)
+            recent = [
+                item for item in history
+                if cutoff <= item.provider_timestamp.astimezone(timezone.utc) <= event_at
+            ]
+            phrase_hit = any(_contains_phrase(message.text, phrase) for phrase in rule.phrases)
             users = {item.sender_id for item in recent}
             volume_hit = (
                 rule.min_messages is not None
@@ -109,7 +144,7 @@ class TriggerEngine:
 
             cooldown_key = (key[0] + ":" + key[1], rule.rule_id)
             last = self._last_trigger.get(cooldown_key)
-            if last is not None and (message.received_at - last).total_seconds() < rule.cooldown_seconds:
+            if last is not None and (event_at - last).total_seconds() < rule.cooldown_seconds:
                 continue
 
             reason = "phrase" if phrase_hit else "chat_volume"
@@ -117,10 +152,11 @@ class TriggerEngine:
                 rule_id=rule.rule_id,
                 provider=message.provider.value,
                 stream_id=message.stream_id,
+                # Candidate capture uses the local receipt clock, not provider time.
                 triggered_at=message.received_at,
                 reason=reason,
                 message_count=len(recent),
                 unique_user_count=len(users),
             ))
-            self._last_trigger[cooldown_key] = message.received_at
+            self._last_trigger[cooldown_key] = event_at
         return matches

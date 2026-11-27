@@ -20,8 +20,8 @@ from typing import Any, Callable
 
 from .models import ChatProvider
 from .rolling_capture import RollingCapture, RollingCaptureConfig, RollingCaptureError
-from .extraction import assemble_segments
-from .timeline import segment_wall_interval, select_segments_for_interval, validate_contiguous_interval
+from .extraction import assemble_segments, probe_media_duration_seconds
+from .timeline import segment_wall_intervals, select_segments_for_interval, validate_contiguous_interval
 from .urls import parse_stream_url
 from .state_store import StateStoreError, get_state_store
 from .diagnostics import log_event
@@ -75,6 +75,7 @@ class HighlightCandidate:
     window_end: datetime | None = None
     merge_until: datetime | None = None
     trigger_count: int = 1
+    actual_duration_seconds: float | None = None
     generation_status: str = "not_started"
     generation_job_id: str | None = None
     generation_error: str | None = None
@@ -85,8 +86,11 @@ class HighlightCandidate:
             "candidate_id": self.candidate_id,
             "capture_session_id": self.capture_session_id,
             "triggered_at": self.triggered_at.isoformat(),
+            "window_start": self.window_start.isoformat() if self.window_start else None,
+            "window_end": self.window_end.isoformat() if self.window_end else None,
             "pre_seconds": self.pre_seconds,
             "post_seconds": self.post_seconds,
+            "actual_duration_seconds": self.actual_duration_seconds,
             "reason": self.reason,
             "status": self.status,
             "review_status": self.review_status,
@@ -116,6 +120,13 @@ class CaptureSession:
     capture_finished: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
+        buffer_status = {}
+        get_buffer_status = getattr(self.capture, "buffer_status", None)
+        if self.status == "recording" and callable(get_buffer_status):
+            try:
+                buffer_status = get_buffer_status()
+            except (OSError, ValueError):
+                buffer_status = {}
         return {
             "session_id": self.session_id,
             "provider": self.provider.value,
@@ -127,6 +138,8 @@ class CaptureSession:
             "retention_seconds": self.config.retention_seconds,
             "max_buffer_size_mb": self.config.max_buffer_size_mb,
             "quality": self.config.quality,
+            "buffered_seconds": buffer_status.get("buffered_seconds", 0.0),
+            "latest_segment_age_seconds": buffer_status.get("latest_segment_age_seconds"),
         }
 
 
@@ -203,8 +216,11 @@ class CaptureSessionManager:
                 "candidate_id": item.candidate_id,
                 "capture_session_id": item.capture_session_id,
                 "triggered_at": item.triggered_at.isoformat(),
+                "window_start": item.window_start.isoformat() if item.window_start else None,
+                "window_end": item.window_end.isoformat() if item.window_end else None,
                 "pre_seconds": item.pre_seconds,
                 "post_seconds": item.post_seconds,
+                "actual_duration_seconds": item.actual_duration_seconds,
                 "reason": item.reason,
                 "status": item.status,
                 "review_status": item.review_status,
@@ -423,6 +439,31 @@ class CaptureSessionManager:
 
                 pre_seconds = row.get("pre_seconds", 0)
                 post_seconds = row.get("post_seconds", 0)
+                window_start = self._parse_saved_datetime(row.get("window_start"))
+                window_end = self._parse_saved_datetime(row.get("window_end"))
+                actual_duration_seconds = row.get("actual_duration_seconds")
+                if isinstance(actual_duration_seconds, bool):
+                    actual_duration_seconds = None
+                else:
+                    try:
+                        actual_duration_seconds = float(actual_duration_seconds)
+                    except (TypeError, ValueError, OverflowError):
+                        actual_duration_seconds = None
+                if (
+                    actual_duration_seconds is not None
+                    and (
+                        not math.isfinite(actual_duration_seconds)
+                        or actual_duration_seconds <= 0
+                    )
+                ):
+                    actual_duration_seconds = None
+                if (
+                    window_start is None
+                    or window_end is None
+                    or window_end < window_start
+                ):
+                    window_start = None
+                    window_end = None
                 segment_count = row.get("segment_count", 0)
                 trigger_count = row.get("trigger_count", 1)
                 generation_status = row.get("generation_status", "not_started")
@@ -466,6 +507,9 @@ class CaptureSessionManager:
                     output_path=output_path,
                     segment_count=segment_count,
                     trigger_count=trigger_count,
+                    window_start=window_start,
+                    window_end=window_end,
+                    actual_duration_seconds=actual_duration_seconds,
                     generation_status=generation_status,
                     generation_job_id=generation_job_id,
                     generation_error=generation_error,
@@ -725,6 +769,24 @@ class CaptureSessionManager:
                 raise ValueError("Increase rolling-buffer retention to cover the requested highlight window.")
 
             indexed = session.capture.read_segment_index()
+            get_buffer_status = getattr(session.capture, "buffer_status", None)
+            if pre_seconds > 0 and callable(get_buffer_status):
+                buffer_status = get_buffer_status()
+                buffered_seconds = float(buffer_status.get("buffered_seconds") or 0.0)
+                latest_segment_age = buffer_status.get("latest_segment_age_seconds")
+                required_seconds = pre_seconds + session.config.segment_seconds
+                max_latest_age = max(10.0, session.config.segment_seconds * 3)
+                if (
+                    buffered_seconds + 0.1 < required_seconds
+                    or not isinstance(latest_segment_age, (int, float))
+                    or latest_segment_age > max_latest_age
+                ):
+                    available = max(0, int(buffered_seconds))
+                    raise ValueError(
+                        "The rolling buffer is still warming up or is too small for the requested pre-trigger window. "
+                        f"It currently has {available} seconds of continuous recent footage; "
+                        f"{required_seconds} seconds are needed. Increase the Buffer cap (MB) or choose a lower stream quality."
+                    )
             merge_gap = timedelta(seconds=session.config.segment_seconds)
 
             # Only merge candidates that have not been sealed for assembly. A
@@ -875,15 +937,10 @@ class CaptureSessionManager:
                     self._protect_candidate_window_locked(
                         session, candidate, current_index, window_start, window_end
                     )
-                    completed_end = 0.0
-                    for item in current_index:
-                        try:
-                            completed_end = max(
-                                completed_end,
-                                segment_wall_interval(item)[1].timestamp(),
-                            )
-                        except (OSError, ValueError):
-                            continue
+                    completed_end = max(
+                        (end.timestamp() for _record, _start, end in segment_wall_intervals(current_index)),
+                        default=0.0,
+                    )
 
                     window_complete = completed_end >= window_end.timestamp()
                     capture_stopped = session.stop_event.is_set()
@@ -924,9 +981,16 @@ class CaptureSessionManager:
             )
             output_path = session.config.output_dir / "highlights" / f"{candidate.candidate_id}.mp4"
             assemble_segments(records, output_path, ffmpeg_path=session.config.ffmpeg_path)
+            # This measures the assembled file. It does not make the mtime-based
+            # chat-to-media alignment or segment-boundary selection frame-accurate.
+            actual_duration = probe_media_duration_seconds(
+                output_path,
+                ffmpeg_path=session.config.ffmpeg_path,
+            )
             with self._lock:
                 candidate.output_path = output_path
                 candidate.segment_count = len(records)
+                candidate.actual_duration_seconds = actual_duration
                 candidate.status = "ready"
                 # The preview must not become visible until its ready state is
                 # durable. A crash after a best-effort write would restore this

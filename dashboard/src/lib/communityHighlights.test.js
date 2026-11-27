@@ -3,8 +3,12 @@ import test from "node:test";
 
 import {
   communityHighlightsGeminiHeaders,
+  isCommunityHighlightsBufferReady,
   isCommunityHighlightsProviderConnected,
+  isCommunityHighlightsSessionActive,
+  isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
+  shouldContinueCommunityHighlightsStatusPolling,
 } from "./communityHighlights.js";
 
 test("parses Twitch channel URLs and normalizes provider identity", () => {
@@ -76,4 +80,72 @@ test("builds the Gemini BYOK header for candidate generation when a key is saved
   });
   assert.deepEqual(communityHighlightsGeminiHeaders(""), {});
   assert.deepEqual(communityHighlightsGeminiHeaders(undefined), {});
+});
+
+
+test("treats interrupted and other terminal sessions as inactive", () => {
+  for (const status of ["stopped", "ended", "error", "interrupted"]) {
+    assert.equal(isCommunityHighlightsSessionActive({ status }), false, status);
+  }
+
+  for (const status of ["starting", "connecting", "connected", "reconnecting", "recording", "stopping"]) {
+    assert.equal(isCommunityHighlightsSessionActive({ status }), true, status);
+  }
+
+  assert.equal(isCommunityHighlightsSessionActive(null), false);
+  assert.equal(isCommunityHighlightsSessionActive(undefined), false);
+});
+
+
+test("reports highlighting as active only when chat is connected and recording is running", () => {
+  assert.equal(
+    isCommunityHighlightsWorkflowActive(
+      { status: "connected" },
+      { status: "recording" },
+    ),
+    true,
+  );
+
+  for (const [chatStatus, captureStatus] of [
+    ["connecting", "starting"],
+    ["reconnecting", "recording"],
+    ["connected", "stopping"],
+    ["connected", "starting"],
+  ]) {
+    assert.equal(
+      isCommunityHighlightsWorkflowActive(
+        { status: chatStatus },
+        { status: captureStatus },
+      ),
+      false,
+      `${chatStatus}/${captureStatus}`,
+    );
+  }
+
+  assert.equal(isCommunityHighlightsWorkflowActive(null, { status: "recording" }), false);
+  assert.equal(isCommunityHighlightsWorkflowActive({ status: "connected" }, null), false);
+});
+
+
+test("retries status polling after a failed load, then allows idle polling to stop", () => {
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(false, false), false);
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(false, true), true);
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(true, false), true);
+  assert.equal(shouldContinueCommunityHighlightsStatusPolling(true, true), true);
+});
+
+
+test("buffer readiness requires full recent pre-roll plus one segment", () => {
+  const capture = {
+    status: "recording",
+    segment_seconds: 4,
+    buffered_seconds: 49,
+    latest_segment_age_seconds: 3,
+  };
+
+  assert.equal(isCommunityHighlightsBufferReady(capture, 45), true);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, buffered_seconds: 48 }, 45), false);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, latest_segment_age_seconds: 20 }, 45), false);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, status: "starting" }, 45), false);
+  assert.equal(isCommunityHighlightsBufferReady({ ...capture, latest_segment_age_seconds: null }, 45), false);
 });

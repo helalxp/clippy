@@ -117,7 +117,7 @@ def handoff(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "child_env", lambda: {})
     monkeypatch.setattr(app_module, "layout_env", lambda _layouts: {})
     monkeypatch.setattr(app_module, "_media_duration_seconds", lambda _path: 120.0)
-    monkeypatch.setattr(app_module, "MIN_SOURCE_SECONDS", 0)
+    monkeypatch.setattr(app_module, "MIN_SOURCE_SECONDS", 45)
 
     async def reserve(*_args, **_kwargs):
         return None, 2, None, "self_host", None
@@ -172,6 +172,25 @@ def test_approved_candidate_enters_normal_one_clip_vertical_job(handoff):
     assert manager.snapshot["review_status"] == "approved"
     assert manager.snapshot["generation_status"] == "queued"
     assert manager.snapshot["generation_job_id"] == job_id
+    assert queued == [(job_id, 2)]
+
+
+def test_approved_30_second_candidate_passes_45_second_generic_source_guard(handoff, monkeypatch):
+    _output_root, upload_root, original, manager, queued = handoff
+    monkeypatch.setattr(app_module, "_media_duration_seconds", lambda _path: 30.0)
+
+    response = _post_process({
+        "community_candidate_id": manager.snapshot["candidate_id"],
+        "acknowledged": True,
+    })
+
+    assert response.status_code == 200, response.text
+    job_id = response.json()["job_id"]
+    job = app_module.jobs[job_id]
+    input_path = Path(job["cmd"][job["cmd"].index("-i") + 1])
+    assert input_path.is_file()
+    assert input_path.read_bytes() == original.read_bytes()
+    assert manager.snapshot["generation_status"] == "queued"
     assert queued == [(job_id, 2)]
 
 

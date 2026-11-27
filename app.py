@@ -4308,8 +4308,20 @@ async def process_endpoint(
             source_duration = _media_duration_seconds(input_path)
             if source_duration <= 0:
                 raise HTTPException(status_code=400, detail="The approved highlight is not a readable MP4.")
-            if MIN_SOURCE_SECONDS > 0 and source_duration < MIN_SOURCE_SECONDS:
-                _reject_short_source(source_duration)
+            # Community Highlights candidates are already short, bounded clips.
+            # Keep the generic source minimum for URLs/uploads, but validate this
+            # handoff against the clip selector's actual minimum instead.
+            from clip_selection import clip_duration_bounds
+            minimum_clip_seconds, _ = clip_duration_bounds()
+            if source_duration < minimum_clip_seconds:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"This highlight is {source_duration:.1f}s long, but Clippy's "
+                        f"current clip-selection minimum is {minimum_clip_seconds:g}s. "
+                        "Increase the capture window and create a longer highlight."
+                    ),
+                )
             cmd.extend(["-i", input_path])
             community_log_event("generation.source_validated", candidate_id=community_candidate_id, job_id=job_id, duration_seconds=source_duration, size_bytes=os.path.getsize(input_path))
         except Exception as error:

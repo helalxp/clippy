@@ -1,9 +1,10 @@
 # Community Highlights: After Implementation
 
-**Status:** Initial feature rollout accepted with tracked refinements  
-**Active branch:** `fix/community-highlights-google-oauth`  
-**Release version being prepared:** `v0.3.3`  
-**Last updated:** 2026-11-26
+**Status:** Initial feature merged; consolidated follow-up is in review.  
+**Merged baseline:** `main` contains Community Highlights and version metadata `0.3.3`; tag/publication status must be verified separately.  
+**Active PR:** #43, consolidating correctness fixes, the workflow UI, and candidate timing metrics into one reviewable change against `main`.  
+**Included work:** former PR #42 correctness batch, former PR #43 workflow redesign, and former PR #44 requested-window/actual-duration metrics.  
+**Last updated:** 2026-11-27
 
 ## Purpose
 
@@ -30,11 +31,11 @@ The current feature path includes:
 
 ### P1: Approved candidates shorter than 45 seconds are rejected
 
-**Observed:** A Community Highlights candidate can be shorter than 45 seconds, but generation can reject it before the normal pipeline starts.
+**Observed:** A Community Highlights candidate can be shorter than 45 seconds, but generation previously rejected it before the normal pipeline started.
 
-**Confirmed cause:** The shared `MIN_SOURCE_SECONDS` guard defaults to 45 seconds and is applied to the staged Community Highlights candidate in `app.py`, as well as ordinary uploaded sources. A chat-triggered candidate is already a bounded highlight rather than a full-length source video, so applying the same source minimum creates a contract mismatch.
+**Confirmed cause:** `app.py` applied the generic `MIN_SOURCE_SECONDS` guard to the staged candidate. That guard defaults to 45 seconds and is intended for ordinary URLs/uploads, not already-trimmed highlight media.
 
-**Preferred refinement:** Introduce a source-specific duration policy for Community Highlights candidates. Preserve the existing minimum for ordinary URL/file uploads unless a separate product decision changes it. Do not simply lower the global minimum.
+**Fix authored on `fix/community-highlights-correctness`:** Keep the generic 45-second guard unchanged for ordinary sources. Validate a Community Highlights candidate against the clip selector's actual minimum duration instead. A valid 30-second candidate should pass; media shorter than the configured clip-selection minimum gets a candidate-specific explanation. A regression test sets the generic guard to 45 seconds and exercises a 30-second candidate. CI has not yet run.
 
 **Acceptance criteria:**
 - A valid, readable approved candidate shorter than 45 seconds can enter the one-Short pipeline.
@@ -55,30 +56,40 @@ The current feature path includes:
 
 These findings explain why the current implementation can differ from an exact 30/30 split, but they do not quantify the drift on every real stream. The observed cases should be measured before choosing a fix.
 
-**Preferred refinement:** Keep the requested window as the source of truth, record the actual assembled duration and effective boundaries, and make the allowed tolerance explicit. If exact boundaries are a product requirement, evaluate trimming/re-encoding only at the final assembly boundary rather than complicating the rolling capture path.
+**Included in consolidated PR #43:**
+- Persist the candidate's requested/effective UTC window bounds (`window_start` / `window_end`) in the candidate snapshot and state store. Older records without these fields restore with null bounds.
+- After MP4 assembly, use FFprobe to measure the actual container duration. Prefer `FFPROBE_PATH`, then FFprobe beside the configured FFmpeg executable, then PATH. This runs after assembly and is best-effort: missing/unavailable FFprobe or invalid output leaves the candidate ready with `actual_duration_seconds: null`.
+- Persist and restore `actual_duration_seconds` when it is finite and positive. Invalid saved metrics are discarded. No rolling capture or stream-copy behavior is changed.
 
-**Acceptance criteria:**
-- Persisted settings used by the trigger coordinator match the values shown as saved in the UI and survive restart.
-- A single trigger produces a measured output duration within a documented tolerance of the requested pre + post duration.
-- Tests cover segment-boundary rounding, delayed segment completion, filesystem timestamp drift, gaps, and merged triggers.
-- The UI distinguishes requested pre/post values from the actual candidate duration and indicates when multiple triggers expanded a candidate.
-- No media is silently presented as frame-accurate until the timeline is made frame-accurate.
+**Important limitation:** this measures the output file's duration. It does not prove that the chat trigger was aligned to the exact requested wall-clock boundaries. The filesystem-mtime timeline estimate and whole-segment selection remain approximate, and merged candidates intentionally span the union of their windows.
+
+**Remaining refinement and acceptance:**
+- Measure drift between trigger receipt and video content on authorized real streams, separately for YouTube and Twitch.
+- Test segment-boundary rounding, delayed segment completion, filesystem timestamp drift, gaps, and merged triggers using reproducible fixtures.
+- Display requested bounds, measured actual duration, and merged-trigger count as distinct values. Never calculate or label the difference as exact timing error until wall-clock alignment has been measured.
+- Decide whether final-stage trimming is required only after the real-stream measurements. Do not re-encode the rolling buffer.
+- No media is presented as frame-accurate until the timeline itself is made frame-accurate.
 
 ### P1: Candidate triggers sometimes occur without the configured phrase
 
-**Observed:** A candidate can be created even though the configured phrase is not present in the recent chat.
+**Observed:** A candidate can be created even though the configured phrase is not present in recent chat.
 
-**Confirmed behavior that likely explains some reports:** A rule currently fires when **either** a phrase matches **or** the chat-volume threshold is reached. The default volume rule is 12 messages from at least 5 unique viewers within 10 seconds. That path deliberately creates a candidate without a phrase; the candidate's reason is recorded as `chat_volume` rather than `phrase`.
+**Confirmed existing behavior:** The old trigger rule fired when **either** a phrase matched **or** chat-volume reached its threshold. The default volume rule is 12 messages from at least 5 unique viewers within 10 seconds. A candidate without the phrase could therefore be expected under the previous default configuration.
 
-This means a trigger without the phrase is not automatically evidence of a phrase-matching defect. The current UI also exposes the volume thresholds alongside the phrases, but the distinction deserves much stronger explanation and visibility.
+**Additional confirmed causes:**
+- The trigger engine used local receipt time for chat-volume windows. YouTube can return messages in batches, so messages published across more than the configured window could arrive together and appear to be a burst.
+- Transient YouTube retries discarded the live-chat continuation token. The original session-start check did not suppress all backlog replayed after a later reconnect.
+- Saving settings rebuilt the trigger engine and discarded in-memory provider-message deduplication and cooldown state.
+- Phrase matching used substring matching, allowing false positives such as a configured phrase inside a larger word.
 
-**Further investigation:** If candidates still appear unexpectedly when neither the phrase nor the configured volume threshold was met, capture a redacted event trace of message counts, unique sender counts, configured window, cooldown, and the candidate reason. Check provider message duplication, reconnect overlap, phrase normalization/substring matching, and candidate merging. Do not log raw chat content or viewer identifiers.
+**Fixes authored on `fix/community-highlights-correctness`:**
+- Use provider publication timestamps for trigger windows/cooldowns while retaining local receipt time for trigger-to-capture coordination.
+- Preserve YouTube's live-chat ID, continuation token, and latest publication-time watermark across retries within the same running chat session. Older replayed backlog stays visible but is not sent to trigger evaluation.
+- Preserve deduplication and cooldown state when rules are updated.
+- Normalize Unicode, punctuation, and whitespace before deterministic whole-phrase matching.
+- Expose `phrases`, `chat_volume`, and `either` modes; older saved settings default to `either` so existing behavior is preserved.
 
-**Preferred refinement:**
-- Make phrase-only, volume-only, and combined triggering explicit user-selectable modes, or provide an equally clear enable/disable control for the volume rule.
-- Show the trigger reason on each candidate and in its detail view.
-- Explain the active thresholds before monitoring starts.
-- Keep phrase matching deterministic and add tests for punctuation, whitespace, casing, substring false positives, duplicate messages, cooldowns, and out-of-order events.
+Focused regression tests have been authored for the above behavior. CI and real provider acceptance are still pending.
 
 **Acceptance criteria:**
 - Phrase-only mode never creates a candidate from chat volume alone.
@@ -104,14 +115,40 @@ This means a trigger without the phrase is not automatically evidence of a phras
 
 ### P2: Remaining operational hardening
 
-These are already present in the implementation plan and remain follow-up work rather than newly confirmed defects:
+The following items remain open after the source audit and are not covered by the first correctness batch:
 
 - Complete live Twitch authorization, chat, rolling capture, candidate extraction, and disconnect acceptance.
+- Complete packaged-Windows acceptance for YouTube reconnect/cursor recovery and Twitch IRC `RECONNECT`, alongside Twitch live chat, capture, candidate extraction, and disconnect.
 - Test long-running provider reconnects, quota/rate-limit handling, and terminal chat states.
-- Measure trigger-to-media timeline drift on real authorized streams.
+- Measure trigger-to-media timeline drift on real authorized streams. The chat-rule clock fix does not make the current segment-mtime/duration capture alignment frame-accurate.
 - Define a total candidate-media age/byte budget and disk-pressure behavior.
 - Improve setup and troubleshooting documentation, including provider-specific error guidance.
 - Revisit exact frame trimming and candidate boundary editing after the duration measurements are available.
+
+## Lifecycle and restart clarification
+
+Candidate metadata and review decisions are persisted and restored by the current backend. Completed candidate MP4s are preserved across a backend restart when their paths pass the storage checks. Active chat connections are not resumed. Active rolling captures and in-progress candidate assembly workers cannot resume; they are marked interrupted/failed and disposable rolling segments are cleaned during startup reconciliation. Trigger-engine message IDs, recent-message windows, and cooldown state are in memory and do not survive a backend process restart. The new YouTube continuation fields are also session-memory state, not durable restart state.
+
+This corrects the older implementation note that candidate metadata was memory-only. It does not mean interrupted live capture or extraction can continue after a process restart.
+
+## Pre/post duration status
+
+Requested/effective UTC window bounds and the measured MP4 container duration are now stored and displayed when available. This measures the assembled file, not exact wall-clock alignment. Whole-segment selection, filesystem timestamp drift, and merged trigger windows remain approximate; real-stream measurement is still required before deciding whether final-stage trimming is necessary. Do not re-encode the rolling buffer.
+
+## Current UI scope
+
+The full workflow-first redesign is included in consolidated PR #43:
+- Provider connections remain in their existing reusable section.
+- The stream URL and one coordinated start/stop action are now the primary workflow. A partial start remains visible and can be completed or stopped.
+- Capture quality/storage settings are collapsed by default and explain that they apply to the next recording.
+- Trigger modes and thresholds are grouped by purpose; unsaved changes are explicit, and “Clip now” uses the last saved pre/post window.
+- Candidate review is quieter and more compact, exposes the trigger reason and merged-trigger count, and keeps preview/download/generation actions available.
+- Rights confirmation and deletion confirmation are inline rather than browser popups.
+- Live chat messages and diagnostics are available in a collapsed section.
+
+The stream selector and active-work polling now use the same terminal-state policy. In particular, persisted `interrupted` sessions from backend restart recovery are not mistaken for active sessions, so they do not leave the workflow in a stale partial state. Focused dashboard unit tests cover terminal/in-flight session handling and ensure the “Highlighting” success state is shown only when chat is connected and the rolling buffer is recording. Status loading also retries every three seconds only while a previous load is failing; once it recovers and there is no active work, polling stops again. This prevents a transient initial API failure from leaving the tab permanently stale without adding continuous idle polling.
+
+The current UI head passed backend tests, dashboard unit tests, and the production dashboard build in GitHub Actions run [#45872885434](https://github.com/helalxp/clippy/actions/runs/45872885434). The additional terminal-state/workflow-health corrections on head `f664f835` also passed backend tests, dashboard unit tests, and the production dashboard build in run [#45875358353](https://github.com/helalxp/clippy/actions/runs/45875358353). Packaged-Windows and responsive acceptance remain pending. The candidate card displays the measured MP4 duration when the backend's optional `actual_duration_seconds` field is available; otherwise it explicitly says the measurement is unavailable. The window span and merged-trigger count remain separate, and the UI does not claim frame-accurate wall-clock boundaries.
 
 ## Release-prep verification record
 
@@ -124,8 +161,30 @@ For the PR head that included the Gemini-key handoff fix, GitHub Actions reporte
 
 The user's live test additionally confirmed that the approved candidate reached the standard results card and generated a clip.
 
-These checks establish a solid merge baseline, but do not imply that the post-implementation items above have been fixed. The CI run predates the `v0.3.3` metadata-only version bump; the version-bump commit must pass the same workflows before merge.
+These historical checks establish a merge baseline for the feature branch. The constituent changes were validated independently before consolidation: correctness (former PR #42) passed backend/frontend CI and Windows desktop validation; workflow UI (former PR #43) passed backend CI, dashboard unit tests, and production build; timing metrics (former PR #44) passed backend CI and dashboard build. Packaged-Windows acceptance for the UI and FFprobe discovery remains pending. These historical runs were on the pre-consolidation branch heads and do not constitute CI for the combined merge commit.
 
 ## Working rule
 
-Fix these items incrementally, one stable issue at a time. For each fix, add a focused regression test that protects the intended behavior, update this register, and keep unrelated pipeline behavior unchanged.
+Fix these items incrementally, one stable issue at a time. For each fix, add focused regression tests, update this register, and keep unrelated pipeline behavior unchanged. Keep the Community Highlights correctness, timing, and UI changes together in one reviewable PR; continue with one stable fix at a time.
+
+
+## 2026-11-27 rolling-buffer pre-roll and segment-gap repair
+
+### Root cause
+
+The timeline previously estimated every completed segment independently as `file_mtime - segment_duration`. A delayed or jittered file-close timestamp could therefore make contiguous FFmpeg PTS segments appear to have artificial gaps, or make the oldest segment appear later than it really was. Both reported errors came from the same validator using those per-file wall-clock estimates.
+
+A second, independent startup race existed: the workflow started chat immediately after FFmpeg reported the capture as recording. That status meant the process had started, not that the ring had accumulated the configured pre-trigger history. With a 45-second pre-roll, an early phrase or volume trigger could never contain the requested footage. The 512 MiB default byte cap can also shorten effective retention on high-bitrate streams; `retention_seconds` is a ceiling, not a guarantee when the byte cap is reached.
+
+### Fix included in consolidated PR #43
+
+- Map all segment CSV PTS intervals onto wall time using a single median offset from segment file mtimes, rather than applying each file's mtime independently. Individual timestamp jitter no longer creates artificial gaps; real PTS discontinuities remain detectable and are still rejected.
+- Expose the latest continuous PTS-buffer duration and age of the newest completed segment in capture status.
+- Do not start chat monitoring until the rolling ring has the saved pre-trigger duration plus one complete segment and recent segment activity.
+- Stop a chat-only partial workflow before warming the newly created rolling buffer, then restart chat after the pre-roll is ready.
+- Disable manual “Clip now” until the same pre-roll readiness condition is met, and reject direct trigger requests when the required buffer is unavailable.
+- If the byte cap prevents the buffer from reaching the requested duration, the workflow now reports the measured available duration and asks the user to increase the buffer cap or choose a lower stream quality instead of creating a doomed candidate.
+
+### Remaining external failure mode
+
+The application cannot manufacture missing source packets. If a provider/network interruption creates a genuine discontinuity in FFmpeg's input PTS, the candidate is still rejected rather than silently concatenating over missing footage. That case requires stable live delivery or a later bounded capture-reconnect design; it is not fixed by relaxing the gap check.

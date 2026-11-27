@@ -149,6 +149,11 @@ class ChatSession:
     task: asyncio.Task | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     diagnostic: dict[str, Any] | None = None
+    # Keep YouTube continuation state across transient retries of this session.
+    # These opaque provider values never leave the backend or enter snapshots.
+    youtube_live_chat_id: str | None = field(default=None, repr=False)
+    youtube_page_token: str | None = field(default=None, repr=False)
+    youtube_last_message_at: datetime | None = field(default=None, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -442,6 +447,17 @@ class ChatSessionManager:
                     continue
 
                 for line in _split_twitch_irc_frame(raw):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].upper() == "RECONNECT":
+                        # Twitch explicitly asks IRC clients to reconnect and
+                        # rejoin their channels after server maintenance.
+                        log_event(
+                            "chat.reconnect_requested",
+                            level=logging.WARNING,
+                            provider="twitch",
+                            session_id=session.session_id,
+                        )
+                        return
                     if line.startswith("PING"):
                         # Echo the server's exact ping payload as required by IRC.
                         await socket.send("PONG" + line[4:])
@@ -482,32 +498,37 @@ class ChatSessionManager:
         session.diagnostic = None
         video_id = session.reference.stream_id
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0)) as client:
-            token = await self._token_provider("youtube")
-            headers = {"Authorization": f"Bearer {token}"}
-            video = await client.get(
-                f"{YOUTUBE_API}/videos",
-                params={"part": "liveStreamingDetails", "id": video_id},
-                headers=headers,
-            )
-            if video.status_code == 401:
-                token = await self._token_provider("youtube", force_refresh=True)
+            live_chat_id = session.youtube_live_chat_id
+            if not live_chat_id:
+                token = await self._token_provider("youtube")
                 headers = {"Authorization": f"Bearer {token}"}
                 video = await client.get(
                     f"{YOUTUBE_API}/videos",
                     params={"part": "liveStreamingDetails", "id": video_id},
                     headers=headers,
                 )
-            _check_youtube_response(video, operation="videos.list")
-            items = video.json().get("items") or []
-            if not items:
-                raise ValueError("YouTube video was not found or is unavailable.")
-            live_chat_id = (items[0].get("liveStreamingDetails") or {}).get("activeLiveChatId")
-            if not live_chat_id:
-                session.status = "ended"
-                session.error = "This video has no active live chat."
-                return
+                if video.status_code == 401:
+                    token = await self._token_provider("youtube", force_refresh=True)
+                    headers = {"Authorization": f"Bearer {token}"}
+                    video = await client.get(
+                        f"{YOUTUBE_API}/videos",
+                        params={"part": "liveStreamingDetails", "id": video_id},
+                        headers=headers,
+                    )
+                _check_youtube_response(video, operation="videos.list")
+                items = video.json().get("items") or []
+                if not items:
+                    raise ValueError("YouTube video was not found or is unavailable.")
+                live_chat_id = (items[0].get("liveStreamingDetails") or {}).get("activeLiveChatId")
+                if not live_chat_id:
+                    session.status = "ended"
+                    session.error = "This video has no active live chat."
+                    return
+                session.youtube_live_chat_id = live_chat_id
 
-            page_token = None
+            # The API's continuation token resumes the current message cursor.
+            # Retain it across retries instead of re-reading the recent backlog.
+            page_token = session.youtube_page_token
             rate_limit_delay = 5
             session.status = "connected"
             session.error = None
@@ -535,9 +556,10 @@ class ChatSessionManager:
                         headers=headers,
                     )
                 if response.status_code == 400 and _youtube_api_error_reason(response) == "pageTokenInvalid":
-                    # A stale continuation token should not kill an otherwise
-                    # valid monitoring session. Restart from the current window.
+                    # Restart from the recent window, but keep the publishedAt
+                    # watermark below so replayed backlog cannot fire old triggers.
                     page_token = None
+                    session.youtube_page_token = None
                     continue
                 if response.status_code == 403 and _youtube_api_error_reason(response) == "rateLimitExceeded":
                     # The live-chat list endpoint explicitly asks clients not to
@@ -560,15 +582,29 @@ class ChatSessionManager:
                     message = _parse_youtube_message(item, video_id)
                     if message:
                         session.messages.append(message)
-                        # The first list response can contain recent chat history.
-                        # Keep it visible in the monitor, but don't turn old chat
-                        # into a fresh trigger at the moment monitoring starts.
-                        if message.provider_timestamp >= session.started_at and self._message_callback:
+                        previous_event_at = session.youtube_last_message_at
+                        is_new_event = (
+                            message.provider_timestamp >= session.started_at
+                            and (
+                                previous_event_at is None
+                                or message.provider_timestamp >= previous_event_at
+                            )
+                        )
+                        # Advance the watermark even for initial historical rows.
+                        # On reconnect (or an invalid page token), older backlog
+                        # stays visible but is never sent into trigger evaluation.
+                        if (
+                            previous_event_at is None
+                            or message.provider_timestamp > previous_event_at
+                        ):
+                            session.youtube_last_message_at = message.provider_timestamp
+                        if is_new_event and self._message_callback:
                             try:
                                 self._message_callback(message)
                             except Exception:
                                 pass
                 page_token = payload.get("nextPageToken")
+                session.youtube_page_token = page_token
                 wait_ms = payload.get("pollingIntervalMillis", 5000)
                 await asyncio.sleep(max(1000, min(int(wait_ms), 30000)) / 1000)
 

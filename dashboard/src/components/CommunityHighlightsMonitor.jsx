@@ -2,29 +2,44 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, Loader2, MessageCircle, Square, Radio, Trash2 } from 'lucide-react';
 import { apiFetch, apiJson } from '../lib/api';
 import {
+  COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES,
   communityHighlightsGeminiHeaders,
   isCommunityHighlightsProviderConnected,
+  isCommunityHighlightsBufferReady,
+  isCommunityHighlightsSessionActive,
+  isCommunityHighlightsWorkflowActive,
   parseCommunityHighlightsStreamUrl,
+  shouldContinueCommunityHighlightsStatusPolling,
 } from '../lib/communityHighlights';
 
-const TERMINAL_SESSION_STATES = new Set(['stopped', 'ended', 'error']);
+const TERMINAL_SESSION_STATES = COMMUNITY_HIGHLIGHTS_TERMINAL_SESSION_STATES;
 
 const statusLabel = (status) => ({
   connecting: 'Connecting',
-  connected: 'Monitoring chat',
+  connected: 'Connected',
   reconnecting: 'Reconnecting',
   error: 'Needs attention',
   ended: 'Chat ended',
   stopped: 'Stopped',
+  interrupted: 'Interrupted',
 }[status] || status || 'Unknown');
+
+const formatDuration = (seconds) => {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
 
 export default function CommunityHighlightsMonitor({ connections, onOpenJob, geminiApiKey }) {
   const [streamUrl, setStreamUrl] = useState('');
   const [sessions, setSessions] = useState([]);
   const [captures, setCaptures] = useState([]);
+  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
   const [captureSettings, setCaptureSettings] = useState({ segment_seconds: 4, retention_seconds: 180, max_buffer_size_mb: 512, quality: 'best' });
   const [candidates, setCandidates] = useState([]);
-  const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
+  const [triggerSettings, setTriggerSettings] = useState({ phrases: ['clip it', 'clip that'], mode: 'either', min_messages: 12, min_unique_users: 5, window_seconds: 10, cooldown_seconds: 60, pre_seconds: 45, post_seconds: 45 });
+  const [savedTriggerSettings, setSavedTriggerSettings] = useState(triggerSettings);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState('');
   const [previewCandidateId, setPreviewCandidateId] = useState('');
@@ -33,8 +48,11 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const previewObjectUrl = useRef(null);
   const previewAbort = useRef(null);
   const [startingAction, setStartingAction] = useState('');
+  const [bufferWarmup, setBufferWarmup] = useState(null);
   const [sessionActionBusy, setSessionActionBusy] = useState('');
   const [error, setError] = useState('');
+  const [pendingApprovalCandidateId, setPendingApprovalCandidateId] = useState('');
+  const [pendingDeleteCandidateId, setPendingDeleteCandidateId] = useState('');
   const requestedGenerationJobs = useRef(new Set());
   const openedGenerationJobs = useRef(new Set());
 
@@ -122,12 +140,12 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
   const matchingChatSession = streamReference && sessions.find((session) => (
     session.provider === streamReference.provider
     && session.stream_id === streamReference.streamId
-    && !['stopped', 'ended', 'error'].includes(session.status)
+    && isCommunityHighlightsSessionActive(session)
   ));
   const matchingCaptureSession = streamReference && captures.find((capture) => (
     capture.provider === streamReference.provider
     && capture.stream_id === streamReference.streamId
-    && !['stopped', 'ended', 'error'].includes(capture.status)
+    && isCommunityHighlightsSessionActive(capture)
   ));
   const busy = startingAction !== '';
   const connectionGuidance = !streamUrl.trim()
@@ -148,22 +166,34 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
                   ? `${providerName} sign-in is not configured for this installation. Check its OAuth app registration.`
                   : `Connect your ${streamReference.provider === 'youtube' ? 'Google account for YouTube' : 'Twitch account'} in the card above before starting this stream.`;
 
+  const workflowSessionsPresent = Boolean(matchingChatSession && matchingCaptureSession);
+  const workflowActive = isCommunityHighlightsWorkflowActive(matchingChatSession, matchingCaptureSession);
+  const workflowPartial = Boolean(matchingChatSession || matchingCaptureSession) && !workflowSessionsPresent;
+  const triggerSettingsDirty = JSON.stringify(triggerSettings) !== JSON.stringify(savedTriggerSettings);
+
   const hasActiveWork = (
     sessions.some((session) => !TERMINAL_SESSION_STATES.has(session.status))
     || captures.some((capture) => !TERMINAL_SESSION_STATES.has(capture.status))
     || candidates.some((candidate) => candidate.status === 'capturing')
   );
 
-  const refreshSessions = async () => {
-    const [chatResult, captureResult, candidateResult] = await Promise.all([
-      apiJson('/api/community-highlights/sessions'),
-      apiJson('/api/community-highlights/captures'),
-      apiJson('/api/community-highlights/candidates'),
-    ]);
-    setSessions(chatResult.sessions || []);
-    setCaptures(captureResult.sessions || []);
-    setCandidates(candidateResult.candidates || []);
-  };
+  const refreshSessions = useCallback(async (isCurrent = () => true) => {
+    try {
+      const [chatResult, captureResult, candidateResult] = await Promise.all([
+        apiJson('/api/community-highlights/sessions'),
+        apiJson('/api/community-highlights/captures'),
+        apiJson('/api/community-highlights/candidates'),
+      ]);
+      if (!isCurrent()) return;
+      setSessions(chatResult.sessions || []);
+      setCaptures(captureResult.sessions || []);
+      setCandidates(candidateResult.candidates || []);
+      setStatusLoadFailed(false);
+    } catch (requestError) {
+      if (isCurrent()) setStatusLoadFailed(true);
+      throw requestError;
+    }
+  }, []);
 
   useEffect(() => {
     // No readable provider status means the protected feature API cannot be
@@ -173,106 +203,188 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     let active = true;
     const refresh = async () => {
       try {
-        const [chatResult, captureResult, candidateResult] = await Promise.all([
-          apiJson('/api/community-highlights/sessions'),
-          apiJson('/api/community-highlights/captures'),
-          apiJson('/api/community-highlights/candidates'),
-        ]);
-        if (active) {
-          setSessions(chatResult.sessions || []);
-          setCaptures(captureResult.sessions || []);
-          setCandidates(candidateResult.candidates || []);
-        }
+        await refreshSessions(() => active);
       } catch (requestError) {
         if (active) setError(requestError?.detail || 'Could not load Community Highlights status.');
       }
     };
 
     refresh();
-    const interval = hasActiveWork ? setInterval(refresh, 3000) : null;
+    const shouldPoll = shouldContinueCommunityHighlightsStatusPolling(
+      hasActiveWork,
+      statusLoadFailed,
+    );
+    const interval = shouldPoll ? setInterval(refresh, 3000) : null;
     return () => {
       active = false;
       if (interval) clearInterval(interval);
     };
-  }, [connections, hasActiveWork]);
+  }, [connections, hasActiveWork, statusLoadFailed, refreshSessions]);
 
   useEffect(() => {
     if (!connections) return undefined;
     let active = true;
     apiJson('/api/community-highlights/triggers/settings')
-      .then((settings) => { if (active) setTriggerSettings(settings); })
+      .then((settings) => {
+        if (active) {
+          setTriggerSettings(settings);
+          setSavedTriggerSettings(settings);
+        }
+      })
       .catch((requestError) => { if (active) setError(requestError?.detail || 'Could not load trigger settings.'); });
     return () => { active = false; };
   }, [connections]);
 
-  const startMonitoring = async () => {
+  const waitForCaptureBuffer = async (captureSessionId, triggerSettings) => {
+    const preSeconds = Math.max(0, Number(triggerSettings.pre_seconds) || 0);
+    const postSeconds = Math.max(0, Number(triggerSettings.post_seconds) || 0);
+    const deadline = Date.now() + Math.max(45000, (preSeconds + 34) * 1000);
+    let latest = null;
+    while (Date.now() < deadline) {
+      const currentCapture = await apiJson('/api/community-highlights/captures/' + encodeURIComponent(captureSessionId));
+      latest = currentCapture;
+      setCaptures((current) => {
+        const exists = current.some((item) => item.session_id === currentCapture.session_id);
+        return exists
+          ? current.map((item) => item.session_id === currentCapture.session_id ? currentCapture : item)
+          : [...current, currentCapture];
+      });
+
+      const segmentSeconds = Number(currentCapture.segment_seconds) || 4;
+      const requiredSeconds = Math.max(0, preSeconds) + segmentSeconds;
+      const requiredRetention = requiredSeconds + postSeconds;
+      if ((Number(currentCapture.retention_seconds) || 0) < requiredRetention) {
+        throw new Error(
+          'This rolling buffer retains only ' + currentCapture.retention_seconds +
+          ' seconds, but the saved pre/post window needs at least ' + requiredRetention +
+          ' seconds. Increase Buffer retention and restart the rolling buffer.',
+        );
+      }
+      setBufferWarmup({
+        available: Number(currentCapture.buffered_seconds) || 0,
+        required: requiredSeconds,
+      });
+      if (isCommunityHighlightsBufferReady(currentCapture, preSeconds)) {
+        setBufferWarmup(null);
+        return currentCapture;
+      }
+      if (TERMINAL_SESSION_STATES.has(currentCapture.status)) {
+        throw new Error(currentCapture.error || 'The rolling buffer stopped before it could prepare the pre-trigger window.');
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+
+    const available = Math.max(0, Math.floor(Number(latest?.buffered_seconds) || 0));
+    const required = Math.max(0, preSeconds) + (Number(latest?.segment_seconds) || 4);
+    throw new Error(
+      'The rolling buffer prepared only ' + available + ' of the ' + required +
+      ' seconds needed for pre-trigger footage. Increase Buffer cap (MB) or choose a lower stream quality, then restart the buffer.',
+    );
+  };
+
+  const startHighlighting = async () => {
     if (!streamReference || !providerConnected || connections == null) {
       setError(connectionGuidance);
       return;
     }
-    if (matchingChatSession) {
-      setError(`Chat monitoring is already active for this ${providerName} stream.`);
-      return;
-    }
 
     setError('');
-    setStartingAction('chat');
+    setStartingAction('workflow');
+    setBufferWarmup(null);
     try {
-      await apiJson('/api/community-highlights/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim() }),
+      // Fetch the actual persisted rules before preparing the ring. The trigger
+      // settings panel may still be loading when the user presses Start.
+      const startTriggerSettings = await apiJson('/api/community-highlights/triggers/settings');
+      setSavedTriggerSettings(startTriggerSettings);
+
+      // A partial setup may have chat running without a rolling buffer. Stop
+      // that chat first so it cannot trigger while its pre-roll is being built.
+      if (matchingChatSession && !matchingCaptureSession) {
+        await apiJson('/api/community-highlights/sessions/' + encodeURIComponent(matchingChatSession.session_id), {
+          method: 'DELETE',
+        });
+      }
+
+      let captureSession = matchingCaptureSession;
+      if (!captureSession) {
+        captureSession = await apiJson('/api/community-highlights/captures', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
+        });
+      }
+
+      // Chat starts only after completed segments provide the full pre-trigger
+      // window plus one segment of safety margin.
+      await waitForCaptureBuffer(captureSession.session_id, startTriggerSettings);
+
+      if (!matchingChatSession || !matchingCaptureSession) {
+        await apiJson('/api/community-highlights/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stream_url: streamUrl.trim() }),
+        });
+      }
+
+      await refreshSessions().catch((refreshError) => {
+        setError(refreshError?.detail || 'Highlighting started, but Clippy could not refresh the current status.');
       });
-      await refreshSessions();
     } catch (requestError) {
-      setError(requestError?.detail || 'Could not start chat monitoring.');
+      setError(requestError?.detail || requestError.message || 'Could not start Community Highlights.');
+      await refreshSessions().catch(() => {});
     } finally {
+      setBufferWarmup(null);
       setStartingAction('');
     }
   };
 
-  const startCapture = async () => {
-    if (!streamReference || !providerConnected || connections == null) {
-      setError(connectionGuidance);
-      return;
-    }
-    if (matchingCaptureSession) {
-      setError(`A rolling buffer is already running for this ${providerName} stream.`);
-      return;
-    }
-
-    setError('');
-    setStartingAction('capture');
-    try {
-      await apiJson('/api/community-highlights/captures', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream_url: streamUrl.trim(), ...captureSettings }),
-      });
-      await refreshSessions();
-    } catch (requestError) {
-      setError(requestError?.detail || 'Could not start rolling capture.');
-    } finally {
-      setStartingAction('');
-    }
-  };
-
-  const stopCapture = async (sessionId) => {
+  const stopOtherSession = async (item) => {
     if (sessionActionBusy) return;
-    setSessionActionBusy(`capture-stop:${sessionId}`);
+    setSessionActionBusy(`other-stop:${item.id}`);
     setError('');
     try {
-      await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}`, {
+      const endpoint = item.type === 'chat' ? 'sessions' : 'captures';
+      await apiJson(`/api/community-highlights/${endpoint}/${encodeURIComponent(item.id)}`, {
         method: 'DELETE',
       });
       await refreshSessions();
-    } catch (requestError) {
-      setError(requestError?.detail || 'Could not stop rolling capture.');
+    } catch (stopError) {
+      setError(stopError?.detail || `Could not stop the other ${item.type} session.`);
     } finally {
       setSessionActionBusy('');
     }
   };
 
+  const stopHighlighting = async () => {
+    if (sessionActionBusy) return;
+    setSessionActionBusy('workflow-stop');
+    setError('');
+    const failures = [];
+
+    if (matchingChatSession) {
+      try {
+        await apiJson(`/api/community-highlights/sessions/${encodeURIComponent(matchingChatSession.session_id)}`, {
+          method: 'DELETE',
+        });
+      } catch (stopError) {
+        failures.push(stopError?.detail || 'Could not stop chat monitoring.');
+      }
+    }
+
+    if (matchingCaptureSession) {
+      try {
+        await apiJson(`/api/community-highlights/captures/${encodeURIComponent(matchingCaptureSession.session_id)}`, {
+          method: 'DELETE',
+        });
+      } catch (stopError) {
+        failures.push(stopError?.detail || 'Could not stop the rolling buffer.');
+      }
+    }
+
+    await refreshSessions().catch(() => {});
+    if (failures.length) setError(failures.join(' '));
+    setSessionActionBusy('');
+  };
 
   const saveTriggerSettings = async () => {
     setError('');
@@ -290,6 +402,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
         body: JSON.stringify(payload),
       });
       setTriggerSettings(saved);
+      setSavedTriggerSettings(saved);
     } catch (requestError) {
       setError(requestError?.detail || 'Could not save trigger settings.');
     } finally {
@@ -319,11 +432,13 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
-  const decideCandidate = async (candidateId, approved) => {
-    if (approved && !window.confirm(
-      'Approve this highlight and generate one vertical Short? Confirm that you own this content or have permission to process it.'
-    )) return;
+  const decideCandidate = async (candidateId, approved, confirmed = false) => {
+    if (approved && !confirmed) {
+      setPendingApprovalCandidateId(candidateId);
+      return;
+    }
 
+    setPendingApprovalCandidateId('');
     setReviewBusy(candidateId);
     setError('');
     try {
@@ -360,8 +475,12 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
-  const deleteCandidate = async (candidateId) => {
-    if (!window.confirm('Delete this highlight candidate and its local video file? This cannot be undone.')) return;
+  const deleteCandidate = async (candidateId, confirmed = false) => {
+    if (!confirmed) {
+      setPendingDeleteCandidateId(candidateId);
+      return;
+    }
+    setPendingDeleteCandidateId('');
     if (previewCandidateId === candidateId) closeCandidatePreview();
     setReviewBusy(candidateId);
     setError('');
@@ -385,7 +504,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
       await apiJson(`/api/community-highlights/captures/${encodeURIComponent(sessionId)}/trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pre_seconds: triggerSettings.pre_seconds, post_seconds: triggerSettings.post_seconds, reason: 'manual' }),
+        body: JSON.stringify({ pre_seconds: savedTriggerSettings.pre_seconds, post_seconds: savedTriggerSettings.post_seconds, reason: 'manual' }),
       });
       await refreshSessions();
     } catch (requestError) {
@@ -395,329 +514,460 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     }
   };
 
-  const stopMonitoring = async (sessionId) => {
-    if (sessionActionBusy) return;
-    setSessionActionBusy(`chat-stop:${sessionId}`);
-    setError('');
-    try {
-      await apiJson(`/api/community-highlights/sessions/${encodeURIComponent(sessionId)}`, {
-        method: 'DELETE',
-      });
-      await refreshSessions();
-    } catch (requestError) {
-      setError(requestError?.detail || 'Could not stop chat monitoring.');
-    } finally {
-      setSessionActionBusy('');
-    }
-  };
+  const otherActiveSessions = [
+    ...sessions.filter((session) => !TERMINAL_SESSION_STATES.has(session.status)
+      && session.session_id !== matchingChatSession?.session_id).map((session) => ({
+      id: session.session_id, provider: session.provider, stream_id: session.stream_id,
+      type: 'chat', status: session.status,
+    })),
+    ...captures.filter((capture) => !TERMINAL_SESSION_STATES.has(capture.status)
+      && capture.session_id !== matchingCaptureSession?.session_id).map((capture) => ({
+      id: capture.session_id, provider: capture.provider, stream_id: capture.stream_id,
+      type: 'buffer', status: capture.status,
+    })),
+  ];
 
   return (
-    <section className="card p-5 sm:p-7">
-      <div className="flex items-start gap-3 mb-5">
-        <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center shrink-0 text-brass">
-          <Radio size={19} />
-        </div>
-        <div className="min-w-0">
-          <h2 className="text-base font-medium text-ink">Monitor a live chat</h2>
-          <p className="text-xs sm:text-sm text-muted mt-1 leading-relaxed">
-            Paste a Twitch channel or YouTube live/video link. Start both chat monitoring and the rolling buffer on the same stream to let chat reactions create highlight candidates.
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-col sm:flex-row gap-2">
-        <input
-          value={streamUrl}
-          onChange={(event) => setStreamUrl(event.target.value)}
-          onKeyDown={(event) => { if (event.key === 'Enter' && streamUrl.trim() && !busy) startMonitoring(); }}
-          placeholder="https://www.twitch.tv/channel or YouTube live URL"
-          aria-label="Twitch or YouTube stream URL"
-          className="min-w-0 flex-1 rounded-input border border-rule bg-paper2 px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:outline-none focus:border-brass"
-        />
-        <button
-          type="button"
-          disabled={!streamReference || !providerConnected || busy || !!matchingChatSession}
-          onClick={startMonitoring}
-          title={!providerConnected ? connectionGuidance : matchingChatSession ? 'Chat monitoring is already active for this stream.' : undefined}
-          className="rounded-input bg-brass text-white px-5 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-        >
-          {startingAction === 'chat' ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
-          {matchingChatSession ? 'Chat already active' : startingAction === 'chat' ? 'Starting…' : 'Monitor chat'}
-        </button>
-        <button
-          type="button"
-          disabled={!streamReference || !providerConnected || busy || !!matchingCaptureSession}
-          onClick={startCapture}
-          title={!providerConnected ? connectionGuidance : matchingCaptureSession ? 'A rolling buffer is already running for this stream.' : undefined}
-          className="rounded-input border border-rule text-ink px-5 py-2.5 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-        >
-          {startingAction === 'capture' ? <Loader2 size={15} className="animate-spin" /> : <Radio size={15} />}
-          {matchingCaptureSession ? 'Buffer already recording' : startingAction === 'capture' ? 'Starting…' : 'Record rolling buffer'}
-        </button>
-      </div>
-      <p
-        role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected)) ? 'alert' : 'status'}
-        className={`mt-3 text-xs leading-relaxed ${streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected))
-          ? 'rounded-input border border-rule bg-paper2 px-3 py-2 text-warn'
-          : 'text-muted'}`}
-      >
-        {connectionGuidance}
-      </p>
-      <p className="text-[11px] text-muted mt-2">Capture settings apply to new rolling buffers. Keep the buffer longer than your combined pre/post-trigger window.</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-          {[
-            ['segment_seconds', 'Segment (s)', 1, 60],
-            ['retention_seconds', 'Buffer (s)', 8, 3600],
-            ['max_buffer_size_mb', 'Buffer cap (MB)', 16, 8192],
-          ].map(([key, label, min, max]) => (
-            <label key={key} className="text-xs text-muted">
-              <span className="block mb-1">{key === 'segment_seconds' ? 'Segment length (s)' : key === 'retention_seconds' ? 'Buffer retention (s)' : label}</span>
-              <input type="number" min={min} max={max} value={captureSettings[key]}
-                onChange={(event) => setCaptureSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
-            </label>
-          ))}
-          <label className="text-xs text-muted">
-            <span className="block mb-1">Stream quality</span>
-            <select value={captureSettings.quality}
-              onChange={(event) => setCaptureSettings((current) => ({ ...current, quality: event.target.value }))}
-              className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink">
-              <option value="best">Best available</option>
-              <option value="1080p60">1080p60</option>
-              <option value="1080p">1080p</option>
-              <option value="720p60">720p60</option>
-              <option value="720p">720p</option>
-              <option value="480p">480p</option>
-              <option value="360p">360p</option>
-              <option value="worst">Lowest available</option>
-              <option value="audio_only">Audio only</option>
-            </select>
-          </label>
-        </div>
-
+    <div className="space-y-5">
       {error && (
-        <div role="alert" className="mt-4 flex items-start gap-2 text-xs text-warn">
-          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+        <div role="alert" className="flex items-start gap-2 rounded-card border border-warn/30 bg-paper2 px-4 py-3 text-sm text-warn">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
-      <div className="mt-5 space-y-3">
-        {sessions.length === 0 ? (
-          <div className="rounded-card border border-dashed border-rule p-5 text-center">
-            <MessageCircle size={20} className="mx-auto text-muted mb-2" />
-            <p className="text-sm text-ink2">No chats are being monitored.</p>
-            <p className="text-xs text-muted mt-1">Connect the account for your stream above, then paste its Twitch channel or YouTube live/video URL.</p>
+      <section className="card p-5 sm:p-6 space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow mb-1">Live stream</p>
+            <h2 className="text-lg font-medium text-ink">Start highlighting</h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted">
+              The rolling buffer fills the saved pre-trigger window before chat monitoring starts.
+            </p>
           </div>
-        ) : sessions.map((session) => (
-          <div key={session.session_id} className="rounded-card border border-rule bg-paper2 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium text-ink">{session.provider === 'twitch' ? 'Twitch' : 'YouTube'}</span>
-                  <span className={session.status === 'connected' ? 'badge-ok' : 'readout'}>{statusLabel(session.status)}</span>
-                </div>
-                <p className="text-xs text-muted mt-1 break-all">{session.stream_id}</p>
-                {session.error && <p className="text-xs text-warn mt-2">{session.error}</p>}
-                {session.diagnostic && (
-                  <p className="text-[11px] text-muted mt-1 break-words">
-                    API diagnostic: {session.diagnostic.operation} · HTTP {session.diagnostic.http_status} · reason {session.diagnostic.reason}
-                  </p>
-                )}
-              </div>
-              <button type="button" onClick={() => stopMonitoring(session.session_id)}
-                disabled={!!sessionActionBusy}
-                className="shrink-0 rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
-                <Square size={12} /> Stop
-              </button>
-            </div>
-            <div className="mt-3 pt-3 border-t border-rule">
-              <div className="flex items-center justify-between text-[11px] text-muted mb-2">
-                <span>Recent chat messages</span>
-                <span>{session.message_count || 0} buffered</span>
-              </div>
-              {session.messages?.length ? (
-                <div className="max-h-52 overflow-y-auto space-y-2 pr-1">
-                  {session.messages.slice(-12).map((message) => (
-                    <div key={message.message_id} className="text-xs leading-relaxed">
-                      <span className="font-medium text-ink2">{message.sender_name}: </span>
-                      <span className="text-muted break-words">{message.text}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted">Waiting for the first message…</p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-1">Rolling recording buffers</h3>
-        <p className="text-xs text-muted mb-3 leading-relaxed">
-          Streamlink and FFmpeg keep a bounded local buffer. When chat monitoring is active for the same stream, configured phrase or chat-volume triggers protect the pre-trigger footage and collect the post-trigger window.
+          {workflowActive && <span className="badge-ok">● Highlighting</span>}
+          {workflowSessionsPresent && !workflowActive && <span className="badge-warn">Not fully active</span>}
+          {workflowPartial && <span className="badge-warn">Setup incomplete</span>}
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="min-w-0 flex-1">
+            <span className="mb-1.5 block text-xs font-medium text-ink2">Twitch channel or YouTube live/video URL</span>
+            <input
+              value={streamUrl}
+              onChange={(event) => setStreamUrl(event.target.value)}
+              disabled={workflowSessionsPresent || workflowPartial || busy}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && streamUrl.trim() && !busy && !workflowSessionsPresent) startHighlighting();
+              }}
+              placeholder="Paste stream link"
+              aria-label="Twitch or YouTube stream URL"
+              className="input-field"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy || !!sessionActionBusy || !streamReference || (!workflowSessionsPresent && (connections == null || !providerConnected))}
+            onClick={workflowSessionsPresent ? stopHighlighting : startHighlighting}
+            className={workflowSessionsPresent ? 'btn-ghost w-full sm:w-auto' : 'btn-primary w-full sm:w-auto'}
+            title={!providerConnected && !workflowSessionsPresent ? connectionGuidance : undefined}
+          >
+            {busy || sessionActionBusy ? <Loader2 size={15} className="animate-spin" /> : workflowSessionsPresent ? <Square size={14} /> : <Activity size={15} />}
+            {busy ? (bufferWarmup ? 'Preparing buffer…' : 'Starting…') : sessionActionBusy ? 'Stopping…' : workflowSessionsPresent ? 'Stop highlighting' : workflowPartial ? 'Finish setup' : 'Start highlighting'}
+          </button>
+        </div>
+
+        <p
+          role={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowSessionsPresent)) ? 'alert' : 'status'}
+          className={streamUrl.trim() && (!streamReference || (connections !== undefined && !providerConnected && !workflowSessionsPresent))
+            ? 'rounded-input border border-warn/30 bg-paper2 px-3 py-2 text-xs text-warn'
+            : 'text-xs leading-relaxed text-muted'}
+        >
+          {bufferWarmup
+            ? 'Preparing the pre-trigger buffer: ' + Math.floor(bufferWarmup.available) + ' / ' +
+              Math.ceil(bufferWarmup.required) + ' seconds. Chat monitoring starts when the rolling buffer is ready.'
+            : workflowActive
+            ? 'Chat and recording are both active for this stream.'
+            : workflowSessionsPresent
+              ? 'Both sessions are present, but the workflow is not fully active. Check the chat and recording statuses below.'
+              : workflowPartial
+              ? 'One part is running. Finish setup to enable automatic highlights.'
+              : connectionGuidance}
         </p>
-        {captures.length === 0 ? (
-          <p className="text-xs text-muted">No rolling captures are running.</p>
-        ) : (
-          <div className="space-y-2">
-            {captures.map((capture) => (
-              <div key={capture.session_id} className="rounded-card border border-rule bg-paper2 p-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-medium text-ink">{capture.provider === 'twitch' ? 'Twitch' : 'YouTube'}</span>
-                    <span className={capture.status === 'recording' ? 'badge-ok' : 'readout'}>{capture.status}</span>
-                  </div>
-                  <p className="text-xs text-muted mt-1">{capture.stream_id} · {capture.segment_seconds}s segments · {capture.retention_seconds}s buffer</p>
-                  {capture.error && <p className="text-xs text-warn mt-1">{capture.error}</p>}
-                </div>
-                <div className="flex flex-wrap justify-end gap-2 max-w-full">
-                  <button type="button" onClick={() => triggerNow(capture.session_id)}
-                    disabled={capture.status !== 'recording' || !!sessionActionBusy}
-                    className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="rounded-card border border-rule bg-paper2 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-sm font-medium text-ink">
+                <MessageCircle size={15} className="text-muted" /> Chat
+              </span>
+              <span className={matchingChatSession?.status === 'connected' ? 'badge-ok' : matchingChatSession ? 'badge-warn' : 'readout'}>
+                {matchingChatSession ? statusLabel(matchingChatSession.status) : 'Not started'}
+              </span>
+            </div>
+            {matchingChatSession?.error && <p className="mt-2 text-xs text-warn">{matchingChatSession.error}</p>}
+          </div>
+          <div className="rounded-card border border-rule bg-paper2 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2 text-sm font-medium text-ink">
+                <Radio size={15} className="text-muted" /> Rolling buffer
+              </span>
+              <span className={matchingCaptureSession?.status === 'recording' ? 'badge-ok' : matchingCaptureSession ? 'badge-warn' : 'readout'}>
+                {matchingCaptureSession?.status || 'Not started'}
+              </span>
+            </div>
+            {matchingCaptureSession && (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted">
+                  {matchingCaptureSession.retention_seconds}s max retention · {matchingCaptureSession.segment_seconds}s segments
+                  {' · '}Pre-roll: {Math.floor(Number(matchingCaptureSession.buffered_seconds) || 0)}s
+                </p>
+                {matchingCaptureSession.status === 'recording' && (
+                  <button type="button" onClick={() => triggerNow(matchingCaptureSession.session_id)}
+                    disabled={!!sessionActionBusy || !isCommunityHighlightsBufferReady(matchingCaptureSession, savedTriggerSettings.pre_seconds)}
+                    title={!isCommunityHighlightsBufferReady(matchingCaptureSession, savedTriggerSettings.pre_seconds) ? 'Wait until the rolling buffer contains the full pre-trigger window.' : undefined}
+                    className="btn-ghost text-xs">
                     Clip now
                   </button>
-                  <button type="button" onClick={() => stopCapture(capture.session_id)}
-                    disabled={['stopped', 'ended', 'error'].includes(capture.status) || !!sessionActionBusy}
-                    className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40 flex items-center gap-1.5">
-                    <Square size={12} /> Stop
-                  </button>
-                </div>
+                )}
               </div>
-            ))}
+            )}
+            {matchingCaptureSession?.error && <p className="mt-2 text-xs text-warn">{matchingCaptureSession.error}</p>}
+          </div>
+        </div>
+
+        {workflowPartial && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
+            <p className="text-xs text-muted">One part is already running. Finish setup to enable automatic highlights, or stop the active part.</p>
+            <button type="button" onClick={stopHighlighting} disabled={!!sessionActionBusy} className="btn-ghost text-xs">
+              Stop active sessions
+            </button>
           </div>
         )}
-      </div>
-      <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-2">Highlight trigger rules</h3>
-        <p className="text-xs text-muted mb-3">A matching phrase or a burst of chat activity creates a candidate, but only when the same stream has an active rolling capture.</p>
-        <label className="block text-xs text-muted mb-1">Trigger phrases, comma-separated</label>
-        <input
-          value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
-          onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
-          className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink mb-3"
-        />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+
+        {otherActiveSessions.length > 0 && (
+          <details className="border-t border-rule pt-3">
+            <summary className="cursor-pointer text-xs font-medium text-muted">
+              Other active streams ({otherActiveSessions.length})
+            </summary>
+            <div className="mt-3 space-y-2">
+              {otherActiveSessions.map((item) => (
+                <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-ink2">{item.provider === 'twitch' ? 'Twitch' : 'YouTube'} · {item.stream_id} · {item.type}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="readout">{item.status}</span>
+                    {item.type === 'buffer' && item.status === 'recording' && (
+                      <button type="button" onClick={() => triggerNow(item.id)}
+                        disabled={!!sessionActionBusy || !isCommunityHighlightsBufferReady(
+                          captures.find((capture) => capture.session_id === item.id),
+                          savedTriggerSettings.pre_seconds,
+                        )}
+                        className="text-xs text-muted underline underline-offset-2">Clip now</button>
+                    )}
+                    <button type="button" onClick={() => stopOtherSession(item)} disabled={!!sessionActionBusy}
+                      className="text-xs text-muted underline underline-offset-2">Stop</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        <details className="border-t border-rule pt-3">
+          <summary className="cursor-pointer text-sm font-medium text-ink">Capture quality and storage</summary>
+          <p className="mt-2 text-xs text-muted">These settings apply when the next rolling buffer starts. They do not change an active recording.</p>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              ['segment_seconds', 'Segment length', 1, 60],
+              ['retention_seconds', 'Buffer retention', 8, 3600],
+              ['max_buffer_size_mb', 'Buffer cap (MB)', 16, 8192],
+            ].map(([key, label, min, max]) => (
+              <label key={key} className="text-xs text-muted">
+                <span className="mb-1 block">{label}</span>
+                <input type="number" min={min} max={max} value={captureSettings[key]}
+                  onChange={(event) => setCaptureSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                  className="input-field" />
+              </label>
+            ))}
+            <label className="text-xs text-muted">
+              <span className="mb-1 block">Stream quality</span>
+              <select value={captureSettings.quality}
+                onChange={(event) => setCaptureSettings((current) => ({ ...current, quality: event.target.value }))}
+                className="input-field">
+                <option value="best">Best available</option>
+                <option value="1080p60">1080p60</option>
+                <option value="1080p">1080p</option>
+                <option value="720p60">720p60</option>
+                <option value="720p">720p</option>
+                <option value="480p">480p</option>
+                <option value="360p">360p</option>
+                <option value="worst">Lowest available</option>
+                <option value="audio_only">Audio only</option>
+              </select>
+            </label>
+          </div>
+        </details>
+      </section>
+
+      <section className="card p-5 sm:p-6 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow mb-1">Preferences</p>
+            <h2 className="text-lg font-medium text-ink">Trigger rules</h2>
+            <p className="mt-1 text-sm text-muted">Choose what creates a highlight and how much footage to keep around it.</p>
+          </div>
+          {triggerSettingsDirty ? <span className="badge-warn">Unsaved changes</span> : <span className="badge-ok">Saved</span>}
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="text-xs text-muted">
+            <span className="mb-1.5 block font-medium text-ink2">Create a highlight when</span>
+            <select value={triggerSettings.mode || 'either'}
+              onChange={(event) => setTriggerSettings((current) => ({ ...current, mode: event.target.value }))}
+              className="input-field">
+              <option value="either">A phrase matches or chat activity spikes</option>
+              <option value="phrases">A configured phrase matches only</option>
+              <option value="chat_volume">Chat activity reaches its threshold only</option>
+            </select>
+          </label>
+          {triggerSettings.mode !== 'chat_volume' && (
+            <label className="text-xs text-muted">
+              <span className="mb-1.5 block font-medium text-ink2">Trigger phrases</span>
+              <input
+                value={Array.isArray(triggerSettings.phrases) ? triggerSettings.phrases.join(', ') : triggerSettings.phrases}
+                onChange={(event) => setTriggerSettings((current) => ({ ...current, phrases: event.target.value }))}
+                placeholder="clip it, clip that"
+                className="input-field"
+              />
+            </label>
+          )}
+        </div>
+
+        {triggerSettings.mode !== 'phrases' && (
+          <div className="rounded-card border border-rule bg-paper2 p-4">
+            <p className="text-sm font-medium text-ink">Chat activity threshold</p>
+            <p className="mb-3 mt-1 text-xs text-muted">A burst must reach both the message and unique-viewer thresholds inside this window.</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {[
+                ['min_messages', 'Messages', 2, 500],
+                ['min_unique_users', 'Unique viewers', 1, 500],
+                ['window_seconds', 'Window (seconds)', 1, 120],
+              ].map(([key, label, min, max]) => (
+                <label key={key} className="text-xs text-muted">
+                  <span className="mb-1 block">{label}</span>
+                  <input type="number" min={min} max={max} value={triggerSettings[key]}
+                    onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
+                    className="input-field" />
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {[
-            ['min_messages', 'Messages', 2, 500],
-            ['min_unique_users', 'Unique viewers', 1, 500],
-            ['window_seconds', 'Chat window (s)', 1, 120],
-            ['cooldown_seconds', 'Cooldown (s)', 0, 3600],
-            ['pre_seconds', 'Seconds before', 0, 300],
-            ['post_seconds', 'Seconds after', 0, 300],
+            ['pre_seconds', 'Footage before (seconds)', 0, 300],
+            ['post_seconds', 'Footage after (seconds)', 0, 300],
+            ['cooldown_seconds', 'Cooldown (seconds)', 0, 3600],
           ].map(([key, label, min, max]) => (
             <label key={key} className="text-xs text-muted">
-              <span className="block mb-1">{label}</span>
+              <span className="mb-1 block">{label}</span>
               <input type="number" min={min} max={max} value={triggerSettings[key]}
                 onChange={(event) => setTriggerSettings((current) => ({ ...current, [key]: Number(event.target.value) }))}
-                className="w-full rounded-input border border-rule bg-paper2 px-3 py-2 text-sm text-ink" />
+                className="input-field" />
             </label>
           ))}
         </div>
-        <button type="button" onClick={saveTriggerSettings} disabled={settingsBusy}
-          className="mt-3 rounded-input border border-rule px-4 py-2 text-xs text-ink disabled:opacity-50">
-          {settingsBusy ? 'Saving…' : 'Save trigger settings'}
-        </button>
-      </div>
-      <div className="mt-6 pt-5 border-t border-rule">
-        <h3 className="text-sm font-medium text-ink mb-3">Review highlights</h3>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-3">
+          <p className="text-xs text-muted">
+            {triggerSettingsDirty
+              ? 'Save changes before they are used by automatic triggers. Clip now uses the last saved window.'
+              : 'Saved settings apply to new triggers, including triggers from an active chat.'}
+          </p>
+          <button type="button" onClick={saveTriggerSettings} disabled={settingsBusy || !triggerSettingsDirty} className="btn-ghost">
+            {settingsBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+            {settingsBusy ? 'Saving…' : 'Save settings'}
+          </button>
+        </div>
+      </section>
+
+      <section className="card p-5 sm:p-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="eyebrow mb-1">Review</p>
+            <h2 className="text-lg font-medium text-ink">Highlights</h2>
+          </div>
+          <span className="readout">{candidates.filter((candidate) => candidate.status === 'ready').length} ready · {candidates.length} total</span>
+        </div>
+
         {candidates.length === 0 ? (
-          <p className="text-xs text-muted">No candidates yet. Chat reactions will appear here when both monitoring and recording are active for the same stream.</p>
+          <div className="mt-4 rounded-card border border-dashed border-rule px-5 py-8 text-center">
+            <Radio size={20} className="mx-auto text-muted" />
+            <p className="mt-2 text-sm font-medium text-ink">No highlights yet</p>
+            <p className="mt-1 text-xs text-muted">Start a stream above. New candidates will appear here when chat activity matches your rules.</p>
+          </div>
         ) : (
-          <div className="space-y-2">
-            {candidates.map((candidate) => (
-              <div key={candidate.candidate_id} className="rounded-card border border-rule bg-paper2 p-3">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                  <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-ink">{candidate.reason === 'phrase' ? 'Chat phrase' : candidate.reason === 'chat_volume' ? 'Chat activity' : 'Manual clip'}</span>
-                    <span className={candidate.status === 'ready' ? 'badge-ok' : 'readout'}>{candidate.status}</span>
-                  </div>
-                  <p className="text-xs text-muted mt-1">{candidate.pre_seconds}s before · {candidate.post_seconds}s after · {candidate.segment_count || 0} segments · {candidate.review_status || 'pending review'}</p>
-                  {candidate.error && <p className="text-xs text-warn mt-1">{candidate.error}</p>}
-                  {candidate.generation_error && <p className="text-xs text-warn mt-1">{candidate.generation_error}</p>}
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  {candidate.status === 'ready' && (
-                    <>
-                      {candidate.review_status !== 'rejected' && (
+          <div className="mt-4 divide-y divide-rule">
+            {[...candidates].sort((a, b) => String(b.triggered_at).localeCompare(String(a.triggered_at))).map((candidate) => {
+              const sourceSession = captures.find((capture) => capture.session_id === candidate.capture_session_id);
+              const triggerCount = Math.max(1, Number(candidate.trigger_count) || 1);
+              const preSeconds = Number(candidate.pre_seconds) || 0;
+              const postSeconds = Number(candidate.post_seconds) || 0;
+              const measuredDuration = Number(candidate.actual_duration_seconds);
+              const measuredDurationLabel = Number.isFinite(measuredDuration) && measuredDuration > 0
+                ? `Actual MP4: ${measuredDuration.toFixed(1)}s`
+                : 'Actual duration unavailable';
+              const reason = candidate.reason === 'phrase'
+                ? 'Phrase matched'
+                : candidate.reason === 'chat_volume'
+                  ? 'Chat activity'
+                  : 'Manual highlight';
+              return (
+                <article key={candidate.candidate_id} className="py-4 first:pt-4 last:pb-0">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-ink">{reason}</span>
+                        <span className={candidate.status === 'ready' ? 'badge-ok' : candidate.status === 'error' ? 'badge-danger' : 'readout'}>
+                          {candidate.status === 'ready' ? 'Ready to review' : candidate.status}
+                        </span>
+                        {triggerCount > 1 && <span className="readout">{triggerCount} triggers merged</span>}
+                      </div>
+                      <p className="mt-1 text-xs text-muted">
+                        {sourceSession ? `${sourceSession.provider === 'twitch' ? 'Twitch' : 'YouTube'} · ${sourceSession.stream_id}` : 'Stream details unavailable'}
+                        {' · '}Window: {formatDuration(preSeconds)} before + {formatDuration(postSeconds)} after
+                        {' · '}{measuredDurationLabel}
+                        {' · '}{candidate.segment_count || 0} segments
+                      </p>
+                      {candidate.error && <p className="mt-2 text-xs text-warn">{candidate.error}</p>}
+                      {candidate.generation_error && <p className="mt-1 text-xs text-warn">{candidate.generation_error}</p>}
+                      {candidate.generation_status === 'completed' && <p className="mt-1 text-xs text-ok">Short generated</p>}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {candidate.status === 'ready' && candidate.review_status !== 'rejected' && (
                         <>
                           <button type="button" onClick={() => openCandidatePreview(candidate.candidate_id)}
-                            disabled={!!previewBusy || reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                            {previewBusy === candidate.candidate_id ? 'Loading…' : 'Preview'}
+                            disabled={!!previewBusy || reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">
+                            {previewBusy === candidate.candidate_id ? <Loader2 size={14} className="animate-spin" /> : null}
+                            {previewBusy === candidate.candidate_id ? 'Loading' : 'Preview'}
                           </button>
-                          <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                            {reviewBusy === candidate.candidate_id ? 'Working…' : 'Download'}
-                          </button>
+                          <button type="button" onClick={() => downloadCandidate(candidate.candidate_id)}
+                            disabled={reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">Download</button>
                         </>
                       )}
-                      {candidate.review_status === 'pending' && (
+                      {candidate.status === 'ready' && candidate.review_status === 'pending' && (
                         <>
-                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">
-                            {reviewBusy === candidate.candidate_id ? 'Starting…' : 'Approve & Generate'}
-                          </button>
-                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)} disabled={reviewBusy === candidate.candidate_id}
-                            className="rounded-input border border-rule px-3 py-2 text-xs text-muted disabled:opacity-40">Reject</button>
+                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)}
+                            disabled={reviewBusy === candidate.candidate_id} className="btn-primary text-xs">Approve & generate</button>
+                          <button type="button" onClick={() => decideCandidate(candidate.candidate_id, false)}
+                            disabled={reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">Reject</button>
                         </>
                       )}
                       {candidate.review_status === 'approved' && candidate.generation_status === 'not_started' && (
-                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Generate Short</button>
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-primary text-xs">Generate Short</button>
                       )}
                       {['staging', 'queued', 'processing'].includes(candidate.generation_status) && (
-                        <span className="text-xs text-muted">{candidate.generation_status === 'staging' ? 'Preparing source…' : 'Generating Short…'}</span>
+                        <span className="readout">{candidate.generation_status === 'staging' ? 'Preparing source' : 'Generating Short'}</span>
                       )}
                       {candidate.generation_status === 'failed' && (
-                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)} disabled={reviewBusy === candidate.candidate_id}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink disabled:opacity-40">Retry Short</button>
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-ghost text-xs">Retry Short</button>
                       )}
                       {candidate.generation_status === 'completed' && candidate.generation_job_id && (
-                        <button type="button" onClick={() => { openedGenerationJobs.current.add(candidate.generation_job_id); onOpenJob?.(candidate.generation_job_id); }}
-                          className="rounded-input border border-rule px-3 py-2 text-xs text-ink">Open Short</button>
+                        <button type="button" onClick={() => {
+                          openedGenerationJobs.current.add(candidate.generation_job_id);
+                          onOpenJob?.(candidate.generation_job_id);
+                        }} className="btn-ghost text-xs">Open Short</button>
                       )}
-                    </>
-                  )}
-                  <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
-                    disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing' || ['staging', 'queued', 'processing'].includes(candidate.generation_status)}
-                    title="Delete candidate and local file"
-                    aria-label="Delete candidate"
-                    className="rounded-input border border-rule px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-40">
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                </div>
-                {previewCandidateId === candidate.candidate_id && (
-                  <div className="mt-3 rounded-input border border-rule bg-paper3 p-3">
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <span className="text-xs font-medium text-ink">Clip preview</span>
-                      <button type="button" onClick={closeCandidatePreview}
-                        className="text-xs text-muted hover:text-ink">Close preview</button>
+                      <button type="button" onClick={() => deleteCandidate(candidate.candidate_id)}
+                        disabled={reviewBusy === candidate.candidate_id || candidate.status === 'capturing' || ['staging', 'queued', 'processing'].includes(candidate.generation_status)}
+                        title="Delete highlight and local video" aria-label="Delete highlight"
+                        className="btn-ghost !px-3 text-xs"><Trash2 size={14} /></button>
                     </div>
-                    {previewUrl ? (
-                      <video
-                        key={previewUrl}
-                        src={previewUrl}
-                        controls
-                        playsInline
-                        preload="metadata"
-                        className="w-full max-h-[420px] rounded-input bg-black"
-                      />
-                    ) : (
-                      <p className="text-xs text-muted">{previewBusy === candidate.candidate_id ? 'Preparing preview…' : 'Preview unavailable.'}</p>
-                    )}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {pendingApprovalCandidateId === candidate.candidate_id && (
+                    <div className="mt-3 rounded-card border border-rule bg-paper2 p-3">
+                      <p className="text-sm text-ink">Approve this highlight and generate one vertical Short?</p>
+                      <p className="mt-1 text-xs text-muted">Confirm that you own this content or have permission to process it.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => decideCandidate(candidate.candidate_id, true, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-primary text-xs">Confirm & generate</button>
+                        <button type="button" onClick={() => setPendingApprovalCandidateId('')} className="btn-ghost text-xs">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {pendingDeleteCandidateId === candidate.candidate_id && (
+                    <div className="mt-3 rounded-card border border-rule bg-paper2 p-3">
+                      <p className="text-sm text-ink">Delete this highlight and its local video?</p>
+                      <p className="mt-1 text-xs text-muted">This cannot be undone.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => deleteCandidate(candidate.candidate_id, true)}
+                          disabled={reviewBusy === candidate.candidate_id} className="btn-danger text-xs">Delete highlight</button>
+                        <button type="button" onClick={() => setPendingDeleteCandidateId('')} className="btn-ghost text-xs">Keep it</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {previewCandidateId === candidate.candidate_id && (
+                    <div className="mt-4 rounded-card border border-rule bg-paper2 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-ink">Preview</span>
+                        <button type="button" onClick={closeCandidatePreview} className="text-xs text-muted underline underline-offset-2">Close</button>
+                      </div>
+                      {previewUrl ? (
+                        <video key={previewUrl} src={previewUrl} controls playsInline preload="metadata"
+                          className="max-h-[420px] w-full rounded-input bg-black" />
+                      ) : (
+                        <p className="text-xs text-muted">{previewBusy === candidate.candidate_id ? 'Preparing preview…' : 'Preview unavailable.'}</p>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
-      </div>
-      <p className="mt-4 text-[11px] text-muted leading-relaxed">
-        Approving a candidate starts one vertical Short through Clippy's normal generation pipeline. The original highlight remains available locally; publishing is always a separate action.
-      </p>
-    </section>
+
+        <p className="mt-4 border-t border-rule pt-3 text-xs text-muted">
+          Approving a highlight creates one vertical Short in Clippy. Publishing remains a separate action.
+        </p>
+      </section>
+
+      <details className="card p-4">
+        <summary className="cursor-pointer text-sm font-medium text-ink">Live chat messages and diagnostics</summary>
+        <div className="mt-3 space-y-4">
+          {sessions.length === 0 ? (
+            <p className="text-xs text-muted">No chat sessions are currently visible.</p>
+          ) : sessions.map((session) => (
+            <div key={session.session_id} className="border-t border-rule pt-3 first:border-0 first:pt-0">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium text-ink2">{session.provider === 'twitch' ? 'Twitch' : 'YouTube'} · {session.stream_id}</p>
+                <span className="readout">{statusLabel(session.status)} · {session.message_count || 0} messages</span>
+              </div>
+              {session.error && <p className="mt-1 text-xs text-warn">{session.error}</p>}
+              {session.diagnostic && (
+                <p className="mt-1 text-xs text-muted">
+                  {session.diagnostic.operation} · HTTP {session.diagnostic.http_status} · {session.diagnostic.reason}
+                </p>
+              )}
+              {session.messages?.length ? (
+                <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">
+                  {session.messages.slice(-8).map((message) => (
+                    <p key={message.message_id} className="break-words text-xs text-muted">
+                      <span className="font-medium text-ink2">{message.sender_name}: </span>{message.text}
+                    </p>
+                  ))}
+                </div>
+              ) : <p className="mt-2 text-xs text-muted">Waiting for messages.</p>}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
   );
 }

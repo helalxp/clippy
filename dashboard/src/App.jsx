@@ -1696,29 +1696,17 @@ function App() {
           {/* View: Community Highlights */}
           {activeTab === 'community-highlights' && (
             <div className="h-full overflow-y-auto custom-scrollbar p-4 sm:p-8 animate-fade">
-              <div className="max-w-4xl mx-auto space-y-7">
+              <div className="max-w-5xl mx-auto space-y-5">
                 <div className="space-y-2">
                   <p className="eyebrow flex items-center gap-2"><MessageCircle size={12} /> 12 · COMMUNITY HIGHLIGHTS</p>
                   <h1 className="font-display lowercase text-3xl md:text-4xl text-ink">Community Highlights</h1>
-                  <p className="text-sm sm:text-base text-muted leading-relaxed max-w-2xl">
-                    Turn live-chat reactions into finished vertical Shorts. Connect the Twitch or Google account for the stream, then start chat monitoring and rolling recording together. Review each generated highlight, approve it, and let Clippy prepare one Short through the regular clip pipeline.
+                  <p className="max-w-2xl text-sm leading-relaxed text-muted sm:text-base">
+                    Turn live chat into reviewable highlights. Start a stream, choose what counts as a reaction, then approve the moments worth turning into vertical Shorts.
                   </p>
                 </div>
                 <CommunityHighlightsConnections onConnectionsChange={setCommunityProviderConnections} />
                 <CommunityHighlightsMonitor connections={communityProviderConnections} geminiApiKey={apiKey} onOpenJob={openCommunityHighlightJob} />
-                <div className="rounded-card border border-rule bg-paper2 p-5 sm:p-6">
-                  <div className="flex items-center gap-2 mb-2 text-ink2">
-                    <Activity size={16} className="text-brass" />
-                    <h2 className="font-medium">How highlights work</h2>
-                  </div>
-                  <ol className="space-y-2 text-sm text-muted leading-relaxed list-decimal pl-5">
-                    <li>Connect the Twitch or Google account that has access to the stream’s live chat.</li>
-                    <li>Paste that stream’s Twitch channel or YouTube live/video URL. Start chat monitoring and rolling recording for the same stream.</li>
-                    <li>Choose trigger phrases and chat-activity thresholds. Matching reactions create candidates while the corresponding buffer is recording.</li>
-                    <li>Preview each completed candidate. Approve & Generate targets one vertical Short using Clippy’s existing transcription, selection, captions, hooks, and rendering pipeline.</li>
-                  </ol>
-                  <p className="text-xs text-muted mt-3">Generated Shorts open in the normal Clippy results screen. Publishing remains a separate action; nothing is posted automatically.</p>
-                </div>
+                <p className="text-xs text-muted">Generated Shorts open in Clippy’s results screen. Publishing is always a separate action.</p>
               </div>
             </div>
           )}

@@ -7,14 +7,14 @@ from community_highlights.triggers import TriggerEngine, TriggerRule
 from community_highlights.urls import StreamUrlError, parse_stream_url
 
 
-def message(message_id, text, sender="user-1", *, at=None, stream="channel"):
+def message(message_id, text, sender="user-1", *, at=None, received_at=None, stream="channel"):
     timestamp = at or datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
     return ChatMessage(
         provider=ChatProvider.TWITCH,
         stream_id=stream,
         message_id=message_id,
         provider_timestamp=timestamp,
-        received_at=timestamp + timedelta(milliseconds=100),
+        received_at=received_at or timestamp + timedelta(milliseconds=100),
         sender_id=sender,
         sender_name=sender,
         text=text,
@@ -110,37 +110,49 @@ def test_cooldown_suppresses_repeated_phrase_triggers():
     assert len(engine.add(message("m3", "clip it", at=at + timedelta(seconds=11)))) == 1
 
 
-def test_trigger_volume_uses_local_receipt_clock_not_skewed_provider_time():
+def test_trigger_volume_uses_provider_event_time_but_capture_uses_receipt_time():
     engine = TriggerEngine([
         TriggerRule("crowd", min_messages=2, min_unique_users=2, window_seconds=5, cooldown_seconds=10)
     ])
-    received = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
-    first = ChatMessage(
-        provider=ChatProvider.TWITCH,
-        stream_id="channel",
-        message_id="future-provider-clock",
-        provider_timestamp=datetime(2035, 1, 1, tzinfo=timezone.utc),
-        received_at=received,
-        sender_id="alice",
-        sender_name="alice",
-        text="hello",
-    )
-    second = ChatMessage(
-        provider=ChatProvider.TWITCH,
-        stream_id="channel",
-        message_id="past-provider-clock",
-        provider_timestamp=datetime(1995, 1, 1, tzinfo=timezone.utc),
-        received_at=received + timedelta(seconds=1),
-        sender_id="bob",
-        sender_name="bob",
-        text="hello",
-    )
+    event_at = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+    received = event_at + timedelta(seconds=20)
+    first = message("m1", "hello", "alice", at=event_at, received_at=received)
+    second = message("m2", "hello", "bob", at=event_at + timedelta(seconds=1), received_at=received)
 
     assert engine.add(first) == []
     matches = engine.add(second)
 
     assert len(matches) == 1
-    assert matches[0].triggered_at == second.received_at
+    assert matches[0].triggered_at == received
+
+
+def test_chat_batch_does_not_turn_spread_out_messages_into_a_volume_burst():
+    engine = TriggerEngine([
+        TriggerRule("crowd", min_messages=3, min_unique_users=3, window_seconds=5)
+    ])
+    event_at = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+    received = event_at + timedelta(seconds=30)
+
+    assert engine.add(message("m1", "hello", "alice", at=event_at, received_at=received)) == []
+    assert engine.add(message("m2", "hello", "bob", at=event_at + timedelta(seconds=4), received_at=received)) == []
+    assert engine.add(message("m3", "hello", "carol", at=event_at + timedelta(seconds=8), received_at=received)) == []
+
+
+def test_out_of_order_provider_message_cannot_rewind_trigger_clock():
+    engine = TriggerEngine([TriggerRule("clip", phrases=("clip it",), cooldown_seconds=0)])
+    event_at = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+
+    assert engine.add(message("newer", "hello", at=event_at + timedelta(seconds=2))) == []
+    assert engine.add(message("late", "clip it", at=event_at + timedelta(seconds=1))) == []
+
+
+def test_phrase_matching_uses_whole_normalized_phrase_boundaries():
+    engine = TriggerEngine([TriggerRule("clip", phrases=("clip it",), cooldown_seconds=0)])
+    stamp = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+
+    assert engine.add(message("false-positive", "unclip it now", at=stamp)) == []
+    matches = engine.add(message("real", "Please, CLIP-it!", at=stamp + timedelta(seconds=1)))
+    assert [match.reason for match in matches] == ["phrase"]
 
 
 def test_rule_validation_rejects_unusable_thresholds():
