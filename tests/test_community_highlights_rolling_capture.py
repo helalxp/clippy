@@ -444,3 +444,60 @@ def test_run_rejects_nonzero_ffmpeg_exit_and_logs_it(tmp_path, monkeypatch, capl
     assert '"failure_code":"invalid_data"' in caplog.text
     assert "C:\\Users" not in caplog.text
     assert "private\\capture.ts" not in caplog.text
+
+
+
+def test_buffer_status_reports_only_the_latest_continuous_pts_run(tmp_path):
+    now = [1018.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path),
+        clock=lambda: now[0],
+    )
+    rows = [
+        ("segment-00000000.ts", 0, 4, 1004),
+        ("segment-00000001.ts", 4, 8, 1008),
+        ("segment-00000002.ts", 12, 16, 1016),
+    ]
+    for name, _start, _end, mtime in rows:
+        path = tmp_path / name
+        path.write_bytes(b"segment")
+        import os
+        os.utime(path, (mtime, mtime))
+    (tmp_path / "segments.csv").write_text(
+        "".join(f"{name},{start},{end}\n" for name, start, end, _mtime in rows),
+        encoding="utf-8",
+    )
+
+    status = capture.buffer_status()
+
+    assert status["buffered_seconds"] == pytest.approx(4.0)
+    assert status["latest_segment_age_seconds"] == pytest.approx(2.0)
+
+
+def test_buffer_status_counts_contiguous_segments_even_when_file_mtimes_jitter(tmp_path):
+    now = [1018.0]
+    capture = RollingCapture(
+        "https://twitch.tv/channel",
+        config(tmp_path),
+        clock=lambda: now[0],
+    )
+    rows = [
+        ("segment-00000000.ts", 0, 4, 1004),
+        ("segment-00000001.ts", 4, 8, 1012),
+        ("segment-00000002.ts", 8, 12, 1012),
+    ]
+    for name, _start, _end, mtime in rows:
+        path = tmp_path / name
+        path.write_bytes(b"segment")
+        import os
+        os.utime(path, (mtime, mtime))
+    (tmp_path / "segments.csv").write_text(
+        "".join(f"{name},{start},{end}\n" for name, start, end, _mtime in rows),
+        encoding="utf-8",
+    )
+
+    status = capture.buffer_status()
+
+    assert status["buffered_seconds"] == pytest.approx(12.0)
+    assert status["latest_segment_age_seconds"] == pytest.approx(6.0)

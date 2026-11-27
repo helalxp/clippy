@@ -25,6 +25,9 @@ class RollingCaptureError(RuntimeError):
     """A live stream could not be recorded into rolling segments."""
 
 
+SEGMENT_CONTIGUITY_TOLERANCE_SECONDS = 2.0
+
+
 @dataclass(frozen=True)
 class SegmentRecord:
     """One completed segment and its media-timeline presentation interval."""
@@ -154,6 +157,39 @@ class RollingCapture:
             log_event("capture.segment_index.read_failed", level=30, error_type=type(error).__name__)
             return []
         return records
+
+    def buffer_status(self) -> dict[str, float | None]:
+        """Report the latest continuous run of completed media in the rolling ring."""
+        records = self.read_segment_index()
+        if not records:
+            return {
+                "buffered_seconds": 0.0,
+                "latest_segment_age_seconds": None,
+            }
+
+        continuous_start = records[0].start_seconds
+        continuous_end = records[0].end_seconds
+        for record in records[1:]:
+            gap = record.start_seconds - continuous_end
+            if (
+                gap > SEGMENT_CONTIGUITY_TOLERANCE_SECONDS
+                or gap < -SEGMENT_CONTIGUITY_TOLERANCE_SECONDS
+            ):
+                # Only the newest uninterrupted suffix can satisfy pre-roll.
+                continuous_start = record.start_seconds
+                continuous_end = record.end_seconds
+            else:
+                continuous_end = max(continuous_end, record.end_seconds)
+
+        try:
+            latest_age = max(0.0, self._clock() - records[-1].path.stat().st_mtime)
+        except OSError:
+            latest_age = None
+
+        return {
+            "buffered_seconds": round(max(0.0, continuous_end - continuous_start), 3),
+            "latest_segment_age_seconds": round(latest_age, 3) if latest_age is not None else None,
+        }
 
     def protect_segments(self, segments: list[Path]) -> list[Path]:
         """Acquire one pin per unique existing segment for this extraction owner."""
