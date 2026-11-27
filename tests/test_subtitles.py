@@ -482,7 +482,7 @@ class TestArabicSubtitleLayout:
             line for line in out.read_text(encoding="utf-8-sig").splitlines()
             if line.startswith("Dialogue:")
         )
-        event_text = event.split(",,", 1)[1]
+        event_text = event.rsplit(",,", 1)[1]
         # The marker must precede both the split-scene alignment override and
         # the active-word styling override so libass resolves the whole line RTL.
         assert event_text.startswith("\u200f{\\an5}{\\c")
@@ -500,7 +500,7 @@ class TestArabicSubtitleLayout:
             line for line in out.read_text(encoding="utf-8-sig").splitlines()
             if line.startswith("Dialogue:")
         )
-        assert not event.split(",,", 1)[1].startswith("\u200f")
+        assert not event.rsplit(",,", 1)[1].startswith("\u200f")
 
     @staticmethod
     def _transcript(words):
