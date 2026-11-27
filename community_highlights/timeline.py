@@ -8,18 +8,56 @@ therefore bounded to completed segments and may trim at segment/keyframe edges.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Iterable
 
 from .rolling_capture import SegmentRecord
 
 
+def segment_wall_intervals(
+    records: Iterable[SegmentRecord],
+) -> list[tuple[SegmentRecord, datetime, datetime]]:
+    """Map one capture's PTS intervals to wall time using a shared mtime anchor.
+
+    Each completed TS file's mtime can vary slightly from its actual segment end.
+    Estimating every segment independently turns that variation into artificial
+    gaps. A median offset from the segment PTS end times gives the capture one
+    stable wall-clock mapping while preserving real discontinuities in PTS.
+    """
+    valid: list[tuple[SegmentRecord, float]] = []
+    offsets: list[float] = []
+    for record in records:
+        if record.end_seconds <= record.start_seconds:
+            continue
+        try:
+            modified_at = record.path.stat().st_mtime
+        except OSError:
+            continue
+        valid.append((record, modified_at))
+        offsets.append(modified_at - record.end_seconds)
+
+    if not valid:
+        return []
+
+    wall_offset = median(offsets)
+    return [
+        (
+            record,
+            datetime.fromtimestamp(wall_offset + record.start_seconds, tz=timezone.utc),
+            datetime.fromtimestamp(wall_offset + record.end_seconds, tz=timezone.utc),
+        )
+        for record, _modified_at in valid
+    ]
+
+
 def segment_wall_interval(record: SegmentRecord) -> tuple[datetime, datetime]:
-    """Estimate a completed segment's wall interval from its file mtime and PTS duration."""
-    duration = record.end_seconds - record.start_seconds
-    if duration <= 0:
+    """Estimate one segment interval using its mtime as a single-record anchor."""
+    intervals = segment_wall_intervals([record])
+    if not intervals:
+        record.path.stat()
         raise ValueError("Segment duration must be positive.")
-    end = datetime.fromtimestamp(record.path.stat().st_mtime, tz=timezone.utc)
-    return end - timedelta(seconds=duration), end
+    _record, start, end = intervals[0]
+    return start, end
 
 
 def select_segments_for_interval(
@@ -39,11 +77,7 @@ def select_segments_for_interval(
         raise ValueError("window_end must not precede window_start.")
 
     selected: list[tuple[datetime, SegmentRecord]] = []
-    for record in records:
-        try:
-            segment_start, segment_end = segment_wall_interval(record)
-        except (OSError, ValueError):
-            continue
+    for record, segment_start, segment_end in segment_wall_intervals(records):
         if segment_start <= end_utc and segment_end >= start_utc:
             selected.append((segment_start, record))
     selected.sort(key=lambda item: (item[0], item[1].start_seconds))
@@ -71,7 +105,10 @@ def validate_contiguous_interval(
     if max_gap_seconds < 0:
         raise ValueError("max_gap_seconds cannot be negative.")
 
-    intervals = [segment_wall_interval(record) for record in records]
+    intervals = [
+        (start, end)
+        for _record, start, end in segment_wall_intervals(records)
+    ]
     intervals.sort(key=lambda item: item[0])
     tolerance = timedelta(seconds=max_gap_seconds)
     if intervals[0][0] - start_utc > tolerance:
