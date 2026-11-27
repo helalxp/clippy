@@ -396,6 +396,18 @@ impl RuntimePaths {
             (&self.browser_executable, "Persistent Remotion browser"),
             (&self.root.join("app.py"), "Clippy backend payload (app.py)"),
             (
+                &self.root.join("template_system").join("__init__.py"),
+                "Clippy template-analysis package",
+            ),
+            (
+                &self.root.join("template_system").join("jobs.py"),
+                "Clippy template-analysis job store",
+            ),
+            (
+                &self.root.join("template_system").join("providers").join("reference_video.py"),
+                "Clippy Gemini reference-analysis provider",
+            ),
+            (
                 &self
                     .root
                     .join("render-service")
