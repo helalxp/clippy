@@ -192,17 +192,53 @@ as a cleanup item, not a blocker.
   reached approximately 2,930 seconds. The log does not identify enough ASR
   configuration to attribute that duration to a specific model or device.
 
+### 9. yt-dlp TLS certificate verification is disabled
+
+**Status: Confirmed security configuration issue; separate fix required.**
+
+The verbose yt-dlp log records `nocheckcertificate: True`. The same option is
+set unconditionally in `main.py` inside `download_youtube_video()`'s
+`_base_opts()`. yt-dlp documents this option as disabling SSL certificate
+verification. This makes the downloader accept a connection without proving
+that the remote endpoint is the intended YouTube host.
+
+The supplied run reports that `YOUTUBE_COOKIES` was not configured, so this
+particular run did not use that cookie source. The code does support a
+`cookiefile` when `cookies_path` is present, however. Leaving certificate
+verification disabled becomes especially risky when logged-in cookies or
+other credentials are supplied: an intercepting network can impersonate the
+remote host and capture or alter that traffic.
+
+This did not cause the subtitle issue, and the download fallback succeeded.
+It is nevertheless a security defect independent of the rendering work.
+
+**Next investigation/fix:**
+
+1. Remove the unconditional insecure override and restore normal certificate
+   verification by default.
+2. Test the packaged Windows downloader against YouTube with and without the
+   configured cookie file.
+3. If a real certificate-trust failure appears, fix the trust store or CA
+   configuration rather than disabling verification globally.
+4. Keep any exceptional insecure mode explicit, opt-in, and clearly warned;
+   do not silently enable it for every download.
+
+References:
+- [yt-dlp option definition](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py)
+- [yt-dlp maintainer warning about cookies and MITM risk](https://github.com/yt-dlp/yt-dlp/issues/16372#issuecomment-)
+
 ## Prioritized implementation plan
 
 | Priority | Work item | Acceptance criteria |
 |---|---|---|
 | P0 | RTL base-direction marker in ASS events | Arabic words display right-to-left with the active highlight on the correct word; English-only rendering is unchanged |
-| P1 | Windows validation and real-video check | Packaged Windows smoke passes; generated Arabic, mixed Arabic/English, punctuation, numbers, pop/highlight, and split-scene captions are visually checked |
-| P2 | Arabic ASR accuracy investigation | Effective backend/model/device recorded; selected audio ranges compared against transcript; model changes justified by a controlled test |
-| P3 | Low-VRAM render stability | Worker-count comparison documents fallback counts, encoder failures, caption success, and total time |
-| P4 | Temporary-file cleanup lifecycle | Cleanup errors cannot mark an already-delivered clip as failed; leftovers are logged and cleaned safely |
-| P5 | ASS PlayResX investigation | Real portrait line wrapping/placement is measured before changing resolution settings |
-| P6 | Non-blocking cleanup | Font-folder enumeration noise and recurring downloader/startup warnings are addressed only if they remain reproducible |
+| P1 | Restore yt-dlp TLS verification by default | Certificate verification is enabled; normal and cookie-backed Windows downloads pass |
+| P2 | Windows validation and real-video check | Packaged Windows smoke passes; generated Arabic, mixed Arabic/English, punctuation, numbers, pop/highlight, and split-scene captions are visually checked |
+| P3 | Arabic ASR accuracy investigation | Effective backend/model/device recorded; selected audio ranges compared against transcript; model changes justified by a controlled test |
+| P4 | Low-VRAM render stability | Worker-count comparison documents fallback counts, encoder failures, caption success, and total time |
+| P5 | Temporary-file cleanup lifecycle | Cleanup errors cannot mark an already-delivered clip as failed; leftovers are logged and cleaned safely |
+| P6 | ASS PlayResX investigation | Real portrait line wrapping/placement is measured before changing resolution settings |
+| P7 | Non-blocking cleanup | Font-folder enumeration noise and recurring downloader/startup warnings are addressed only if they remain reproducible |
 
 ## Current execution status
 
