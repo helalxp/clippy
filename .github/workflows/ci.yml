@@ -28,7 +28,7 @@ jobs:
       - name: Install test dependencies
         run: >
           pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy
-          opencv-python-headless python-dotenv google-genai fastapi boto3
+          opencv-python-headless python-dotenv google-genai==1.75.0 fastapi boto3
           PyJWT email-validator python-multipart
       - name: Run tests
         run: pytest tests/ -v
