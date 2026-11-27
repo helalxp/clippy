@@ -263,7 +263,7 @@ def test_report_schema_converts_with_application_google_genai_version():
     assert schema.properties["schema_version"].minimum == 1
     assert schema.properties["schema_version"].maximum == 1
     assert schema.properties["compositions"].items.properties["subject_regions"].items.properties["width"].minimum > 0
-    assert schema.properties["text_regions"].items.properties["typography"].properties["size_ratio"].minimum > 0
+    assert schema.properties["text_regions"].items.properties["typography"].properties["size_ratio"].any_of[0].minimum > 0
     with pytest.raises(ValidationError):
         ReferenceStyleReport(schema_version=2)
 
