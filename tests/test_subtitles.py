@@ -466,6 +466,42 @@ class TestArabicSubtitleLayout:
         assert "Fontname=Segoe UI" in filter_graph
         assert "shaping=complex" in filter_graph
 
+    def test_arabic_ass_sets_rtl_base_direction_before_inline_overrides(self, tmp_path):
+        from subtitles import generate_ass
+
+        out = tmp_path / "arabic-rtl-base.ass"
+        transcript = self._transcript([
+            _w(" انا", 0.0, 0.4),
+            _w(" بآمنب", 0.4, 0.8),
+        ])
+        assert generate_ass(
+            transcript, 0, 1.0, str(out), effect="pop",
+            split_ranges=[(0.0, 1.0)],
+        ) is True
+        event = next(
+            line for line in out.read_text(encoding="utf-8-sig").splitlines()
+            if line.startswith("Dialogue:")
+        )
+        event_text = event.split(",,", 1)[1]
+        # The marker must precede both the split-scene alignment override and
+        # the active-word styling override so libass resolves the whole line RTL.
+        assert event_text.startswith("\u200f{\\an5}{\\c")
+
+    def test_english_ass_does_not_get_rtl_base_direction_marker(self, tmp_path):
+        from subtitles import generate_ass
+
+        out = tmp_path / "english-no-rtl-marker.ass"
+        transcript = self._transcript([
+            _w(" hello", 0.0, 0.4),
+            _w(" world", 0.4, 0.8),
+        ])
+        assert generate_ass(transcript, 0, 1.0, str(out), effect="pop") is True
+        event = next(
+            line for line in out.read_text(encoding="utf-8-sig").splitlines()
+            if line.startswith("Dialogue:")
+        )
+        assert not event.split(",,", 1)[1].startswith("\u200f")
+
     @staticmethod
     def _transcript(words):
         return {"segments": [{"start": 0, "end": 1, "words": words}]}
