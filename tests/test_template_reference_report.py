@@ -249,10 +249,10 @@ def test_single_frame_transition_must_use_exact_observed_timestamp():
         )
 
 
-def test_report_schema_is_compatible_with_pinned_google_genai():
+def test_report_schema_converts_with_application_google_genai_version():
     # Exercise the SDK's actual Pydantic-to-response-schema conversion without
-    # making a network request. This catches unsupported schema constructs at
-    # the same boundary used by GeminiReferenceAnalyzer.
+    # making a network request. CI installs the same google-genai pin as the
+    # desktop runtime. Keep schema constraints within Google's supported subset.
     from google.genai import types
     from google.genai._transformers import t_schema
 
@@ -260,6 +260,10 @@ def test_report_schema_is_compatible_with_pinned_google_genai():
 
     assert schema is not None
     assert schema.properties["schema_version"].type == types.Type.INTEGER
+    assert schema.properties["schema_version"].minimum == 1
+    assert schema.properties["schema_version"].maximum == 1
+    assert schema.properties["compositions"].items.properties["subject_regions"].items.properties["width"].minimum > 0
+    assert schema.properties["text_regions"].items.properties["typography"].properties["size_ratio"].minimum > 0
     with pytest.raises(ValidationError):
         ReferenceStyleReport(schema_version=2)
 
