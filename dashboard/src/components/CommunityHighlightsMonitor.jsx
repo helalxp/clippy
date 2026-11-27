@@ -535,7 +535,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
             <p className="eyebrow mb-1">Live stream</p>
             <h2 className="text-lg font-medium text-ink">Start highlighting</h2>
             <p className="mt-1 max-w-2xl text-sm text-muted">
-              One start action connects chat and begins the rolling recording for the same stream.
+              The rolling buffer fills the saved pre-trigger window before chat monitoring starts.
             </p>
           </div>
           {workflowActive && <span className="badge-ok">● Highlighting</span>}

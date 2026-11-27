@@ -1,9 +1,10 @@
 """Wall-clock selection of completed rolling segments for highlight windows.
 
-FFmpeg's segment CSV contains media PTS, not UTC. For the first extraction
-iteration, completed segment file mtimes provide a host-clock end-time estimate;
-the media duration in the CSV estimates each segment's start. Selection is
-therefore bounded to completed segments and may trim at segment/keyframe edges.
+FFmpeg's segment CSV contains media PTS, not UTC. Completed segment file mtimes
+provide a host-clock anchor, but their individual close times can jitter. The
+capture's PTS intervals are therefore mapped with one median mtime/PTS offset.
+This reduces artificial inter-segment gaps without claiming frame-accurate
+wall-clock alignment; extraction still selects whole completed TS segments.
 """
 from __future__ import annotations
 
