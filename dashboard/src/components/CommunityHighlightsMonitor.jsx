@@ -235,7 +235,9 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     return () => { active = false; };
   }, [connections]);
 
-  const waitForCaptureBuffer = async (captureSessionId, preSeconds) => {
+  const waitForCaptureBuffer = async (captureSessionId, triggerSettings) => {
+    const preSeconds = Math.max(0, Number(triggerSettings.pre_seconds) || 0);
+    const postSeconds = Math.max(0, Number(triggerSettings.post_seconds) || 0);
     const deadline = Date.now() + Math.max(45000, (preSeconds + 34) * 1000);
     let latest = null;
     while (Date.now() < deadline) {
@@ -250,7 +252,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
 
       const segmentSeconds = Number(currentCapture.segment_seconds) || 4;
       const requiredSeconds = Math.max(0, preSeconds) + segmentSeconds;
-      const requiredRetention = requiredSeconds + (Number(savedTriggerSettings.post_seconds) || 0);
+      const requiredRetention = requiredSeconds + postSeconds;
       if ((Number(currentCapture.retention_seconds) || 0) < requiredRetention) {
         throw new Error(
           'This rolling buffer retains only ' + currentCapture.retention_seconds +
@@ -290,6 +292,11 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
     setStartingAction('workflow');
     setBufferWarmup(null);
     try {
+      // Fetch the actual persisted rules before preparing the ring. The trigger
+      // settings panel may still be loading when the user presses Start.
+      const startTriggerSettings = await apiJson('/api/community-highlights/triggers/settings');
+      setSavedTriggerSettings(startTriggerSettings);
+
       // A partial setup may have chat running without a rolling buffer. Stop
       // that chat first so it cannot trigger while its pre-roll is being built.
       if (matchingChatSession && !matchingCaptureSession) {
@@ -309,7 +316,7 @@ export default function CommunityHighlightsMonitor({ connections, onOpenJob, gem
 
       // Chat starts only after completed segments provide the full pre-trigger
       // window plus one segment of safety margin.
-      await waitForCaptureBuffer(captureSession.session_id, Number(savedTriggerSettings.pre_seconds) || 0);
+      await waitForCaptureBuffer(captureSession.session_id, startTriggerSettings);
 
       if (!matchingChatSession || !matchingCaptureSession) {
         await apiJson('/api/community-highlights/sessions', {
