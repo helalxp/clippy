@@ -425,6 +425,11 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         _contains_rtl_text(word.get("word", ""))
         for block in blocks for word in block
     )
+
+    # ASS inline overrides before the first strong character can make libass
+    # resolve an Arabic dialogue event as LTR. Set its paragraph base direction
+    # before scene-alignment and per-word style tags are encountered.
+    rtl_prefix = "\u200f" if has_rtl_text else ""
     # Segoe UI is present on supported Windows installations and has Arabic
     # glyph coverage. libass + the complex shaping engine handles bidi and
     # joining; the word/timestamp sequence remains in transcript order.
@@ -537,7 +542,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
 
             events.append(
                 f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
-                f"{seam_prefix(ev_start)}{' '.join(parts)}"
+                f"{rtl_prefix}{seam_prefix(ev_start)}{' '.join(parts)}"
             )
 
     if not events:
